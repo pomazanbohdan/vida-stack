@@ -22,6 +22,7 @@ use crate::runtime_dispatch_downstream_packets::{
 use crate::runtime_dispatch_execution::{
     agent_lane_dispatch_result, execute_external_agent_lane_dispatch,
     execute_internal_agent_lane_dispatch, internal_host_external_fallback_backend,
+    validated_host_bridge_receipt_identity,
 };
 pub(crate) use crate::runtime_dispatch_lane_completion::{
     write_runtime_lane_completion_result, write_runtime_lane_completion_result_with_summary,
@@ -10965,7 +10966,11 @@ host_environment:
         backend_id: &str,
         carrier_id: &str,
     ) {
-        let config_path = crate::state_store::repo_root().join("vida.config.yaml");
+        let config_path = state_root
+            .ancestors()
+            .nth(3)
+            .expect("state root should resolve project root")
+            .join("vida.config.yaml");
         let config: serde_yaml::Value = serde_yaml::from_str(
             &fs::read_to_string(&config_path).expect("canonical config fixture should load"),
         )
@@ -11024,6 +11029,12 @@ host_environment:
             .as_object_mut()
             .expect("dispatch packet fixture should be an object");
         for (field, value) in [
+            ("schema_version", serde_json::json!(1)),
+            ("status", serde_json::json!("pending")),
+            (
+                "execution_boundary",
+                serde_json::json!("parent_host_session"),
+            ),
             ("request_id", serde_json::json!(request_id)),
             ("run_id", serde_json::json!(run_id)),
             ("task_id", serde_json::json!(run_id)),
@@ -12780,6 +12791,46 @@ host_environment:
                     })
                     .map(str::to_string)
                     .or_else(|| persisted_receipt.selected_backend.clone());
+                let request_path = std::path::PathBuf::from(
+                    packet["request_path"]
+                        .as_str()
+                        .expect("host bridge request path should be present"),
+                );
+                fs::create_dir_all(
+                    request_path
+                        .parent()
+                        .expect("host bridge request path should have a parent"),
+                )
+                .expect("host bridge request directory should exist");
+                for field in ["result_path", "receipt_path"] {
+                    let path = std::path::PathBuf::from(
+                        packet[field]
+                            .as_str()
+                            .expect("host bridge artifact path should be present"),
+                    );
+                    fs::create_dir_all(
+                        path.parent()
+                            .expect("host bridge artifact path should have a parent"),
+                    )
+                    .expect("host bridge artifact directory should exist");
+                }
+                fs::write(
+                    &request_path,
+                    serde_json::to_string_pretty(&packet)
+                        .expect("canonical host bridge request should encode"),
+                )
+                .expect("canonical host bridge request should persist");
+                let identity = crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
+                    &state_root,
+                    harness.path(),
+                    &request_path.display().to_string(),
+                    &persisted_receipt,
+                )
+                .expect("canonical host bridge request identity should validate")
+                .expect("canonical host bridge request should use host bridge transport");
+                runtime
+                    .block_on(store.record_host_bridge_receipt_identity(&identity))
+                    .expect("typed host bridge receipt identity should record");
                 runtime
                     .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
                     .expect("dispatch receipt should record");
@@ -12787,6 +12838,8 @@ host_environment:
                 assert_eq!(
                     runtime.block_on(run(cli(&[
                         "agent-init",
+                        "--state-dir",
+                        harness_state_root(&harness).to_str().expect("state root should be UTF-8"),
                         "--dispatch-packet",
                         dispatch_packet_path.as_str(),
                         "--execute-dispatch",
@@ -13199,6 +13252,46 @@ host_environment:
                     })
                     .map(str::to_string)
                     .or_else(|| persisted_receipt.selected_backend.clone());
+                let request_path = std::path::PathBuf::from(
+                    packet["request_path"]
+                        .as_str()
+                        .expect("host bridge request path should be present"),
+                );
+                fs::create_dir_all(
+                    request_path
+                        .parent()
+                        .expect("host bridge request path should have a parent"),
+                )
+                .expect("host bridge request directory should exist");
+                for field in ["result_path", "receipt_path"] {
+                    let path = std::path::PathBuf::from(
+                        packet[field]
+                            .as_str()
+                            .expect("host bridge artifact path should be present"),
+                    );
+                    fs::create_dir_all(
+                        path.parent()
+                            .expect("host bridge artifact path should have a parent"),
+                    )
+                    .expect("host bridge artifact directory should exist");
+                }
+                fs::write(
+                    &request_path,
+                    serde_json::to_string_pretty(&packet)
+                        .expect("canonical host bridge request should encode"),
+                )
+                .expect("canonical host bridge request should persist");
+                let identity = crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
+                    &state_root,
+                    harness.path(),
+                    &request_path.display().to_string(),
+                    &persisted_receipt,
+                )
+                .expect("canonical host bridge request identity should validate")
+                .expect("canonical host bridge request should use host bridge transport");
+                runtime
+                    .block_on(store.record_host_bridge_receipt_identity(&identity))
+                    .expect("typed host bridge receipt identity should record");
                 runtime
                     .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
                     .expect("dispatch receipt should record");
@@ -13206,6 +13299,8 @@ host_environment:
                 assert_eq!(
                     runtime.block_on(run(cli(&[
                         "agent-init",
+                        "--state-dir",
+                        harness_state_root(&harness).to_str().expect("state root should be UTF-8"),
                         "--dispatch-packet",
                         dispatch_packet_path.as_str(),
                         "--execute-dispatch",
@@ -29463,12 +29558,50 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         "after dispatch execution",
     )
     .await?;
+    let mut host_bridge_identity_recorded = false;
     if receipt.dispatch_status == "bridge_request_pending" {
+        let request_path = execution_result
+            .get("host_tool_bridge_request")
+            .and_then(|request| request.get("request_path"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                execution_result
+                    .get("backend_dispatch")
+                    .and_then(|dispatch| dispatch.get("host_tool_bridge_request"))
+                    .and_then(|request| request.get("request_path"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .ok_or_else(|| {
+                "host_bridge_receipt_identity_request_path_missing: compact dispatch result cannot resume without canonical request artifact".to_string()
+            })?;
+        let identity = validated_host_bridge_receipt_identity(
+            state_root,
+            project_root.as_ref(),
+            request_path,
+            receipt,
+        )?
+        .ok_or_else(|| {
+            "host_bridge_receipt_identity_transport_mismatch: pending bridge request is not host_tool_bridge"
+                .to_string()
+        })?;
+        store
+            .record_host_bridge_receipt_identity(&identity)
+            .await
+            .map_err(|error| {
+                format!("Failed to persist validated host bridge receipt identity: {error}")
+            })?;
+        host_bridge_identity_recorded = true;
         if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
+            let _ = store
+                .clear_host_bridge_receipt_identity(&receipt.run_id)
+                .await;
             let error = format!(
                 "Failed to persist host bridge pending dispatch receipt before projection refresh: {error}"
             );
             if run_graph_mutation_not_owned_error(&error) {
+                let _ = store
+                    .clear_host_bridge_receipt_identity(&receipt.run_id)
+                    .await;
                 eprintln!(
                     "Deferred host bridge pending receipt persistence for current session: {error}"
                 );
@@ -29540,10 +29673,14 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             }
         }
     }
-    store
-        .record_run_graph_dispatch_receipt(receipt)
-        .await
-        .map_err(|error| format!("Failed to persist dispatch receipt after execution: {error}"))?;
+    if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
+        if host_bridge_identity_recorded {
+            let _ = store
+                .clear_host_bridge_receipt_identity(&receipt.run_id)
+                .await;
+        }
+        return Err(format!("Failed to persist dispatch receipt after execution: {error}"));
+    }
     Ok(())
 }
 

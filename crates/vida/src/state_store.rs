@@ -88,7 +88,7 @@ pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSumm
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, ResumabilityCapsuleRow, RoutedRunStateRow,
-    RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
+    HostBridgeReceiptIdentityStored, RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
     RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
     RunGraphReplayLineageReceipt,
 };
@@ -202,6 +202,7 @@ DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 DEFINE TABLE run_graph_owner_evidence SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
+DEFINE TABLE host_bridge_receipt_identity SCHEMALESS;
 DEFINE TABLE orchestrator_claim SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
 DEFINE TABLE task_stage SCHEMALESS;
@@ -867,6 +868,144 @@ mod tests {
             r#"{"id":"vida-d","title":"Task D","description":"done","status":"closed","priority":5,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","closed_at":"2026-03-08T00:10:00Z","close_reason":"done","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
         ]
         .join("\n")
+    }
+
+    fn sample_host_bridge_receipt_identity() -> taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+        let registry = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_operations =
+            taskflow_host_bridge::HostBridgeAdapterOperations::from_registry_value(&registry)
+                .expect("test adapter registry should resolve");
+        let adapter_contract_snapshot = adapter_operations.to_value();
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_contract_snapshot).expect("test adapter snapshot"),
+        )
+        .to_hex()
+        .to_string();
+        taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+            schema_version:
+                taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION.to_string(),
+            request_id: "request-state-store".to_string(),
+            run_id: "run-state-store".to_string(),
+            task_id: "task-state-store".to_string(),
+            attempt_id: "attempt-state-store".to_string(),
+            packet_id: "packet-state-store".to_string(),
+            dispatch_target: "developer".to_string(),
+            packet_path: "runtime-consumption/dispatch-packets/state-store.json".to_string(),
+            backend_id: "internal_subagents".to_string(),
+            carrier_id: "middle".to_string(),
+            adapter_kind: adapter_operations.adapter_kind.clone(),
+            adapter_capability_id: adapter_operations.adapter_capability_id.clone(),
+            invocation_mode: adapter_operations.invocation_mode.clone(),
+            dispatch_transport: adapter_operations.dispatch_transport.clone(),
+            receipt_mode: adapter_operations.receipt_mode.clone(),
+            adapter_contract_source: "vida.config.yaml".to_string(),
+            adapter_contract_snapshot,
+            adapter_contract_hash,
+            adapter_operations,
+            request_path: "host-tool-bridge/requests/state-store.json".to_string(),
+            result_path: "host-tool-bridge/results/state-store.json".to_string(),
+            receipt_path: "host-tool-bridge/receipts/state-store.json".to_string(),
+            recorded_at: "2026-07-18T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_identity_roundtrip_and_clear() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-identity-store-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        let store = StateStore::open(root.clone()).await.expect("state store should open");
+        let identity = sample_host_bridge_receipt_identity();
+        store
+            .record_host_bridge_receipt_identity(&identity)
+            .await
+            .expect("identity should persist");
+
+        let loaded = store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .expect("identity should roundtrip");
+        assert_eq!(loaded, identity);
+        assert_eq!(
+            store
+                .host_bridge_receipt_identities_for_run(&identity.run_id)
+                .await
+                .expect("run identity lookup should succeed"),
+            vec![identity.clone()]
+        );
+        assert!(store
+            .host_bridge_receipt_identity_for_compact(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+            )
+            .await
+            .expect("compact identity selector should succeed")
+            .is_some());
+
+        let mut duplicate = identity.clone();
+        duplicate.request_id = "request-state-store-duplicate".to_string();
+        store
+            .record_host_bridge_receipt_identity(&duplicate)
+            .await
+            .expect("duplicate compact identity should persist for ambiguity proof");
+        let ambiguous = store
+            .host_bridge_receipt_identity_for_compact(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+            )
+            .await
+            .expect_err("multiple compact identities must block deterministically");
+        assert!(ambiguous
+            .to_string()
+            .contains("host_bridge_receipt_identity_ambiguous_compact_binding"));
+
+        store
+            .clear_host_bridge_receipt_identity(&identity.run_id)
+            .await
+            .expect("identity clear should succeed");
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("cleared identity lookup should succeed")
+            .is_none());
+        assert!(store
+            .host_bridge_receipt_identity_for_compact(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+            )
+            .await
+            .expect("cleared compact identity lookup should succeed")
+            .is_none());
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]

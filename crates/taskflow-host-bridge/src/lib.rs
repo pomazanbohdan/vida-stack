@@ -65,7 +65,9 @@ pub use provenance::{
     host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
 };
 pub use receipt_binding::{
-    DispatchReceiptBindingDecision, DispatchReceiptBindingInput, validate_dispatch_receipt_binding,
+    DispatchReceiptBindingDecision, DispatchReceiptBindingInput,
+    HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION, HostBridgeReceiptIdentityV1,
+    host_bridge_receipt_identity_key, validate_dispatch_receipt_binding,
 };
 pub use request::{
     HOST_BRIDGE_REQUIRED_IDENTITY_FIELDS, HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest,

@@ -1,8 +1,278 @@
+use std::path::{Component, Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use taskflow_contracts::Release1ContractStatus;
 
 use crate::request::HostBridgeRequest;
+
+pub const HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION: &str = "host-bridge-receipt-identity-v1";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostBridgeReceiptIdentityV1 {
+    pub schema_version: String,
+    pub request_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub packet_id: String,
+    pub dispatch_target: String,
+    pub packet_path: String,
+    pub backend_id: String,
+    pub carrier_id: String,
+    pub adapter_kind: String,
+    pub adapter_capability_id: String,
+    pub invocation_mode: String,
+    pub dispatch_transport: String,
+    pub receipt_mode: String,
+    pub adapter_contract_source: String,
+    pub adapter_contract_snapshot: Value,
+    pub adapter_contract_hash: String,
+    pub adapter_operations: crate::HostBridgeAdapterOperations,
+    pub request_path: String,
+    pub result_path: String,
+    pub receipt_path: String,
+    pub recorded_at: String,
+}
+
+impl HostBridgeReceiptIdentityV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION {
+            return Err("host_bridge_receipt_identity_unknown_schema".to_string());
+        }
+        for (field, value) in [
+            ("request_id", &self.request_id),
+            ("run_id", &self.run_id),
+            ("task_id", &self.task_id),
+            ("attempt_id", &self.attempt_id),
+            ("packet_id", &self.packet_id),
+            ("dispatch_target", &self.dispatch_target),
+            ("packet_path", &self.packet_path),
+            ("backend_id", &self.backend_id),
+            ("carrier_id", &self.carrier_id),
+            ("adapter_kind", &self.adapter_kind),
+            ("adapter_capability_id", &self.adapter_capability_id),
+            ("invocation_mode", &self.invocation_mode),
+            ("dispatch_transport", &self.dispatch_transport),
+            ("receipt_mode", &self.receipt_mode),
+            ("adapter_contract_source", &self.adapter_contract_source),
+            ("adapter_contract_hash", &self.adapter_contract_hash),
+            ("request_path", &self.request_path),
+            ("result_path", &self.result_path),
+            ("receipt_path", &self.receipt_path),
+            ("recorded_at", &self.recorded_at),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("host_bridge_receipt_identity_missing:{field}"));
+            }
+        }
+        if self.adapter_contract_snapshot != self.adapter_operations.to_value() {
+            return Err("host_bridge_receipt_identity_adapter_snapshot_mismatch".to_string());
+        }
+        let expected_hash = blake3::hash(
+            &serde_json::to_vec(&self.adapter_operations.to_value())
+                .map_err(|_| "host_bridge_receipt_identity_adapter_snapshot_invalid")?,
+        )
+        .to_hex()
+        .to_string();
+        if self.adapter_contract_hash != expected_hash {
+            return Err("host_bridge_receipt_identity_adapter_hash_mismatch".to_string());
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn identity_key(&self) -> String {
+        host_bridge_receipt_identity_key(
+            &self.run_id,
+            &self.dispatch_target,
+            &self.packet_path,
+            &self.request_id,
+        )
+    }
+
+    #[must_use]
+    pub fn as_value(&self) -> Value {
+        serde_json::to_value(self).expect("host bridge receipt identity serializes")
+    }
+
+    pub fn from_request(
+        request: &HostBridgeRequest,
+        registry: &Value,
+        contract_source: &str,
+        recorded_at: String,
+    ) -> Result<Self, String> {
+        let configured = crate::HostBridgeAdapterOperations::from_registry_value(registry)
+            .map_err(|error| format!("host_bridge_receipt_identity_registry_invalid:{error}"))?;
+        let Some(request_operations) = request.adapter_operations.as_ref() else {
+            return Err("host_bridge_receipt_identity_adapter_operations_missing".to_string());
+        };
+        if request_operations != &configured {
+            return Err(
+                "host_bridge_receipt_identity_registry_drift:adapter_operations".to_string(),
+            );
+        }
+        if request.adapter_contract_source != contract_source {
+            return Err(
+                "host_bridge_receipt_identity_registry_drift:adapter_contract_source".to_string(),
+            );
+        }
+        let identity = Self {
+            schema_version: HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION.to_string(),
+            request_id: request.request_id.clone(),
+            run_id: request.run_id.clone(),
+            task_id: request.task_id.clone(),
+            attempt_id: request.attempt_id.clone(),
+            packet_id: request.packet_id.clone(),
+            dispatch_target: request.dispatch_target.clone(),
+            packet_path: request.packet_path.display().to_string(),
+            backend_id: request.backend_id.clone(),
+            carrier_id: request.carrier_id.clone(),
+            adapter_kind: request.adapter_kind.clone(),
+            adapter_capability_id: request.adapter_capability_id.clone(),
+            invocation_mode: request.invocation_mode.clone(),
+            dispatch_transport: request.dispatch_transport.clone(),
+            receipt_mode: request.receipt_mode.clone(),
+            adapter_contract_source: request.adapter_contract_source.clone(),
+            adapter_contract_snapshot: request.adapter_contract_snapshot.clone(),
+            adapter_contract_hash: request.adapter_contract_hash.clone(),
+            adapter_operations: request_operations.clone(),
+            request_path: request.request_path.display().to_string(),
+            result_path: request.result_path.display().to_string(),
+            receipt_path: request.receipt_path.display().to_string(),
+            recorded_at,
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub fn validate_against_registry(
+        &self,
+        request: &HostBridgeRequest,
+        registry: &Value,
+        contract_source: &str,
+    ) -> Result<(), String> {
+        let current =
+            Self::from_request(request, registry, contract_source, self.recorded_at.clone())?;
+        if current.as_value() != self.as_value() {
+            return Err("host_bridge_receipt_identity_registry_or_request_drift".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn compact_receipt_blockers(&self, compact: &Value) -> Vec<String> {
+        let mut blockers = Vec::new();
+        for (field, expected, actual) in [
+            (
+                "run_id",
+                self.run_id.as_str(),
+                compact.get("run_id").and_then(Value::as_str),
+            ),
+            (
+                "dispatch_target",
+                self.dispatch_target.as_str(),
+                compact.get("dispatch_target").and_then(Value::as_str),
+            ),
+            (
+                "backend_id",
+                self.backend_id.as_str(),
+                compact
+                    .get("selected_backend")
+                    .or_else(|| compact.get("backend_id"))
+                    .and_then(Value::as_str),
+            ),
+        ] {
+            if actual != Some(expected) {
+                blockers.push(format!(
+                    "host_bridge_receipt_identity_core_mismatch:{field}"
+                ));
+            }
+        }
+        if let Some(packet_path) = compact
+            .get("dispatch_packet_path")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                compact
+                    .get("source_dispatch_packet_path")
+                    .and_then(Value::as_str)
+            })
+        {
+            if !crate::host_bridge_packet_paths_equivalent(&self.packet_path, packet_path) {
+                blockers.push("host_bridge_receipt_identity_core_mismatch:packet_path".to_string());
+            }
+        }
+        if let Some(result_path) = compact
+            .get("dispatch_result_path")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            if !crate::host_bridge_packet_paths_equivalent(&self.result_path, result_path) {
+                blockers.push("host_bridge_receipt_identity_core_mismatch:result_path".to_string());
+            }
+        }
+        blockers
+    }
+
+    pub fn validate_paths(&self, state_root: &Path) -> Result<(), String> {
+        let root = std::fs::canonicalize(state_root)
+            .map_err(|error| format!("host_bridge_receipt_identity_state_root_invalid:{error}"))?;
+        for (field, raw, must_exist) in [
+            ("request_path", &self.request_path, true),
+            ("packet_path", &self.packet_path, true),
+            ("result_path", &self.result_path, false),
+            ("receipt_path", &self.receipt_path, false),
+        ] {
+            let path = PathBuf::from(raw);
+            if path
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+            {
+                return Err(format!("host_bridge_receipt_identity_path_invalid:{field}"));
+            }
+            let resolved = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
+            if let Ok(metadata) = std::fs::symlink_metadata(&resolved) {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(format!("host_bridge_receipt_identity_path_invalid:{field}"));
+                }
+                let canonical = std::fs::canonicalize(&resolved).map_err(|error| {
+                    format!("host_bridge_receipt_identity_path_invalid:{field}:{error}")
+                })?;
+                if !canonical.starts_with(&root) {
+                    return Err(format!(
+                        "host_bridge_receipt_identity_path_out_of_root:{field}"
+                    ));
+                }
+            } else if must_exist {
+                return Err(format!("host_bridge_receipt_identity_path_missing:{field}"));
+            } else if let Some(parent) = resolved.parent() {
+                let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+                    format!("host_bridge_receipt_identity_path_invalid:{field}:{error}")
+                })?;
+                if !canonical_parent.starts_with(&root) {
+                    return Err(format!(
+                        "host_bridge_receipt_identity_path_out_of_root:{field}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[must_use]
+pub fn host_bridge_receipt_identity_key(
+    run_id: &str,
+    dispatch_target: &str,
+    packet_path: &str,
+    request_id: &str,
+) -> String {
+    let material = [run_id, dispatch_target, packet_path, request_id].join("\u{1f}");
+    format!("hbrid-{}", blake3::hash(material.as_bytes()).to_hex())
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DispatchReceiptBindingInput {
@@ -389,5 +659,82 @@ mod tests {
         assert_eq!(result["execution_evidence"]["receipt_backed"], true);
         assert_eq!(result["execution_evidence"]["attempt_id"], "attempt-1");
         assert_eq!(result["execution_evidence"]["packet_id"], "packet-1");
+    }
+
+    fn valid_receipt_identity() -> HostBridgeReceiptIdentityV1 {
+        let request = minimal_request();
+        HostBridgeReceiptIdentityV1::from_request(
+            &request,
+            &request.adapter_contract_snapshot,
+            "request",
+            "2026-07-18T00:00:00Z".to_string(),
+        )
+        .expect("minimal request should produce a valid receipt identity")
+    }
+
+    #[test]
+    fn receipt_identity_v1_validates_and_rejects_tampering() {
+        let identity = valid_receipt_identity();
+        identity.validate().expect("identity should validate");
+        assert_eq!(
+            identity.identity_key(),
+            host_bridge_receipt_identity_key(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+        );
+
+        let mut missing_attempt = identity.clone();
+        missing_attempt.attempt_id.clear();
+        assert_eq!(
+            missing_attempt
+                .validate()
+                .expect_err("missing attempt must block"),
+            "host_bridge_receipt_identity_missing:attempt_id"
+        );
+
+        let mut mutated_snapshot = identity.clone();
+        mutated_snapshot.adapter_contract_snapshot["dispose_policy"] = serde_json::json!("forged");
+        assert_eq!(
+            mutated_snapshot
+                .validate()
+                .expect_err("snapshot mutation must block"),
+            "host_bridge_receipt_identity_adapter_snapshot_mismatch"
+        );
+
+        let mut mutated_hash = identity.clone();
+        mutated_hash.adapter_contract_hash = "forged-hash".to_string();
+        assert_eq!(
+            mutated_hash
+                .validate()
+                .expect_err("hash mutation must block"),
+            "host_bridge_receipt_identity_adapter_hash_mismatch"
+        );
+
+        let mut mutated_operations = identity.clone();
+        mutated_operations
+            .adapter_operations
+            .operations
+            .insert("spawn".to_string(), "forged.spawn".to_string());
+        assert_eq!(
+            mutated_operations
+                .validate()
+                .expect_err("operations mutation must block"),
+            "host_bridge_receipt_identity_adapter_snapshot_mismatch"
+        );
+    }
+
+    #[test]
+    fn receipt_identity_v1_rejects_registry_drift() {
+        let request = minimal_request();
+        let identity = valid_receipt_identity();
+        let mut registry = request.adapter_contract_snapshot.clone();
+        registry["operations"]["spawn"] = serde_json::json!("forged.spawn");
+        let error = identity
+            .validate_against_registry(&request, &registry, "request")
+            .expect_err("registry drift must block identity reuse");
+        assert!(error.contains("registry_drift") || error.contains("registry_or_request_drift"));
     }
 }

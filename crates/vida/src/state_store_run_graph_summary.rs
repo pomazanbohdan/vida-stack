@@ -2825,6 +2825,192 @@ impl StateStore {
         Ok(())
     }
 
+    pub async fn record_host_bridge_receipt_identity(
+        &self,
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
+    ) -> Result<(), StateStoreError> {
+        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord {
+            reason,
+        })?;
+        let row = HostBridgeReceiptIdentityStored {
+            schema_version: identity.schema_version.clone(),
+            request_id: identity.request_id.clone(),
+            run_id: identity.run_id.clone(),
+            task_id: identity.task_id.clone(),
+            attempt_id: identity.attempt_id.clone(),
+            packet_id: identity.packet_id.clone(),
+            dispatch_target: identity.dispatch_target.clone(),
+            packet_path: identity.packet_path.clone(),
+            backend_id: identity.backend_id.clone(),
+            carrier_id: identity.carrier_id.clone(),
+            adapter_kind: identity.adapter_kind.clone(),
+            adapter_capability_id: identity.adapter_capability_id.clone(),
+            invocation_mode: identity.invocation_mode.clone(),
+            dispatch_transport: identity.dispatch_transport.clone(),
+            receipt_mode: identity.receipt_mode.clone(),
+            adapter_contract_source: identity.adapter_contract_source.clone(),
+            adapter_contract_snapshot: identity.adapter_contract_snapshot.clone(),
+            adapter_contract_hash: identity.adapter_contract_hash.clone(),
+            adapter_operations: identity.adapter_operations.to_value(),
+            request_path: identity.request_path.clone(),
+            result_path: identity.result_path.clone(),
+            receipt_path: identity.receipt_path.clone(),
+            recorded_at: identity.recorded_at.clone(),
+        };
+        let _: Option<HostBridgeReceiptIdentityStored> = self
+            .db
+            .upsert(("host_bridge_receipt_identity", identity.identity_key().as_str()))
+            .content(row)
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
+    pub async fn host_bridge_receipt_identity(
+        &self,
+        run_id: &str,
+        dispatch_target: &str,
+        packet_path: &str,
+        request_id: &str,
+    ) -> Result<Option<taskflow_host_bridge::HostBridgeReceiptIdentityV1>, StateStoreError> {
+        let key = taskflow_host_bridge::host_bridge_receipt_identity_key(
+            run_id,
+            dispatch_target,
+            packet_path,
+            request_id,
+        );
+        let row: Option<HostBridgeReceiptIdentityStored> = self
+            .db
+            .select(("host_bridge_receipt_identity", key.as_str()))
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let adapter_operations = serde_json::from_value(row.adapter_operations).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!("host bridge receipt identity adapter_operations invalid: {error}"),
+            }
+        })?;
+        let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+            schema_version: row.schema_version,
+            request_id: row.request_id,
+            run_id: row.run_id,
+            task_id: row.task_id,
+            attempt_id: row.attempt_id,
+            packet_id: row.packet_id,
+            dispatch_target: row.dispatch_target,
+            packet_path: row.packet_path,
+            backend_id: row.backend_id,
+            carrier_id: row.carrier_id,
+            adapter_kind: row.adapter_kind,
+            adapter_capability_id: row.adapter_capability_id,
+            invocation_mode: row.invocation_mode,
+            dispatch_transport: row.dispatch_transport,
+            receipt_mode: row.receipt_mode,
+            adapter_contract_source: row.adapter_contract_source,
+            adapter_contract_snapshot: row.adapter_contract_snapshot,
+            adapter_contract_hash: row.adapter_contract_hash,
+            adapter_operations,
+            request_path: row.request_path,
+            result_path: row.result_path,
+            receipt_path: row.receipt_path,
+            recorded_at: row.recorded_at,
+        };
+        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        Ok(Some(identity))
+    }
+
+    pub async fn host_bridge_receipt_identities_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<taskflow_host_bridge::HostBridgeReceiptIdentityV1>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM host_bridge_receipt_identity WHERE run_id = $run_id ORDER BY recorded_at DESC;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let rows: Vec<HostBridgeReceiptIdentityStored> = query.take(0)?;
+        rows.into_iter()
+            .map(|row| {
+                let adapter_operations = serde_json::from_value(row.adapter_operations).map_err(|error| {
+                    StateStoreError::InvalidTaskRecord {
+                        reason: format!("host bridge receipt identity adapter_operations invalid: {error}"),
+                    }
+                })?;
+                let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+                    schema_version: row.schema_version,
+                    request_id: row.request_id,
+                    run_id: row.run_id,
+                    task_id: row.task_id,
+                    attempt_id: row.attempt_id,
+                    packet_id: row.packet_id,
+                    dispatch_target: row.dispatch_target,
+                    packet_path: row.packet_path,
+                    backend_id: row.backend_id,
+                    carrier_id: row.carrier_id,
+                    adapter_kind: row.adapter_kind,
+                    adapter_capability_id: row.adapter_capability_id,
+                    invocation_mode: row.invocation_mode,
+                    dispatch_transport: row.dispatch_transport,
+                    receipt_mode: row.receipt_mode,
+                    adapter_contract_source: row.adapter_contract_source,
+                    adapter_contract_snapshot: row.adapter_contract_snapshot,
+                    adapter_contract_hash: row.adapter_contract_hash,
+                    adapter_operations,
+                    request_path: row.request_path,
+                    result_path: row.result_path,
+                    receipt_path: row.receipt_path,
+                    recorded_at: row.recorded_at,
+                };
+                identity
+                    .validate()
+                    .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+                Ok(identity)
+            })
+            .collect()
+    }
+
+    pub async fn host_bridge_receipt_identity_for_compact(
+        &self,
+        run_id: &str,
+        dispatch_target: &str,
+        packet_path: &str,
+    ) -> Result<Option<taskflow_host_bridge::HostBridgeReceiptIdentityV1>, StateStoreError> {
+        let matches = self
+            .host_bridge_receipt_identities_for_run(run_id)
+            .await?
+            .into_iter()
+            .filter(|identity| {
+                identity.dispatch_target == dispatch_target
+                    && taskflow_host_bridge::host_bridge_packet_paths_equivalent(
+                        &identity.packet_path,
+                        packet_path,
+                    )
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [identity] => Ok(Some(identity.clone())),
+            _ => Err(StateStoreError::InvalidTaskRecord {
+                reason: "host_bridge_receipt_identity_ambiguous_compact_binding".to_string(),
+            }),
+        }
+    }
+
+    pub async fn clear_host_bridge_receipt_identity(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        self.db
+            .query("DELETE host_bridge_receipt_identity WHERE run_id = $run_id;")
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
     pub async fn record_run_graph_dispatch_lane_receipt(
         &self,
         receipt: &RunGraphDispatchReceipt,

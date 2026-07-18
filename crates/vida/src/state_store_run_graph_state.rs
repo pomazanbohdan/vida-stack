@@ -428,6 +428,34 @@ pub(crate) struct RunGraphDispatchReceiptStored {
     pub(crate) recorded_at: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct HostBridgeReceiptIdentityStored {
+    pub(crate) schema_version: String,
+    pub(crate) request_id: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) packet_id: String,
+    pub(crate) dispatch_target: String,
+    pub(crate) packet_path: String,
+    pub(crate) backend_id: String,
+    pub(crate) carrier_id: String,
+    pub(crate) adapter_kind: String,
+    pub(crate) adapter_capability_id: String,
+    pub(crate) invocation_mode: String,
+    pub(crate) dispatch_transport: String,
+    pub(crate) receipt_mode: String,
+    pub(crate) adapter_contract_source: String,
+    pub(crate) adapter_contract_snapshot: serde_json::Value,
+    pub(crate) adapter_contract_hash: String,
+    pub(crate) adapter_operations: serde_json::Value,
+    pub(crate) request_path: String,
+    pub(crate) result_path: String,
+    pub(crate) receipt_path: String,
+    pub(crate) recorded_at: String,
+}
+
 impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
     fn from(stored: RunGraphDispatchReceiptStored) -> Self {
         let raw_lane_status = stored

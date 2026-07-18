@@ -22,7 +22,7 @@ use taskflow_host_bridge::{
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
     host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
     validate_dispatch_receipt_binding, DispatchReceiptBindingInput, HostBridgeAdapterOperations,
-    HostBridgeRequest,
+    HostBridgeReceiptIdentityV1, HostBridgeRequest, HostBridgeRequestPath, read_host_bridge_request,
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -3415,6 +3415,53 @@ fn validate_host_bridge_request_dispatch_binding(
         }
     }
     Ok(())
+}
+
+pub(crate) fn validated_host_bridge_receipt_identity(
+    state_root: &Path,
+    project_root: &Path,
+    request_path: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<HostBridgeReceiptIdentityV1>, String> {
+    let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
+    let (_, selected_cli_entry) =
+        crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+    let Some(selected_cli_entry) = selected_cli_entry else {
+        return Err("host_bridge_receipt_identity_registry_missing".to_string());
+    };
+    let request = read_host_bridge_request(&HostBridgeRequestPath::new(
+        state_root.to_path_buf(),
+        request_path,
+    ))
+    .map_err(|error| format!("host_bridge_receipt_identity_request_invalid:{error}"))?;
+    if request.dispatch_transport != "host_tool_bridge" {
+        return Ok(None);
+    }
+    if request.run_id != receipt.run_id || request.dispatch_target != receipt.dispatch_target {
+        return Err("host_bridge_receipt_identity_core_mismatch:run_or_target".to_string());
+    }
+    let registry = serde_json::to_value(selected_cli_entry)
+        .map_err(|error| format!("host_bridge_receipt_identity_registry_invalid:{error}"))?;
+    let contract_source = crate::config_file_path_for_root(project_root)
+        .display()
+        .to_string();
+    let identity = HostBridgeReceiptIdentityV1::from_request(
+        &request,
+        &registry,
+        &contract_source,
+        time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|error| format!("host_bridge_receipt_identity_recorded_at_invalid:{error}"))?,
+    )?;
+    identity.validate_paths(state_root)?;
+    let blockers = identity.compact_receipt_blockers(
+        &serde_json::to_value(receipt)
+            .map_err(|error| format!("host_bridge_receipt_identity_receipt_invalid:{error}"))?,
+    );
+    if !blockers.is_empty() {
+        return Err(blockers.join(","));
+    }
+    Ok(Some(identity))
 }
 
 fn validate_completed_host_bridge_artifacts(

@@ -7291,6 +7291,83 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
     let requested_packet_path = normalized_packet_arg_path(&inputs.dispatch_packet_path);
     let packet = crate::read_json_file_if_present(&requested_packet_path)
         .unwrap_or_else(|| serde_json::json!({}));
+
+    let persisted_host_bridge_identities = store
+        .host_bridge_receipt_identities_for_run(&receipt.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read host bridge receipt identity for packet-backed worker resume: {error}"
+            )
+        })?;
+    let host_bridge_transport = packet
+        .get("dispatch_transport")
+        .and_then(serde_json::Value::as_str)
+        == Some("host_tool_bridge")
+        || receipt.dispatch_status == "bridge_request_pending"
+        || !persisted_host_bridge_identities.is_empty();
+    if host_bridge_transport {
+        let Some(identity) = store
+            .host_bridge_receipt_identity_for_compact(
+                &receipt.run_id,
+                &receipt.dispatch_target,
+                &requested_packet_path.display().to_string(),
+            )
+            .await
+            .map_err(|error| error.to_string())?
+        else {
+            return Err("host_bridge_receipt_identity_missing".to_string());
+        };
+        let project_root = super::runtime_dispatch_project_root_from_state_root(store.root());
+        let current = super::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
+            store.root(),
+            project_root.as_ref(),
+            &identity.request_path,
+            &receipt,
+        )?
+        .ok_or_else(|| "host_bridge_receipt_identity_transport_mismatch".to_string())?;
+        let mut expected = current;
+        expected.recorded_at = identity.recorded_at.clone();
+        if expected.as_value() != identity.as_value() {
+            let expected_value = expected.as_value();
+            let actual_value = identity.as_value();
+            for field in [
+                "request_id",
+                "run_id",
+                "task_id",
+                "attempt_id",
+                "packet_id",
+                "dispatch_target",
+                "packet_path",
+                "backend_id",
+                "carrier_id",
+                "adapter_kind",
+                "adapter_capability_id",
+                "invocation_mode",
+                "dispatch_transport",
+                "receipt_mode",
+                "adapter_contract_source",
+                "adapter_contract_snapshot",
+                "adapter_contract_hash",
+                "adapter_operations",
+                "request_path",
+                "result_path",
+                "receipt_path",
+            ] {
+                if expected_value.get(field) != actual_value.get(field) {
+                    return Err(format!(
+                        "host_bridge_result_identity_mismatch:{field}"
+                    ));
+                }
+            }
+            return Err("host_bridge_receipt_identity_mismatch".to_string());
+        }
+        inputs.dispatch_receipt = receipt;
+        inputs.dispatch_packet_path = identity.packet_path.clone();
+        inputs.dispatch_receipt.dispatch_packet_path = Some(identity.packet_path);
+        return Ok(inputs);
+    }
+
     let mut request_identity = packet.clone();
     if let Some(object) = request_identity.as_object_mut() {
         object.insert(
@@ -7302,7 +7379,7 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
         .dispatch_packet_path
         .as_deref()
         .map(normalized_packet_arg_path);
-    let mut persisted_identity = serde_json::json!({
+    let persisted_identity = serde_json::json!({
         "run_id": &receipt.run_id,
         "dispatch_target": &receipt.dispatch_target,
         "source_dispatch_packet_path": persisted_packet_path
@@ -7310,34 +7387,6 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
             .map(|path| path.display().to_string()),
         "backend_id": &receipt.selected_backend,
     });
-    if let Some(object) = persisted_identity.as_object_mut() {
-        // RunGraphDispatchReceipt stores the compact lane identity. Rehydrate
-        // the strict host-bridge identity from the request/config-shaped packet
-        // so receipt validation compares the same selected carrier contract.
-        for field in [
-            "request_id",
-            "task_id",
-            "attempt_id",
-            "packet_id",
-            "carrier_id",
-            "adapter_kind",
-            "adapter_capability_id",
-            "invocation_mode",
-            "dispatch_transport",
-            "receipt_mode",
-            "adapter_contract_source",
-            "adapter_contract_hash",
-            "adapter_contract_snapshot",
-            "adapter_operations",
-            "request_path",
-            "result_path",
-            "receipt_path",
-        ] {
-            if let Some(value) = request_identity.get(field) {
-                object.insert(field.to_string(), value.clone());
-            }
-        }
-    }
     let identity_blockers = taskflow_host_bridge::host_bridge_dispatch_identity_blockers(
         &request_identity,
         &persisted_identity,
@@ -11460,5 +11509,124 @@ mod agent_init_surface_tests {
         });
 
         assert_eq!(results, vec![ExitCode::SUCCESS; 4]);
+    }
+
+    #[tokio::test]
+    async fn persisted_host_bridge_receipt_identity_rejects_packet_normalization_attempts() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path().to_path_buf();
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("packet dir should exist");
+        let packet_path = packet_dir.join("strict-identity.json");
+        let request_path = root.join("host-tool-bridge/requests/strict-identity.json");
+        let result_path = root.join("host-tool-bridge/results/strict-identity.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/strict-identity.json");
+        let adapter_operations = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_operations).expect("adapter contract snapshot"),
+        )
+        .to_hex()
+        .to_string();
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "strict-identity",
+            "run_id": "run-strict-identity",
+            "task_id": "task-strict-identity",
+            "attempt_id": "attempt-strict-identity",
+            "packet_id": "packet-strict-identity",
+            "dispatch_target": "developer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": adapter_operations["adapter_kind"].clone(),
+            "adapter_capability_id": adapter_operations["adapter_capability_id"].clone(),
+            "invocation_mode": adapter_operations["invocation_mode"].clone(),
+            "dispatch_transport": adapter_operations["dispatch_transport"].clone(),
+            "receipt_mode": adapter_operations["receipt_mode"].clone(),
+            "adapter_contract_source": "vida.config.yaml",
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_operations": adapter_operations,
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(&packet_path, request.to_string()).expect("packet should write");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-strict-identity".to_string(),
+            dispatch_target: "developer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["host_tool_bridge_adapter_required".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("developer".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-18T00:00:00Z".to_string(),
+        };
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("receipt should persist");
+
+        let mut forged_carrier = request.clone();
+        forged_carrier["carrier_id"] = serde_json::json!("junior");
+        for packet in [request, forged_carrier] {
+            std::fs::write(&packet_path, packet.to_string()).expect("packet variant should write");
+            let inputs = crate::taskflow_consume_resume::ResumeInputs {
+                dispatch_receipt: receipt.clone(),
+                dispatch_packet_path: packet_path.display().to_string(),
+                role_selection: test_role_selection(),
+                run_graph_bootstrap: serde_json::Value::Null,
+            };
+            let error = merge_persisted_dispatch_receipt_without_resume_gate(&store, inputs)
+                .await
+                .expect_err("legacy compact receipt without typed identity must remain blocked");
+            assert_eq!(error, "host_bridge_receipt_identity_missing");
+            let payload = agent_init_execute_dispatch_resume_error_payload(
+                &serde_json::json!({"mode": "execute_dispatch"}),
+                &error,
+            );
+            assert_eq!(payload["status"], "blocked");
+            assert_eq!(payload["blocker_code"], "consume_continue_resume_blocked");
+            assert!(
+                !result_path.exists(),
+                "blocked identity must not yield provider result"
+            );
+        }
     }
 }
