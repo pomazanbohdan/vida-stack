@@ -11,10 +11,11 @@ pub mod request;
 
 pub use adapter_contract::{HostBridgeAdapterContractError, HostBridgeAdapterOperations};
 pub use adapter_payload::{
-    build_host_bridge_adapter_payload, host_bridge_operator_fields, HostBridgeAdapterPayloadInput,
+    HostBridgeAdapterPayloadInput, build_host_bridge_adapter_payload, host_bridge_operator_fields,
 };
 pub use artifact_scope::{
-    attach_host_bridge_implementation_artifact,
+    HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
+    ImplementationArtifactScopeDecision, attach_host_bridge_implementation_artifact,
     build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
     host_bridge_changed_files_from_artifact, host_bridge_normalized_implementation_artifact_path,
     host_bridge_record_component, host_bridge_request_implementation_artifacts,
@@ -22,11 +23,10 @@ pub use artifact_scope::{
     push_unique_host_bridge_implementation_artifact, validate_implementation_artifact_scope,
     validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
-    HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
-    ImplementationArtifactScopeDecision,
 };
 pub use completion::{
-    host_bridge_artifact_has_retryable_completion_blocker,
+    HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,
+    HostBridgeResultVerdictFields, host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
@@ -46,45 +46,44 @@ pub use completion::{
     host_bridge_result_verdict_fields, host_bridge_result_verdict_fields_for_gate,
     host_bridge_result_verdict_fields_for_gate_and_next,
     materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
-    HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,
-    HostBridgeResultVerdictFields,
 };
 pub use completion_authority::{
-    completion_authority_transition_matrix, decide_host_bridge_completion_authority,
-    summary_blocker_codes, summary_text_reports_blocked_completion,
+    BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
+    BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
     HostBridgeCompletionAuthorityDecision, HostBridgeCompletionAuthorityInput,
     HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent, HostBridgeCompletionFsm,
     HostBridgeCompletionState, HostBridgeCompletionTransition, HostBridgeCompletionTransitionCase,
-    BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
-    BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
+    completion_authority_transition_matrix, decide_host_bridge_completion_authority,
+    summary_blocker_codes, summary_text_reports_blocked_completion,
 };
 pub use errors::HostBridgeError;
 pub use legacy_normalization::{
+    CompletionBlocker, CompletionOutcome, FlowStepRef,
+    LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION, LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION,
+    LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION, LEGACY_OUTCOME_CONTRADICTION,
+    LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION, LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
+    LegacyHostBridgeCompletionNormalization, LegacyHostBridgeCompletionNormalizationError,
     normalize_legacy_command_options, normalize_legacy_host_bridge_completion_result,
     normalize_legacy_lane_completion, normalize_legacy_receipt, normalize_legacy_run_status,
-    CompletionBlocker, CompletionOutcome, FlowStepRef, LegacyHostBridgeCompletionNormalization,
-    LegacyHostBridgeCompletionNormalizationError, LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION,
-    LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION, LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION,
-    LEGACY_OUTCOME_CONTRADICTION, LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION,
-    LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
 };
 pub use provenance::{
-    host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
     HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
+    host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
 };
 pub use receipt_binding::{
-    validate_dispatch_receipt_binding, DispatchReceiptBindingDecision, DispatchReceiptBindingInput,
+    DispatchReceiptBindingDecision, DispatchReceiptBindingInput, validate_dispatch_receipt_binding,
 };
 pub use request::{
-    default_host_bridge_required_result_fields, effective_host_bridge_request,
-    effective_host_bridge_request_with_registry, host_bridge_blocked_result_contract,
-    host_bridge_blocked_result_contract_allowed_next_node,
+    HOST_BRIDGE_REQUIRED_IDENTITY_FIELDS, HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest,
+    HostBridgeRequestPath, default_host_bridge_required_result_fields,
+    effective_host_bridge_request, effective_host_bridge_request_with_registry,
+    host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_allowed_next_node,
     host_bridge_blocked_result_contract_has_retry_evidence,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_path_array,
     host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
     host_bridge_request_string, host_bridge_request_task_class, host_bridge_required_result_fields,
-    legacy_internal_subagents_host_bridge_request, read_host_bridge_request, HostBridgeRequest,
-    HostBridgeRequestPath, HOST_BRIDGE_REQUIRED_RESULT_FIELDS,
+    legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
+    validate_host_bridge_request_identity,
 };
 
 /// Compares host-bridge packet paths by runtime identity, not presentation spelling.
@@ -185,6 +184,8 @@ pub(crate) mod tests {
             request_id: "req-1".to_string(),
             run_id: "run-1".to_string(),
             task_id: "task-1".to_string(),
+            attempt_id: "attempt-1".to_string(),
+            packet_id: "packet-1".to_string(),
             dispatch_target: "developer".to_string(),
             packet_path: PathBuf::from("runtime-consumption/packet.json"),
             backend_id: "internal_subagents".to_string(),

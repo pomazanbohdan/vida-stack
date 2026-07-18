@@ -3,12 +3,12 @@ use std::path::Path;
 use operator_output::{
     command_text::human_command,
     operator_contracts::{
-        canonical_pass_blocked_contract_status_str, finalize_operator_surface_verdict,
-        OperatorContractSpec,
+        OperatorContractSpec, canonical_pass_blocked_contract_status_str,
+        finalize_operator_surface_verdict,
     },
 };
 use serde_json::Value;
-use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
+use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
 use crate::adapter_contract::HostBridgeAdapterOperations;
 use crate::completion::{
@@ -16,8 +16,9 @@ use crate::completion::{
     host_bridge_request_status_allows_parent_completion,
 };
 use crate::request::{
-    default_host_bridge_required_result_fields, effective_host_bridge_request,
-    host_bridge_blocked_result_contract, host_bridge_request_string, HostBridgeRequest,
+    HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
+    host_bridge_blocked_result_contract, host_bridge_request_error_fields,
+    host_bridge_request_string,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -55,95 +56,80 @@ pub fn host_bridge_operator_fields(
     (verdict.shared_fields, verdict.operator_contracts)
 }
 
-fn push_missing_field(missing: &mut Vec<String>, field: &str) {
-    if !missing.iter().any(|value| value == field) {
-        missing.push(field.to_string());
-    }
-}
-
-fn raw_host_bridge_request_missing_fields(request: &Value) -> Vec<String> {
-    let mut missing = Vec::new();
-    if HostBridgeAdapterOperations::from_request_value(request).is_err() {
-        push_missing_field(&mut missing, "adapter_operations");
-    }
-    missing
-}
-
 pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_>) -> Value {
-    let raw_missing = raw_host_bridge_request_missing_fields(input.request);
     let effective_request = effective_host_bridge_request(input.request);
     let request = &effective_request;
-    let mut missing = raw_missing;
     let typed_request = HostBridgeRequest::from_value(request.clone());
-    if typed_request.is_err() {
-        for field in [
-            "run_id",
-            "dispatch_target",
-            "packet_path",
-            "backend_id",
-            "carrier_id",
-            "adapter_kind",
-            "adapter_capability_id",
-            "result_path",
-            "receipt_path",
-        ] {
-            if host_bridge_request_string(request, field).is_none() {
-                missing.push(field.to_string());
-            }
-        }
-    } else if let Ok(request) = typed_request.as_ref() {
-        for (field, missing_path) in [
-            ("packet_path", request.packet_path.as_os_str().is_empty()),
-            ("result_path", request.result_path.as_os_str().is_empty()),
-            ("receipt_path", request.receipt_path.as_os_str().is_empty()),
-        ] {
-            if missing_path {
-                missing.push(field.to_string());
-            }
-        }
-    }
+    let missing = typed_request
+        .as_ref()
+        .err()
+        .map(host_bridge_request_error_fields)
+        .unwrap_or_default();
     let run_id = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.run_id.as_str());
+        .map(|request| request.run_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "run_id"));
+    let task_id = typed_request
+        .as_ref()
+        .ok()
+        .map(|request| request.task_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "task_id"));
+    let attempt_id = typed_request
+        .as_ref()
+        .ok()
+        .map(|request| request.attempt_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "attempt_id"));
+    let packet_id = typed_request
+        .as_ref()
+        .ok()
+        .map(|request| request.packet_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "packet_id"));
     let request_id = typed_request
         .as_ref()
         .ok()
         .map(|request| request.request_id.as_str())
-        .or_else(|| host_bridge_request_string(request, "request_id"))
-        .unwrap_or("unknown-request");
+        .or_else(|| host_bridge_request_string(request, "request_id"));
     let dispatch_target = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.dispatch_target.as_str());
+        .map(|request| request.dispatch_target.as_str())
+        .or_else(|| host_bridge_request_string(request, "dispatch_target"));
     let packet_path = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.packet_path.display().to_string());
+        .map(|request| request.packet_path.display().to_string())
+        .or_else(|| host_bridge_request_string(request, "packet_path").map(ToOwned::to_owned));
     let backend_id = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.backend_id.as_str());
+        .map(|request| request.backend_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "backend_id"));
     let carrier_id = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.carrier_id.as_str());
+        .map(|request| request.carrier_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "carrier_id"));
     let adapter_kind = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.adapter_kind.as_str());
+        .map(|request| request.adapter_kind.as_str())
+        .or_else(|| host_bridge_request_string(request, "adapter_kind"));
     let adapter_capability_id = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.adapter_capability_id.as_str());
+        .map(|request| request.adapter_capability_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "adapter_capability_id"));
     let result_path = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.result_path.display().to_string());
+        .map(|request| request.result_path.display().to_string())
+        .or_else(|| host_bridge_request_string(request, "result_path").map(ToOwned::to_owned));
     let receipt_path = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.receipt_path.display().to_string());
+        .map(|request| request.receipt_path.display().to_string())
+        .or_else(|| host_bridge_request_string(request, "receipt_path").map(ToOwned::to_owned));
     let request_status = typed_request
         .as_ref()
         .ok()
@@ -152,7 +138,8 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
     let dispatch_transport = typed_request
         .as_ref()
         .ok()
-        .map(|request| request.dispatch_transport.as_str());
+        .map(|request| request.dispatch_transport.as_str())
+        .or_else(|| host_bridge_request_string(request, "dispatch_transport"));
     let invocation_mode = typed_request
         .as_ref()
         .ok()
@@ -163,7 +150,10 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .ok()
         .map(|request| request.adapter_contract_source.as_str())
         .unwrap_or("");
-    let adapter_operations = HostBridgeAdapterOperations::from_request_value(request).ok();
+    let adapter_operations = typed_request
+        .as_ref()
+        .ok()
+        .and_then(|request| request.adapter_operations.clone());
     let required_result_fields = typed_request
         .as_ref()
         .ok()
@@ -195,11 +185,10 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
                 .to_string(),
         );
     }
-    let configured_dispatch_transport = request
-        .get("adapter_operations")
-        .and_then(|value| HostBridgeAdapterOperations::from_registry_value(value).ok())
-        .map(|operations| operations.dispatch_transport);
-    if dispatch_transport.is_none_or(|value| value.trim().is_empty())
+    let configured_dispatch_transport = adapter_operations
+        .as_ref()
+        .map(|operations| operations.dispatch_transport.as_str());
+    if dispatch_transport != Some("host_tool_bridge")
         || configured_dispatch_transport
             .as_deref()
             .is_some_and(|configured| dispatch_transport != Some(configured))
@@ -283,6 +272,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         ]
     });
     let durable_job_id = request_id
+        .unwrap_or("")
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
@@ -340,6 +330,9 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "request_path": input.request_path.display().to_string(),
             "request_status": request_status,
             "run_id": run_id,
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "packet_id": packet_id,
             "dispatch_target": dispatch_target,
             "packet_path": packet_path,
             "backend_id": backend_id,
@@ -388,6 +381,9 @@ mod tests {
             "packet_path": "packet.json",
             "runtime_role": "worker",
             "task_class": "implementation",
+            "task_id": "task-1",
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "backend_id": "internal_subagents",
             "carrier_id": "junior",
             "execution_boundary": "parent_host_session",
@@ -531,12 +527,14 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .first()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action.contains("--attach-artifact")));
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action.contains("--attach-artifact"))
+        );
     }
 
     #[test]
@@ -555,12 +553,14 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .first()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action.contains("--attach-artifact")));
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action.contains("--attach-artifact"))
+        );
     }
 
     #[test]
@@ -571,11 +571,13 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == "host_bridge_request_missing_fields"));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_bridge_request_missing_fields")
+        );
         assert_eq!(
             payload["host_bridge"]["missing_fields"],
             json!(["packet_path"])
@@ -602,16 +604,20 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == "host_bridge_request_missing_fields"));
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == "host_tool_capability_missing"));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_bridge_request_missing_fields")
+        );
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_tool_capability_missing")
+        );
         assert_eq!(
             payload["host_bridge"]["missing_fields"],
             json!(["adapter_operations"])
@@ -628,14 +634,18 @@ mod tests {
             .remove("wait");
         let payload = payload_for(&request);
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == "host_tool_capability_missing"));
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .is_some_and(|actions| !actions.is_empty()));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_tool_capability_missing")
+        );
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["request_path"],
             "request.json"
@@ -650,11 +660,13 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == "host_bridge_request_wrong_transport"));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_bridge_request_wrong_transport")
+        );
         assert_eq!(payload["host_bridge"]["dispatch_transport"], "filesystem");
         assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }

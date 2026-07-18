@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use runtime_path_policy::PathPolicyError;
 use thiserror::Error;
 
+use crate::adapter_contract::HostBridgeAdapterContractError;
+
 #[derive(Debug, Error)]
 pub enum HostBridgeError {
     #[error(transparent)]
@@ -29,6 +31,12 @@ pub enum HostBridgeError {
 
     #[error("host bridge request is missing required field `{field}`")]
     MissingRequiredField { field: &'static str },
+
+    #[error("host bridge request has invalid required identity field `{field}`")]
+    InvalidRequiredField { field: &'static str },
+
+    #[error("host bridge request adapter contract is invalid: {0}")]
+    AdapterContract(#[source] HostBridgeAdapterContractError),
 
     #[error("implementation artifact `{path}` is outside the declared host bridge scope")]
     ArtifactScope { path: PathBuf },
