@@ -457,11 +457,13 @@ pub(crate) fn implementation_artifact_scope_validation(
     if !rows.is_empty() && reported_changed_files.is_empty() {
         blocker_codes.push("implementation_artifact_changed_files_missing".to_string());
     }
+    let mut admission_owned_paths = normalized_owned_paths.clone();
+    admission_owned_paths.extend(normalized_proof_artifact_paths.iter().cloned());
     let admission_request = serde_json::json!({
         "task_class": "implementation",
         "implementation_isolation": {
             "canonical_worktree_writes_allowed": false,
-            "owned_paths": normalized_owned_paths,
+            "owned_paths": admission_owned_paths,
             "scope_policy": {
                 "changed_files_must_be_subset_of_owned_paths": true
             }
@@ -1140,6 +1142,34 @@ mod tests {
 
         assert_eq!(validation["status"], "pass");
         assert_eq!(validation["blocker_codes"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn implementation_artifact_validation_does_not_widen_scope_with_unsafe_proof_path() {
+        let mut artifact = implementation_artifact("task-1", "implementation", "task-updated-at-1");
+        artifact
+            .as_object_mut()
+            .expect("artifact object")
+            .insert("changed_files".to_string(), serde_json::json!(["outside/test.rs"]));
+        let validation = implementation_artifact_scope_validation(
+            &["crates/vida/src/lib.rs".to_string()],
+            &["../outside/test.rs".to_string()],
+            &serde_json::json!([artifact]),
+            implementation_authority(),
+        );
+
+        assert_eq!(validation["status"], "blocked");
+        assert!(
+            validation["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_attempt_scope_guard_violation")
+        );
+        assert_eq!(
+            validation["out_of_scope_paths"],
+            serde_json::json!(["outside/test.rs"])
+        );
     }
 
     #[test]

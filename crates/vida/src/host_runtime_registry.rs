@@ -12,7 +12,7 @@ fn configured_host_runtime_roots(root: &Path) -> Vec<String> {
         let Ok(overlay) = serde_yaml::from_str::<serde_yaml::Value>(&raw) else {
             continue;
         };
-        let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+        let registry = crate::project_activator_surface::host_cli_system_registry_from_config(
             Some(&overlay),
         );
         let mut roots = registry

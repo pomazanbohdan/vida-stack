@@ -189,7 +189,7 @@ fn stage_attempt_policy_status_summary(
         });
     };
     let host_cli_system_registry =
-        crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
+        crate::project_activator_surface::host_cli_system_registry_from_config(Some(overlay));
     let carrier_projection = crate::carrier_runtime_projection::build_carrier_runtime_projection(
         overlay,
         project_root,

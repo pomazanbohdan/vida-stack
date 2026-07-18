@@ -773,7 +773,7 @@ pub(crate) fn build_agent_extension_registry_projection(
         .and_then(serde_yaml::Value::as_str)
         .and_then(crate::project_activator_surface::normalize_host_cli_system);
     let host_cli_system_registry =
-        crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(config));
+        crate::project_activator_surface::host_cli_system_registry_from_config(Some(config));
 
     AgentExtensionRegistryProjection {
         roles_registry,

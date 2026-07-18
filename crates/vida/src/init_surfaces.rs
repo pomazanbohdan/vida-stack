@@ -8288,7 +8288,7 @@ fn agent_init_effective_activation_bundle(
             projected_bundle
         }
         _ => {
-            let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+            let registry = crate::project_activator_surface::host_cli_system_registry_from_config(
                 Some(&config),
             );
             let selected_host_cli_system = crate::yaml_string(crate::yaml_lookup(

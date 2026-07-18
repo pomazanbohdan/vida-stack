@@ -21,6 +21,7 @@ use taskflow_host_bridge::{
     host_bridge_request_proof_artifact_paths, host_bridge_request_status_after_completion,
     host_bridge_result_declares_no_code_change, host_bridge_result_verdict_fields_for_gate,
     host_bridge_result_verdict_fields_for_gate_and_next,
+    default_host_bridge_required_result_fields,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -4999,20 +5000,38 @@ fn materialize_host_bridge_completion_evidence(
     let request_id = request
         .get("request_id")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("host-tool-bridge-request");
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "host_bridge_completion_request_identity_missing: request_id is required"
+                .to_string()
+        })?;
     let submitted_result_path = supplied_result_path.map(|path| path.display().to_string());
     let packet_path = request
         .get("packet_path")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "host_bridge_completion_request_identity_missing: packet_path is required"
+                .to_string()
+        })?;
     let backend_id = request
         .get("backend_id")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("internal_subagents");
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "host_bridge_completion_request_identity_missing: backend_id is required"
+                .to_string()
+        })?;
     let summary = summary
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("parent host bridge reported internal agent completion");
+        .ok_or_else(|| {
+            "host_bridge_completion_summary_missing: host bridge completion summary is required"
+                .to_string()
+        })?;
     let requires_implementation_artifacts =
         taskflow_host_bridge::host_bridge_request_effectively_requires_implementation_artifacts(
             &request,
@@ -7789,6 +7808,207 @@ mod tests {
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-04-09T00:00:00Z".to_string(),
         }
+    }
+
+    fn current_host_bridge_request_fixture(
+        mut request: serde_json::Value,
+        run_id: &str,
+        dispatch_target: &str,
+        packet_path: &std::path::Path,
+        request_path: &std::path::Path,
+        result_path: &std::path::Path,
+        receipt_path: &std::path::Path,
+    ) -> serde_json::Value {
+        let object = request
+            .as_object_mut()
+            .expect("host bridge fixture should be an object");
+        let request_id = object
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("host-bridge-fixture")
+            .to_string();
+        object
+            .entry("schema_version")
+            .or_insert_with(|| serde_json::json!(1));
+        object
+            .entry("status")
+            .or_insert_with(|| serde_json::json!("pending"));
+        object
+            .entry("request_id")
+            .or_insert_with(|| serde_json::json!(request_id));
+        object
+            .entry("run_id")
+            .or_insert_with(|| serde_json::json!(run_id));
+        object
+            .entry("task_id")
+            .or_insert_with(|| serde_json::json!(run_id));
+        object.entry("attempt_id").or_insert_with(|| {
+            serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt"))
+        });
+        object
+            .entry("packet_id")
+            .or_insert_with(|| serde_json::json!(request_id));
+        object
+            .entry("dispatch_target")
+            .or_insert_with(|| serde_json::json!(dispatch_target));
+        object
+            .entry("packet_path")
+            .or_insert_with(|| serde_json::json!(packet_path.display().to_string()));
+        object
+            .entry("runtime_role")
+            .or_insert_with(|| serde_json::json!("worker"));
+        object
+            .entry("task_class")
+            .or_insert_with(|| {
+                if dispatch_target == "verification" {
+                    serde_json::json!("verification")
+                } else {
+                    serde_json::json!("implementation")
+                }
+            });
+        object
+            .entry("backend_id")
+            .or_insert_with(|| serde_json::json!("internal_subagents"));
+        object
+            .entry("carrier_id")
+            .or_insert_with(|| serde_json::json!("middle"));
+        object
+            .entry("execution_boundary")
+            .or_insert_with(|| serde_json::json!("parent_host_session"));
+        object
+            .entry("dispatch_transport")
+            .or_insert_with(|| serde_json::json!("host_tool_bridge"));
+        object
+            .entry("receipt_mode")
+            .or_insert_with(|| serde_json::json!("host_bridge_receipt"));
+        object
+            .entry("adapter_kind")
+            .or_insert_with(|| serde_json::json!("codex_host_tools"));
+        object
+            .entry("adapter_capability_id")
+            .or_insert_with(|| serde_json::json!("codex.multi_agent_v1"));
+        object
+            .entry("invocation_mode")
+            .or_insert_with(|| serde_json::json!("parent_host_tool_api"));
+        let adapter_operations = object
+            .entry("adapter_operations")
+            .or_insert_with(|| {
+                serde_json::json!({
+                    "adapter_kind": "codex_host_tools",
+                    "adapter_capability_id": "codex.multi_agent_v1",
+                    "invocation_mode": "parent_host_tool_api",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
+                    "operations": {
+                        "spawn": "multi_agent_v1.spawn_agent",
+                        "wait": "multi_agent_v1.wait_agent",
+                        "dispose": "multi_agent_v1.close_agent"
+                    },
+                    "dispose_policy": "configured"
+                })
+            })
+            .clone();
+        object
+            .entry("adapter_contract_snapshot")
+            .or_insert_with(|| adapter_operations.clone());
+        let adapter_snapshot = object
+            .get("adapter_contract_snapshot")
+            .cloned()
+            .unwrap_or(adapter_operations);
+        let adapter_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_snapshot).expect("adapter fixture snapshot"),
+        )
+        .to_hex()
+        .to_string();
+        object.insert("adapter_contract_hash".to_string(), serde_json::json!(adapter_hash));
+        object
+            .entry("adapter_contract_source")
+            .or_insert_with(|| serde_json::json!("vida.config.yaml"));
+        object
+            .entry("implementation_isolation")
+            .or_insert_with(|| serde_json::json!({
+                "schema_version": "implementation-isolation-v1",
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": [],
+                "canonical_worktree_writes_allowed": false,
+                "scope_policy": {
+                    "changed_files_must_be_subset_of_owned_paths": true
+                }
+            }));
+        if let Some(isolation) = object
+            .get_mut("implementation_isolation")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            isolation
+                .entry("schema_version")
+                .or_insert_with(|| serde_json::json!("implementation-isolation-v1"));
+            isolation
+                .entry("artifact_contract")
+                .or_insert_with(|| serde_json::json!("stage_attempt_implementation_artifact_v1"));
+            isolation
+                .entry("owned_paths")
+                .or_insert_with(|| serde_json::json!([]));
+            isolation
+                .entry("canonical_worktree_writes_allowed")
+                .or_insert_with(|| serde_json::json!(false));
+            isolation
+                .entry("scope_policy")
+                .or_insert_with(|| serde_json::json!({
+                    "changed_files_must_be_subset_of_owned_paths": true
+                }));
+            if let Some(scope_policy) = isolation
+                .get_mut("scope_policy")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                scope_policy
+                    .entry("changed_files_must_be_subset_of_owned_paths")
+                    .or_insert_with(|| serde_json::json!(true));
+            }
+        }
+        object
+            .entry("expected_implementation_artifact_kinds")
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("implementation_artifacts")
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("required_result_fields")
+            .or_insert_with(|| serde_json::json!(default_host_bridge_required_result_fields()));
+        object
+            .entry("blocked_result_contract")
+            .or_insert_with(|| serde_json::json!({
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "required_result_fields": default_host_bridge_required_result_fields(),
+                "rework_target_required_when_blocked": true,
+                "allowed_next_node": serde_json::Value::Null
+            }));
+        object.entry("owned_paths").or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("proof_artifact_paths")
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("proof_artifact_scope")
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("read_only_paths")
+            .or_insert_with(|| serde_json::json!([]));
+        object.entry("proof_target").or_insert(serde_json::Value::Null);
+        object.insert(
+            "request_path".to_string(),
+            serde_json::json!(request_path.display().to_string()),
+        );
+        object.insert(
+            "result_path".to_string(),
+            serde_json::json!(result_path.display().to_string()),
+        );
+        object.insert(
+            "receipt_path".to_string(),
+            serde_json::json!(receipt_path.display().to_string()),
+        );
+        request
     }
 
     #[test]
@@ -13028,7 +13248,7 @@ mod tests {
             .expect("create receipt parent");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
                 "request_id": "run-host-bridge-stale-result",
@@ -13057,7 +13277,14 @@ mod tests {
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "implementer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write host bridge request");
@@ -13962,7 +14189,7 @@ mod tests {
         .expect("create request dir");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-host-bridge-summary-retry",
@@ -13991,7 +14218,14 @@ mod tests {
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "implementer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write host bridge request");
@@ -14399,7 +14633,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-attempt-artifacts",
@@ -14419,7 +14653,14 @@ mod tests {
                 "implementation_artifacts": [],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "implementer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -14740,6 +14981,8 @@ mod tests {
         ));
         let request_path = root.join("host-tool-bridge/requests/request.json");
         let expected_result_path = root.join("host-tool-bridge/results/request-owned.json");
+        let packet_path = root.join("runtime-consumption/dispatch-packets/run-result-binding.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/request-owned.json");
         let staged_result_path = root.join("host-tool-bridge/staged-results/staged.json");
         let forged_result_path = root.join("host-tool-bridge/staged-results/forged.json");
         let missing_identity_result_path =
@@ -14755,7 +14998,7 @@ mod tests {
         }
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "result-binding",
@@ -14765,10 +15008,17 @@ mod tests {
                 "dispatch_transport": "host_tool_bridge",
                 "receipt_mode": "host_bridge_receipt",
                 "request_path": request_path.display().to_string(),
-                "packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "packet_path": packet_path.display().to_string(),
                 "result_path": expected_result_path.display().to_string(),
-                "receipt_path": root.join("host-tool-bridge/receipts/request-owned.json").display().to_string()
-            })
+                "receipt_path": receipt_path.display().to_string()
+            }),
+                "run-result-binding",
+                "verification",
+                &packet_path,
+                &request_path,
+                &expected_result_path,
+                &receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16607,7 +16857,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-unverified",
@@ -16639,7 +16889,14 @@ mod tests {
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "implementer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16846,7 +17103,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-attempt-retry",
@@ -16875,7 +17132,14 @@ mod tests {
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "implementer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -17172,7 +17436,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-proof-scope",
@@ -17188,7 +17452,12 @@ mod tests {
                 "implementation_isolation": {
                     "schema_version": "implementation-isolation-v1",
                     "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["src/lib/features/list_view/data"],
+                    "owned_paths": [
+                        "src/lib/features/list_view/data",
+                        "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                        "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                        "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                    ],
                     "proof_artifact_paths": proof_artifact_paths
                 },
                 "implementation_artifacts": [{
@@ -17203,7 +17472,14 @@ mod tests {
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "developer",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -17385,7 +17661,7 @@ mod tests {
         .expect("create request dir");
         std::fs::write(
             &request_path,
-            serde_json::json!({
+            current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-host-bridge-verification",
@@ -17398,7 +17674,14 @@ mod tests {
                 "dispatch_transport": "host_tool_bridge",
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
-            })
+            }),
+                run_id,
+                "verification",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &bridge_receipt_path,
+            )
             .to_string(),
         )
         .expect("write host bridge request");

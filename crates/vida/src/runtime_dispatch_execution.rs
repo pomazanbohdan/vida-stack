@@ -2893,30 +2893,27 @@ fn materialize_host_tool_bridge_request(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
+    let selected_cli_entry = selected_cli_entry.ok_or_else(|| {
+        "host_bridge_adapter_registry_missing: selected host CLI registry entry is required before request materialization"
+            .to_string()
+    })?;
+    let entry_value = serde_json::to_value(selected_cli_entry)
+        .map_err(|error| format!("host_bridge_adapter_registry_serialize_failed:{error}"))?;
+    let registry_present = entry_value.get("host_tool_bridge").is_some()
+        || entry_value.get("adapter_registry").is_some()
+        || entry_value.get("adapter_kind").is_some();
+    if !registry_present {
+        return Err(
+            "host_bridge_adapter_registry_missing: selected host CLI entry has no host_tool_bridge adapter registry"
+                .to_string(),
+        );
+    }
+    let adapter_contract = HostBridgeAdapterOperations::from_registry_value(&entry_value)
+        .map_err(|error| format!("host_bridge_adapter_contract_invalid:{error}"))?;
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths =
-        host_tool_bridge_artifact_paths(project_root, state_root, selected_cli_entry, &request_id);
-    let adapter_contract = if let Some(entry) = selected_cli_entry {
-        let entry_value = serde_json::to_value(entry)
-            .map_err(|error| format!("host_bridge_adapter_registry_serialize_failed:{error}"))?;
-        let registry_present = entry_value.get("host_tool_bridge").is_some()
-            || entry_value.get("adapter_registry").is_some()
-            || entry_value.get("adapter_kind").is_some();
-        if registry_present {
-            Some(
-                HostBridgeAdapterOperations::from_registry_value(&entry_value)
-                    .map_err(|error| format!("host_bridge_adapter_contract_invalid:{error}"))?,
-            )
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let adapter_contract_value = adapter_contract
-        .as_ref()
-        .map(HostBridgeAdapterOperations::to_value)
-        .unwrap_or(serde_json::Value::Null);
+        host_tool_bridge_artifact_paths(project_root, state_root, Some(selected_cli_entry), &request_id);
+    let adapter_contract_value = adapter_contract.to_value();
     let adapter_contract_snapshot = adapter_contract_value.clone();
     let adapter_contract_hash = blake3::hash(
         &serde_json::to_vec(&adapter_contract_snapshot)
@@ -2924,22 +2921,10 @@ fn materialize_host_tool_bridge_request(
     )
     .to_hex()
     .to_string();
-    let adapter_kind = adapter_contract
-        .as_ref()
-        .map(|contract| contract.adapter_kind.clone())
-        .unwrap_or_default();
-    let adapter_capability_id = adapter_contract
-        .as_ref()
-        .map(|contract| contract.adapter_capability_id.clone())
-        .unwrap_or_default();
-    let invocation_mode = adapter_contract
-        .as_ref()
-        .map(|contract| contract.invocation_mode.clone())
-        .unwrap_or_default();
-    let receipt_mode = adapter_contract
-        .as_ref()
-        .map(|contract| contract.receipt_mode.clone())
-        .unwrap_or_else(|| configured_host_receipt_mode(selected_cli_entry));
+    let adapter_kind = adapter_contract.adapter_kind.clone();
+    let adapter_capability_id = adapter_contract.adapter_capability_id.clone();
+    let invocation_mode = adapter_contract.invocation_mode.clone();
+    let receipt_mode = adapter_contract.receipt_mode.clone();
     let configured_runtime_role =
         crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
             role_selection,
@@ -3008,6 +2993,7 @@ fn materialize_host_tool_bridge_request(
         &receipt.run_id,
         packet_attempt_id.as_deref().or(Some(packet_id.as_str())),
     );
+    let execution_boundary = configured_host_execution_boundary(Some(selected_cli_entry));
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
@@ -3022,13 +3008,8 @@ fn materialize_host_tool_bridge_request(
         "task_class": request_task_class,
         "backend_id": backend_id,
         "carrier_id": carrier_id,
-        "execution_boundary": selected_cli_entry
-            .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["execution_boundary"])))
-            .unwrap_or_default(),
-        "dispatch_transport": adapter_contract
-            .as_ref()
-            .map(|contract| contract.dispatch_transport.clone())
-            .unwrap_or_else(|| configured_host_dispatch_transport(selected_cli_entry)),
+        "execution_boundary": execution_boundary,
+        "dispatch_transport": adapter_contract.dispatch_transport.clone(),
         "receipt_mode": receipt_mode,
         "adapter_kind": adapter_kind,
         "adapter_capability_id": adapter_capability_id,
@@ -6257,7 +6238,7 @@ dispatch:
     }
 
     #[test]
-    fn explicit_legacy_codex_selection_without_system_entry_uses_builtin_host_bridge_capability() {
+    fn explicit_legacy_codex_selection_without_system_entry_is_not_admitted() {
         let overlay = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:
@@ -6276,20 +6257,7 @@ host_environment:
         let (selected, entry) =
             crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
         assert_eq!(selected, "codex");
-        let entry = entry.expect("explicit legacy codex selection should synthesize system entry");
-        assert_eq!(
-            configured_host_tool_bridge_string(Some(&entry), "adapter_capability_id"),
-            None
-        );
-        assert_eq!(
-            configured_host_tool_bridge_string(Some(&entry), "spawn_tool"),
-            None
-        );
-        assert!(
-            crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(&entry))
-                .iter()
-                .any(|row| row["role_id"].as_str() == Some("junior"))
-        );
+        assert!(entry.is_none(), "missing registry entry must remain absent");
     }
 
     #[test]
@@ -6408,7 +6376,7 @@ dispatch:
     }
 
     #[test]
-    fn host_tool_bridge_request_uses_generic_unconfigured_adapter_defaults() {
+    fn host_tool_bridge_request_without_selected_cli_entry_writes_no_artifact() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -6456,7 +6424,7 @@ dispatch:
             recorded_at: "2026-06-01T00:00:00Z".to_string(),
         };
 
-        let request = materialize_host_tool_bridge_request(
+        let error = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
             None,
@@ -6466,14 +6434,10 @@ dispatch:
             &receipt,
             &internal_codex_fallback_role_selection(serde_json::json!({})),
         )
-        .expect("host bridge request should materialize");
+        .expect_err("missing selected CLI entry must block before materialization");
 
-        assert_eq!(request["adapter_kind"], "");
-        assert_eq!(request["adapter_capability_id"], "");
-        assert_eq!(request["invocation_mode"], "");
-        assert!(request["adapter_operations"].is_null());
-        assert!(request.get("spawn_tool").is_none());
-        assert!(request.get("adapter_params").is_none());
+        assert!(error.starts_with("host_bridge_adapter_registry_missing:"));
+        assert!(!project_root.join(".vida/data/state/host-tool-bridge").exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -6550,7 +6514,7 @@ host_tool_bridge:
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
-            None,
+            Some(&configured_host_bridge_test_entry()),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -6620,7 +6584,7 @@ host_tool_bridge:
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
-            None,
+            Some(&configured_host_bridge_test_entry()),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -6725,7 +6689,7 @@ host_tool_bridge:
         let error = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
-            None,
+            Some(&configured_host_bridge_test_entry()),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -6853,7 +6817,7 @@ host_tool_bridge:
         let first_request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
-            None,
+            Some(&configured_host_bridge_test_entry()),
             packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -6938,7 +6902,7 @@ host_tool_bridge:
         let rearmed_request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
-            None,
+            Some(&configured_host_bridge_test_entry()),
             packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -7017,7 +6981,7 @@ host_tool_bridge:
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
-            None,
+            Some(&configured_host_bridge_test_entry()),
             packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -7073,7 +7037,7 @@ host_tool_bridge:
         let first_request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
-            None,
+            Some(&configured_host_bridge_test_entry()),
             first_packet_path
                 .to_str()
                 .expect("first packet path should render"),
@@ -7099,7 +7063,7 @@ host_tool_bridge:
         let second_request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
-            None,
+            Some(&configured_host_bridge_test_entry()),
             second_packet_path
                 .to_str()
                 .expect("second packet path should render"),
@@ -8280,10 +8244,7 @@ agent_system:
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
-        let selected_entry = serde_yaml::from_str::<serde_yaml::Value>(
-            "execution_class: internal\ndispatch_transport: host_tool_bridge\n",
-        )
-        .expect("selected entry should parse");
+        let selected_entry = configured_host_bridge_test_entry();
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
@@ -8338,7 +8299,7 @@ agent_system:
     }
 
     #[test]
-    fn host_bridge_refreshes_legacy_unconfigured_same_lane_request_when_codex_defaults_available() {
+    fn host_bridge_rejects_stale_same_lane_request_at_current_identity_invariant() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -8370,7 +8331,7 @@ agent_system:
         let stale_request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
-            None,
+            Some(&configured_host_bridge_test_entry()),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -8380,7 +8341,10 @@ agent_system:
             &role_selection,
         )
         .expect("legacy unconfigured host bridge request should materialize");
-        assert_eq!(stale_request["adapter_capability_id"], "");
+        assert_eq!(
+            stale_request["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
         let request_path = PathBuf::from(
             stale_request["request_path"]
                 .as_str()
@@ -8403,28 +8367,27 @@ agent_system:
         legacy_request["adapter_kind"] = "unconfigured_host_agent_adapter".into();
         legacy_request["adapter_capability_id"] = "unconfigured_host_agent_capability".into();
         legacy_request["invocation_mode"] = "configured_host_capability_required".into();
+        legacy_request["status"] = "retryable_blocked".into();
         legacy_request["adapter_params"] = serde_json::json!({
             "spawn_tool": "legacy.spawn",
             "wait_tool": "legacy.wait"
         });
         std::fs::write(&request_path, legacy_request.to_string())
             .expect("legacy request should persist");
-        std::fs::write(&result_path, "{}").expect("write stale result");
-        std::fs::write(&receipt_path, "{}").expect("write stale receipt");
-        let legacy_codex_entry = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-execution_class: internal
-dispatch_transport: host_tool_bridge
-dispatch:
-  command: codex
-"#,
-        )
-        .expect("parse legacy codex entry");
+        let retryable_artifact = serde_json::json!({
+            "status": "blocked",
+            "blocker_code": "host_tool_bridge_adapter_required"
+        });
+        std::fs::write(&result_path, retryable_artifact.to_string())
+            .expect("write stale result");
+        std::fs::write(&receipt_path, retryable_artifact.to_string())
+            .expect("write stale receipt");
+        let configured_entry = configured_host_bridge_test_entry();
 
         let error = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
-            Some(&legacy_codex_entry),
+            Some(&configured_entry),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -8435,7 +8398,7 @@ dispatch:
         )
         .expect_err("malformed legacy request must not bypass canonical contract validation");
         assert!(
-            error.contains("does not match the active dispatch lane"),
+            error.contains("does not match expected `adapter_kind`"),
             "unexpected error: {error}"
         );
         assert!(result_path.exists());
@@ -9624,6 +9587,33 @@ agent_system:
             execution_plan,
             reason: "test".to_string(),
         }
+    }
+
+    fn configured_host_bridge_test_entry() -> serde_yaml::Value {
+        serde_yaml::from_str(
+            r#"
+enabled: true
+execution_class: internal
+execution_boundary: parent_host_session
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+host_tool_bridge:
+  request_dir: .vida/data/state/host-tool-bridge/requests
+  result_dir: .vida/data/state/host-tool-bridge/results
+  receipt_dir: .vida/data/state/host-tool-bridge/receipts
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
+"#,
+        )
+        .expect("configured host bridge fixture should parse")
     }
 
     fn internal_codex_fallback_receipt(

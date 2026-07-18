@@ -320,70 +320,10 @@ fn host_cli_system_registry(config: &serde_yaml::Value) -> HashMap<String, serde
     registry
 }
 
-pub(crate) fn host_cli_system_registry_with_fallback(
+pub(crate) fn host_cli_system_registry_from_config(
     config: Option<&serde_yaml::Value>,
 ) -> HashMap<String, serde_yaml::Value> {
-    let mut registry = config.map(host_cli_system_registry).unwrap_or_default();
-    if let Some(config) = config {
-        let explicit_system = yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
-            .as_deref()
-            .and_then(normalize_host_cli_system);
-        if explicit_system.as_deref() == Some("codex") {
-            let builtin = builtin_codex_host_cli_system_entry(config);
-            if let Some(existing) = registry.get_mut("codex") {
-                merge_yaml_defaults(existing, &builtin);
-            } else {
-                registry.insert("codex".to_string(), builtin);
-            }
-        }
-    }
-    registry
-}
-
-fn merge_yaml_defaults(target: &mut serde_yaml::Value, defaults: &serde_yaml::Value) {
-    let (Some(target_mapping), Some(default_mapping)) =
-        (target.as_mapping_mut(), defaults.as_mapping())
-    else {
-        return;
-    };
-    for (key, default_value) in default_mapping {
-        match target_mapping.get_mut(key) {
-            Some(existing_value) if existing_value.is_mapping() && default_value.is_mapping() => {
-                merge_yaml_defaults(existing_value, default_value);
-            }
-            Some(_) => {}
-            None => {
-                target_mapping.insert(key.clone(), default_value.clone());
-            }
-        }
-    }
-}
-
-fn builtin_codex_host_cli_system_entry(config: &serde_yaml::Value) -> serde_yaml::Value {
-    let mut entry = serde_yaml::from_str::<serde_yaml::Value>(
-        r#"
-enabled: true
-execution_class: internal
-execution_boundary: parent_host_session
-dispatch_transport: host_tool_bridge
-receipt_mode: host_bridge_receipt
-materialization_mode: codex_toml_catalog_render
-template_root: .codex
-runtime_root: .codex
-host_tool_bridge:
-  dispatch_transport: host_tool_bridge
-  adapter_required: true
-  no_adapter_policy: fail_closed_emit_request
-  process_carrier_requires_explicit_backend: true
-"#,
-    )
-    .expect("built-in codex host CLI system entry should parse");
-    if let Some(carriers) = yaml_lookup(config, &["host_environment", "codex", "agents"]).cloned() {
-        if let Some(mapping) = entry.as_mapping_mut() {
-            mapping.insert(serde_yaml::Value::String("carriers".to_string()), carriers);
-        }
-    }
-    entry
+    config.map(host_cli_system_registry).unwrap_or_default()
 }
 
 fn load_host_cli_system_registry_from_root(root: &Path) -> HashMap<String, serde_yaml::Value> {
@@ -807,20 +747,23 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
         .ok_or_else(|| {
             "Host CLI system is missing or unsupported in vida.config.yaml.".to_string()
         })?;
-    let registry = host_cli_system_registry_with_fallback(Some(overlay));
-    let catalog_entry = registry.get(&selected_host_cli_system);
+    let registry = host_cli_system_registry_from_config(Some(overlay));
+    let catalog_entry = registry.get(&selected_host_cli_system).ok_or_else(|| {
+        format!(
+            "host_cli_system_config_missing: selected host CLI `{selected_host_cli_system}` has no registry entry in vida.config.yaml"
+        )
+    })?;
     let mut host_cli_agent_catalog =
-        project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(catalog_entry);
+        project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(Some(catalog_entry));
     if host_cli_agent_catalog.is_empty() {
-        if catalog_entry
-            .map(|entry| host_cli_system_materialization_mode(entry, &selected_host_cli_system))
+        if Some(host_cli_system_materialization_mode(catalog_entry, &selected_host_cli_system))
             .as_deref()
             == Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)
         {
             host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
                 project_root,
                 overlay,
-                catalog_entry,
+                Some(catalog_entry),
                 &selected_host_cli_system,
             );
         }
@@ -945,7 +888,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     } else {
         None
     };
-    let host_cli_system_registry = host_cli_system_registry_with_fallback(project_overlay.as_ref());
+    let host_cli_system_registry = host_cli_system_registry_from_config(project_overlay.as_ref());
     let host_cli_summary =
         crate::project_activator_host_cli_summary::build_project_activator_host_cli_summary(
             project_root,
@@ -3119,7 +3062,7 @@ mod tests {
     }
 
     #[test]
-    fn host_cli_registry_fallback_synthesizes_codex_bridge_for_explicit_legacy_codex_selection() {
+    fn host_cli_registry_rejects_explicit_legacy_codex_selection_without_registry_entry() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:
@@ -3135,21 +3078,18 @@ host_environment:
         )
         .expect("legacy codex config should parse");
 
-        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
-        let codex = registry
-            .get("codex")
-            .expect("explicit legacy codex selection should synthesize codex system entry");
-
-        assert_eq!(
-            super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
-                .and_then(serde_yaml::Value::as_str),
-            None
-        );
-        assert!(super::yaml_lookup(codex, &["carriers", "junior"]).is_some());
+        let registry = super::host_cli_system_registry_from_config(Some(&config));
+        assert!(registry.get("codex").is_none());
+        let error = super::resolved_host_cli_agent_catalog_for_root(
+            std::path::Path::new("."),
+            &config,
+        )
+        .expect_err("missing explicit registry entry must be a terminal config blocker");
+        assert!(error.starts_with("host_cli_system_config_missing:"));
     }
 
     #[test]
-    fn host_cli_registry_fallback_merges_codex_bridge_defaults_into_sparse_system_entry() {
+    fn host_cli_registry_preserves_sparse_codex_entry_without_synthetic_bridge_defaults() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:
@@ -3171,18 +3111,18 @@ host_environment:
         )
         .expect("sparse codex config should parse");
 
-        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let registry = super::host_cli_system_registry_from_config(Some(&config));
         let codex = registry
             .get("codex")
             .expect("selected sparse codex system should remain present");
 
         assert_eq!(
             super::yaml_lookup(codex, &["dispatch_transport"]).and_then(serde_yaml::Value::as_str),
-            Some("host_tool_bridge")
+            None
         );
         assert_eq!(
             super::yaml_lookup(codex, &["receipt_mode"]).and_then(serde_yaml::Value::as_str),
-            Some("host_bridge_receipt")
+            None
         );
         assert_eq!(
             super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
@@ -3218,7 +3158,7 @@ host_environment:
         )
         .expect("explicit process codex config should parse");
 
-        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let registry = super::host_cli_system_registry_from_config(Some(&config));
         let codex = registry
             .get("codex")
             .expect("selected explicit codex system should remain present");
@@ -3240,7 +3180,7 @@ host_environment:
 
         let config = super::read_yaml_file_checked(&harness.path().join("vida.config.yaml"))
             .expect("project config should exist");
-        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let registry = super::host_cli_system_registry_from_config(Some(&config));
         let qwen_entry = registry
             .get("qwen")
             .expect("configured qwen template source should exist");

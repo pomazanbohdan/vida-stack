@@ -694,7 +694,7 @@ pub(crate) fn carrier_policy_revalidation_for_project_root(
         &["host_environment", "cli_system"],
     ));
     let host_cli_system_registry =
-        crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(&config));
+        crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
     let runtime_root = selected_runtime_root(
         project_root,
         selected_host_cli_system.as_deref(),
@@ -865,7 +865,7 @@ host_environment:
         )
         .expect("config should parse");
         let registry =
-            crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(&config));
+            crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
 
         let root = selected_runtime_root(Path::new("/tmp/project"), Some("hermes"), &registry);
 
@@ -888,7 +888,7 @@ host_environment:
         )
         .expect("config should parse");
         let registry =
-            crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(&config));
+            crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
 
         let root = selected_runtime_root(Path::new("/tmp/project"), None, &registry);
 

@@ -3405,7 +3405,7 @@ pub(crate) struct RuntimeAgentLaneDispatch {
 pub(crate) fn selected_host_cli_system_for_runtime_dispatch(
     overlay: &serde_yaml::Value,
 ) -> (String, Option<serde_yaml::Value>) {
-    let registry = project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
+    let registry = project_activator_surface::host_cli_system_registry_from_config(Some(overlay));
     let candidate = yaml_lookup(overlay, &["host_environment", "cli_system"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
@@ -3436,7 +3436,7 @@ pub(crate) fn configured_dispatch_backend_class(
     overlay: &serde_yaml::Value,
     system: &str,
 ) -> String {
-    project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay))
+    project_activator_surface::host_cli_system_registry_from_config(Some(overlay))
         .get(system)
         .and_then(|entry| {
             yaml_string(yaml_lookup(entry, &["dispatch_backend_class"]))
@@ -3502,7 +3502,7 @@ fn configured_internal_host_carrier_exists(
     system: &str,
     backend_id: &str,
 ) -> bool {
-    let registry = project_activator_surface::host_cli_system_registry_with_fallback(overlay);
+    let registry = project_activator_surface::host_cli_system_registry_from_config(overlay);
     let Some(system_entry) = registry.get(system) else {
         return false;
     };
@@ -3549,7 +3549,7 @@ pub(crate) fn selected_external_backend_for_system(
     let entries = subagents.as_mapping()?;
     let backend_class = configured_dispatch_backend_class(overlay, system);
     let configured_backend_id =
-        project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay))
+        project_activator_surface::host_cli_system_registry_from_config(Some(overlay))
             .get(system)
             .and_then(|entry| {
                 yaml_string(yaml_lookup(entry, &["external_backend_id"]))

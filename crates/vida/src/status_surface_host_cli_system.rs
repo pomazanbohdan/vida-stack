@@ -6,7 +6,7 @@ pub(crate) fn selected_host_cli_system_entry(
     overlay: &serde_yaml::Value,
 ) -> (String, Option<serde_yaml::Value>) {
     let registry =
-        super::project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
+        super::project_activator_surface::host_cli_system_registry_from_config(Some(overlay));
     let candidate = super::yaml_lookup(overlay, &["host_environment", "cli_system"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)

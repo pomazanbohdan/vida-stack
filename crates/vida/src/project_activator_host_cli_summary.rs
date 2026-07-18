@@ -248,7 +248,7 @@ host_environment:
 "#,
         )
         .expect("overlay yaml should parse");
-        let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+        let registry = crate::project_activator_surface::host_cli_system_registry_from_config(
             Some(&overlay),
         );
 
