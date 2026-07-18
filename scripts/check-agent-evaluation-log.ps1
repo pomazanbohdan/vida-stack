@@ -10,13 +10,20 @@ function New-CheckIssue {
     param(
         [string]$Code,
         [string]$Message,
-        [string]$Section = ""
+        [string]$Section = "",
+        [string]$SourcePath = "",
+        [string]$SourceField = ""
     )
 
     [pscustomobject]@{
         code = $Code
+        error_code = $Code
+        blocker_code = $Code
+        type = "blocker"
         message = $Message
         section = $Section
+        source_path = $SourcePath
+        source_field = $SourceField
     }
 }
 
@@ -84,12 +91,52 @@ function Get-ScorecardSections {
 function Get-SourceCalendarDate {
     param([string]$Timestamp)
 
-    $match = [regex]::Match($Timestamp, "^(?<date>\d{4}-\d{2}-\d{2})(?:T|\s|$)")
-    if (-not $match.Success) {
-        throw "updated_at '$Timestamp' must start with an ISO calendar date."
+    if ([string]::IsNullOrWhiteSpace($Timestamp)) {
+        $error = [System.FormatException]::new("updated_at must be an RFC3339 timestamp with an explicit timezone offset.")
+        $error.Data["error_code"] = "updated_at_invalid_format"
+        throw $error
     }
 
-    return [datetime]::ParseExact($match.Groups["date"].Value, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture).Date
+    $match = [regex]::Match($Timestamp, "^(?<date>\d{4}-\d{2}-\d{2})T(?<time>\d{2}:\d{2}:\d{2})(?<fraction>\.\d{1,7})?(?<offset>Z|(?<sign>[+-])(?<offset_hour>\d{2}):(?<offset_minute>\d{2}))$")
+    if (-not $match.Success) {
+        $error = [System.FormatException]::new("updated_at '$Timestamp' must be RFC3339 with T separator, optional fraction, and explicit Z or +/-HH:mm offset.")
+        $error.Data["error_code"] = "updated_at_invalid_format"
+        throw $error
+    }
+
+    $offsetText = $match.Groups["offset"].Value
+    if ($offsetText -ne "Z") {
+        $offsetHour = [int]$match.Groups["offset_hour"].Value
+        $offsetMinute = [int]$match.Groups["offset_minute"].Value
+        if ($offsetHour -gt 14 -or $offsetMinute -gt 59 -or ($offsetHour -eq 14 -and $offsetMinute -ne 0)) {
+            $error = [System.FormatException]::new("updated_at '$Timestamp' has an invalid timezone offset '$offsetText'.")
+            $error.Data["error_code"] = "updated_at_invalid_offset"
+            throw $error
+        }
+    }
+
+    $hasFraction = $match.Groups["fraction"].Success
+    $format = if ($offsetText -eq "Z") {
+        if ($hasFraction) { "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'" } else { "yyyy-MM-dd'T'HH:mm:ss'Z'" }
+    } else {
+        if ($hasFraction) { "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz" } else { "yyyy-MM-dd'T'HH:mm:sszzz" }
+    }
+    $styles = if ($offsetText -eq "Z") { [System.Globalization.DateTimeStyles]::AssumeUniversal } else { [System.Globalization.DateTimeStyles]::None }
+    $parsed = [DateTimeOffset]::MinValue
+    $parsedOk = [DateTimeOffset]::TryParseExact(
+        $Timestamp,
+        $format,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        $styles,
+        [ref]$parsed
+    )
+    if (-not $parsedOk) {
+        $error = [System.FormatException]::new("updated_at '$Timestamp' is not a valid calendar timestamp.")
+        $error.Data["error_code"] = "updated_at_invalid_value"
+        throw $error
+    }
+
+    return $parsed.Date
 }
 
 function Test-ScorecardSection {
@@ -192,7 +239,11 @@ function Test-ScorecardSection {
 }
 
 $issues = New-Object System.Collections.Generic.List[object]
-$fullPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+$fullPath = if ([System.IO.Path]::IsPathRooted($Path)) {
+    [System.IO.Path]::GetFullPath($Path)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+}
 
 if (-not (Test-Path -LiteralPath $fullPath)) {
     $issues.Add((New-CheckIssue "missing_file" "File not found: $Path"))
@@ -204,13 +255,18 @@ if (-not (Test-Path -LiteralPath $fullPath)) {
     } else {
         $updatedAtMatch = [regex]::Match($content, "(?m)^updated_at:\s*(?<value>\S+)")
         if (-not $updatedAtMatch.Success) {
-            $issues.Add((New-CheckIssue "missing_updated_at" "Footer metadata must contain updated_at."))
+            $issues.Add((New-CheckIssue "missing_updated_at" "Footer metadata must contain updated_at." "" $Path "updated_at"))
         } else {
             $latestSectionDate = [datetime]::ParseExact($sections[-1].date, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
             $updatedDateText = $updatedAtMatch.Groups["value"].Value
-            $updatedDate = Get-SourceCalendarDate $updatedDateText
-            if ($updatedDate.Date -lt $latestSectionDate.Date) {
-                $issues.Add((New-CheckIssue "stale_updated_at" "updated_at '$updatedDateText' is older than latest scorecard date '$($sections[-1].date)'."))
+            try {
+                $updatedDate = Get-SourceCalendarDate $updatedDateText
+                if ($updatedDate.Date -lt $latestSectionDate.Date) {
+                    $issues.Add((New-CheckIssue "stale_updated_at" "updated_at '$updatedDateText' is older than latest scorecard date '$($sections[-1].date)'." "" $Path "updated_at"))
+                }
+            } catch {
+                $errorCode = if ($_.Exception.Data.Contains("error_code")) { [string]$_.Exception.Data["error_code"] } else { "updated_at_invalid" }
+                $issues.Add((New-CheckIssue $errorCode $_.Exception.Message "" $Path "updated_at"))
             }
         }
 
@@ -235,6 +291,11 @@ $result | Add-Member -NotePropertyName path -NotePropertyValue $Path
 $result | Add-Member -NotePropertyName mode -NotePropertyValue $checkMode
 $result | Add-Member -NotePropertyName issue_count -NotePropertyValue $issues.Count
 $result | Add-Member -NotePropertyName issues -NotePropertyValue @($issues.ToArray())
+$result | Add-Member -NotePropertyName blocker_codes -NotePropertyValue @($issues | ForEach-Object { $_.blocker_code } | Select-Object -Unique)
+$result | Add-Member -NotePropertyName error_code -NotePropertyValue $(if ($issues.Count -eq 1) { $issues[0].error_code } elseif ($issues.Count -gt 1) { "evaluation_log_blocked" } else { $null })
+$result | Add-Member -NotePropertyName blocker_code -NotePropertyValue $(if ($issues.Count -eq 1) { $issues[0].blocker_code } elseif ($issues.Count -gt 1) { "evaluation_log_blocked" } else { $null })
+$result | Add-Member -NotePropertyName source_path -NotePropertyValue $Path
+$result | Add-Member -NotePropertyName source_field -NotePropertyValue $(if ($issues.Count -eq 1 -and $issues[0].source_field) { $issues[0].source_field } else { $null })
 
 if ($Json) {
     $result | ConvertTo-Json -Depth 6
