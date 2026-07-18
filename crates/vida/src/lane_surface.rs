@@ -15974,21 +15974,73 @@ mod tests {
             "source_artifact_kind": "patch_proposal",
             "receipt_backed": true
         });
+        let adapter_operations = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_operations).expect("adapter contract snapshot"),
+        )
+        .to_hex()
+        .to_string();
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "stale-owned-paths",
             "run_id": run_id,
             "task_id": run_id,
+            "attempt_id": "stale-owned-paths-attempt-1",
+            "packet_id": "stale-owned-paths-packet",
             "dispatch_target": "developer",
             "task_class": "implementation",
             "packet_path": "runtime-consumption/downstream-dispatch-packets/stale-owned-paths.json",
             "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "runtime_role": "worker",
+            "execution_boundary": "parent_host_session",
             "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": adapter_operations["adapter_kind"].clone(),
+            "adapter_capability_id": adapter_operations["adapter_capability_id"].clone(),
+            "invocation_mode": adapter_operations["invocation_mode"].clone(),
+            "adapter_operations": adapter_operations.clone(),
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
+            "request_path": request_path.display().to_string(),
             "implementation_isolation": {
-                "owned_paths": ["crates/vida/src"]
+                "owned_paths": ["crates/taskflow-host-bridge/src"],
+                "canonical_worktree_writes_allowed": false,
+                "scope_policy": {
+                    "changed_files_must_be_subset_of_owned_paths": true
+                }
             },
+            "expected_implementation_artifact_kinds": ["patch_proposal", "isolated_worktree_manifest"],
+            "owned_paths": ["crates/vida/src"],
+            "proof_artifact_paths": [],
+            "proof_artifact_scope": [],
+            "read_only_paths": [],
+            "proof_target": "host bridge completion receipt",
             "implementation_artifacts": [implementation_artifact],
+            "required_result_fields": [
+                "status",
+                "decision",
+                "verdict",
+                "summary",
+                "blocker_codes",
+                "allowed_next_node",
+                "rework_target",
+                "implementation_artifacts"
+            ],
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string()
         });

@@ -7302,7 +7302,7 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
         .dispatch_packet_path
         .as_deref()
         .map(normalized_packet_arg_path);
-    let persisted_identity = serde_json::json!({
+    let mut persisted_identity = serde_json::json!({
         "run_id": &receipt.run_id,
         "dispatch_target": &receipt.dispatch_target,
         "source_dispatch_packet_path": persisted_packet_path
@@ -7310,6 +7310,34 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
             .map(|path| path.display().to_string()),
         "backend_id": &receipt.selected_backend,
     });
+    if let Some(object) = persisted_identity.as_object_mut() {
+        // RunGraphDispatchReceipt stores the compact lane identity. Rehydrate
+        // the strict host-bridge identity from the request/config-shaped packet
+        // so receipt validation compares the same selected carrier contract.
+        for field in [
+            "request_id",
+            "task_id",
+            "attempt_id",
+            "packet_id",
+            "carrier_id",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_contract_source",
+            "adapter_contract_hash",
+            "adapter_contract_snapshot",
+            "adapter_operations",
+            "request_path",
+            "result_path",
+            "receipt_path",
+        ] {
+            if let Some(value) = request_identity.get(field) {
+                object.insert(field.to_string(), value.clone());
+            }
+        }
+    }
     let identity_blockers = taskflow_host_bridge::host_bridge_dispatch_identity_blockers(
         &request_identity,
         &persisted_identity,
@@ -9161,7 +9189,22 @@ mod agent_init_surface_tests {
                 "model_selection": {
                     "enabled": true,
                     "default_strategy": "balanced_cost_quality",
-                    "candidate_scope": "unified_carrier_model_profiles"
+                    "candidate_scope": "unified_carrier_model_profiles",
+                    "semantic_scores": {
+                        "reasoning_effort": {"low": 35.0, "medium": 60.0, "high": 82.0},
+                        "quality_tier": {"medium": 60.0, "high": 82.0},
+                        "speed_tier": {"medium": 60.0, "fast": 82.0}
+                    },
+                    "ordinal_ranks": {
+                        "reasoning_effort": {"low": 2, "medium": 3, "high": 4},
+                        "quality_tier": {"medium": 3, "high": 4}
+                    },
+                    "missing_reasoning_effort_policy": {
+                        "mode": "use_configured_default",
+                        "default": "medium"
+                    },
+                    "quality_floor_by_runtime_role": {"worker": "medium"},
+                    "reasoning_floor_by_task_class": {"implementation": "low"}
                 },
                 "roles": [
                     {
@@ -9174,13 +9217,13 @@ mod agent_init_surface_tests {
                         "runtime_roles": ["worker"],
                         "task_classes": ["implementation"],
                         "reasoning_band": "medium",
-                        "default_model_profile": "codex_gpt54_mini_impl",
+                        "default_model_profile": "codex_gpt56_luna_high_write",
                         "model_profiles": {
-                            "codex_gpt54_mini_impl": {
-                                "profile_id": "codex_gpt54_mini_impl",
-                                "model_ref": "gpt-5.4-mini",
+                            "codex_gpt56_luna_high_write": {
+                                "profile_id": "codex_gpt56_luna_high_write",
+                                "model_ref": "gpt-5.6-luna",
                                 "reasoning_effort": "medium",
-                                "provider": "openai",
+                                "provider": "openai-codex",
                                 "normalized_cost_units": 1,
                                 "speed_tier": "fast",
                                 "quality_tier": "medium",
@@ -10346,12 +10389,18 @@ mod agent_init_surface_tests {
             payload["dispatch_mode"]["continuation_authority_granted"],
             false
         );
-        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_carrier_id"],
+            test_activation_bundle()["carrier_runtime"]["roles"][0]["role_id"]
+        );
         assert_eq!(
             payload["backend_truth"]["selected_model_profile_id"],
-            "codex_gpt54_mini_impl"
+            test_activation_bundle()["carrier_runtime"]["roles"][0]["default_model_profile"]
         );
-        assert_eq!(payload["backend_truth"]["selected_backend"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_backend"],
+            test_activation_bundle()["carrier_runtime"]["roles"][0]["role_id"]
+        );
         assert_eq!(
             payload["backend_truth"]["assignment_source"],
             "provisional_explicit_role"
@@ -10457,10 +10506,13 @@ mod agent_init_surface_tests {
             payload["backend_truth"]["assignment_source"],
             "rebuilt_legacy_embedded_selection"
         );
-        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_carrier_id"],
+            test_activation_bundle()["carrier_runtime"]["roles"][0]["role_id"]
+        );
         assert_eq!(
             payload["backend_truth"]["selected_model_profile_id"],
-            "codex_gpt54_mini_impl"
+            test_activation_bundle()["carrier_runtime"]["roles"][0]["default_model_profile"]
         );
         assert!(payload["backend_truth"]["assignment_blocker"].is_null());
     }
@@ -10487,13 +10539,27 @@ mod agent_init_surface_tests {
                 "          runtime_roles: [worker]\n",
                 "          task_classes: [implementation]\n",
                 "          budget_cost_units: 1\n",
-                "          reasoning_band: medium\n",
-                "          model: gpt-5.4-mini\n",
-                "          model_provider: openai\n",
-                "          model_reasoning_effort: medium\n",
-                "          plan_mode_reasoning_effort: medium\n",
+                "          reasoning_band: high\n",
+                "          model: gpt-5.6-luna\n",
+                "          model_provider: openai-codex\n",
+                "          model_reasoning_effort: high\n",
+                "          plan_mode_reasoning_effort: high\n",
                 "          sandbox_mode: workspace-write\n",
                 "          write_scope: workspace-write\n",
+                "          default_model_profile: codex_gpt56_luna_high_write\n",
+                "          model_profiles:\n",
+                "            codex_gpt56_luna_high_write:\n",
+                "              profile_id: codex_gpt56_luna_high_write\n",
+                "              model_ref: gpt-5.6-luna\n",
+                "              provider: openai-codex\n",
+                "              reasoning_effort: high\n",
+                "              normalized_cost_units: 1\n",
+                "              speed_tier: fast\n",
+                "              quality_tier: medium\n",
+                "              write_scope: workspace-write\n",
+                "              runtime_roles: [worker]\n",
+                "              task_classes: [implementation]\n",
+                "              readiness: {required: true, ready: true}\n",
                 "agent_extensions:\n",
                 "  enabled: false\n",
                 "agent_system:\n",
@@ -10501,6 +10567,16 @@ mod agent_init_surface_tests {
                 "    enabled: true\n",
                 "    candidate_scope: unified_carrier_model_profiles\n",
                 "    default_strategy: balanced_cost_quality\n",
+                "    semantic_scores:\n",
+                "      reasoning_effort: {low: 35.0, medium: 60.0, high: 82.0}\n",
+                "      quality_tier: {medium: 60.0, high: 82.0}\n",
+                "      speed_tier: {medium: 60.0, fast: 82.0}\n",
+                "    ordinal_ranks:\n",
+                "      reasoning_effort: {low: 2, medium: 3, high: 4}\n",
+                "      quality_tier: {medium: 3, high: 4}\n",
+                "    missing_reasoning_effort_policy: {mode: use_configured_default, default: medium}\n",
+                "    quality_floor_by_runtime_role: {worker: medium}\n",
+                "    reasoning_floor_by_task_class: {implementation: low}\n",
             ),
         )
         .expect("config should write");
@@ -10553,14 +10629,44 @@ mod agent_init_surface_tests {
                     "model_selection": {
                         "enabled": true,
                         "candidate_scope": "unified_carrier_model_profiles",
-                        "default_strategy": "balanced_cost_quality"
+                        "default_strategy": "balanced_cost_quality",
+                        "semantic_scores": {
+                            "reasoning_effort": {"low": 35.0, "medium": 60.0, "high": 82.0},
+                            "quality_tier": {"medium": 60.0, "high": 82.0},
+                            "speed_tier": {"medium": 60.0, "fast": 82.0}
+                        },
+                        "ordinal_ranks": {
+                            "reasoning_effort": {"low": 2, "medium": 3, "high": 4},
+                            "quality_tier": {"medium": 3, "high": 4}
+                        },
+                        "missing_reasoning_effort_policy": {
+                            "mode": "use_configured_default",
+                            "default": "medium"
+                        },
+                        "quality_floor_by_runtime_role": {"worker": "medium"},
+                        "reasoning_floor_by_task_class": {"implementation": "low"}
                     }
                 },
                 "carrier_runtime": {
                     "model_selection": {
                         "enabled": true,
                         "candidate_scope": "unified_carrier_model_profiles",
-                        "default_strategy": "balanced_cost_quality"
+                        "default_strategy": "balanced_cost_quality",
+                        "semantic_scores": {
+                            "reasoning_effort": {"low": 35.0, "medium": 60.0, "high": 82.0},
+                            "quality_tier": {"medium": 60.0, "high": 82.0},
+                            "speed_tier": {"medium": 60.0, "fast": 82.0}
+                        },
+                        "ordinal_ranks": {
+                            "reasoning_effort": {"low": 2, "medium": 3, "high": 4},
+                            "quality_tier": {"medium": 3, "high": 4}
+                        },
+                        "missing_reasoning_effort_policy": {
+                            "mode": "use_configured_default",
+                            "default": "medium"
+                        },
+                        "quality_floor_by_runtime_role": {"worker": "medium"},
+                        "reasoning_floor_by_task_class": {"implementation": "low"}
                     },
                     "roles": []
                 }

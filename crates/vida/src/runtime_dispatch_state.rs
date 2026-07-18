@@ -10882,9 +10882,16 @@ host_environment:
             "internal_subagents" => (
                 "internal_subagents",
                 "internal_subagents",
-                "codex_gpt56_luna_xhigh_legacy",
+                "codex_gpt56_luna_xhigh_write",
                 "gpt-5.6-luna",
                 "xhigh",
+            ),
+            "junior" => (
+                "junior",
+                "internal_subagents",
+                "codex_gpt56_luna_high_write",
+                "gpt-5.6-luna",
+                "high",
             ),
             "middle" => (
                 "middle",
@@ -10948,6 +10955,124 @@ host_environment:
                 "task_class": "implementation"
             }
         })
+    }
+
+    fn augment_runtime_dispatch_packet_host_bridge_identity(
+        packet_path: &std::path::Path,
+        state_root: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+        backend_id: &str,
+        carrier_id: &str,
+    ) {
+        let config_path = crate::state_store::repo_root().join("vida.config.yaml");
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(&config_path).expect("canonical config fixture should load"),
+        )
+        .expect("canonical config fixture should parse");
+        let codex = config
+            .get("host_environment")
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|host| host.get("systems"))
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|systems| systems.get("codex"))
+            .expect("canonical codex system fixture should exist");
+        let adapter = taskflow_host_bridge::HostBridgeAdapterOperations::from_registry_value(
+            &serde_json::to_value(codex).expect("codex fixture should serialize"),
+        )
+        .expect("canonical codex adapter contract should parse");
+        let adapter_snapshot = adapter.to_value();
+        let adapter_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_snapshot).expect("adapter fixture snapshot should encode"),
+        )
+        .to_hex()
+        .to_string();
+        let packet = serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(packet_path).expect("dispatch packet fixture should load"),
+        )
+        .expect("dispatch packet fixture should parse");
+        let packet_id = packet
+            .get("delivery_task_packet")
+            .and_then(|body| body.get("packet_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .expect("delivery packet identity should be present");
+        let packet_stem = packet_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .expect("dispatch packet fixture should have a file stem");
+        let request_id = format!(
+            "{run_id}-{dispatch_target}-{packet_stem}-host-tool-bridge"
+        );
+        let attempt_id = taskflow_host_bridge::normalized_host_bridge_attempt_id(
+            run_id,
+            Some(packet_id.as_str()),
+        );
+        let request_path = state_root
+            .join("host-tool-bridge/requests")
+            .join(format!("{request_id}.json"));
+        let result_path = state_root
+            .join("host-tool-bridge/results")
+            .join(format!("{request_id}.json"));
+        let receipt_path = state_root
+            .join("host-tool-bridge/receipts")
+            .join(format!("{request_id}.json"));
+        let mut packet = packet;
+        let object = packet
+            .as_object_mut()
+            .expect("dispatch packet fixture should be an object");
+        for (field, value) in [
+            ("request_id", serde_json::json!(request_id)),
+            ("run_id", serde_json::json!(run_id)),
+            ("task_id", serde_json::json!(run_id)),
+            ("attempt_id", serde_json::json!(attempt_id)),
+            ("packet_id", serde_json::json!(packet_id)),
+            ("dispatch_target", serde_json::json!(dispatch_target)),
+            ("backend_id", serde_json::json!(backend_id)),
+            ("carrier_id", serde_json::json!(carrier_id)),
+            ("adapter_kind", serde_json::json!(adapter.adapter_kind)),
+            (
+                "adapter_capability_id",
+                serde_json::json!(adapter.adapter_capability_id),
+            ),
+            ("invocation_mode", serde_json::json!(adapter.invocation_mode)),
+            (
+                "dispatch_transport",
+                serde_json::json!(adapter.dispatch_transport),
+            ),
+            ("receipt_mode", serde_json::json!(adapter.receipt_mode)),
+            (
+                "adapter_contract_source",
+                serde_json::json!(config_path.display().to_string()),
+            ),
+            ("adapter_contract_snapshot", adapter_snapshot.clone()),
+            ("adapter_contract_hash", serde_json::json!(adapter_hash)),
+            (
+                "adapter_operations",
+                adapter_snapshot.clone(),
+            ),
+            (
+                "request_path",
+                serde_json::json!(request_path.display().to_string()),
+            ),
+            (
+                "result_path",
+                serde_json::json!(result_path.display().to_string()),
+            ),
+            (
+                "receipt_path",
+                serde_json::json!(receipt_path.display().to_string()),
+            ),
+        ] {
+            object.insert(field.to_string(), value);
+        }
+        fs::write(
+            packet_path,
+            serde_json::to_string_pretty(&packet).expect("dispatch packet fixture should encode"),
+        )
+        .expect("dispatch packet fixture should update identity");
     }
 
     fn mixed_backend_execution_plan() -> serde_json::Value {
@@ -12442,9 +12567,9 @@ host_environment:
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_executes_internal_codex_carrier() {
+    fn execute_runtime_dispatch_handoff_emits_internal_codex_host_bridge_request() {
         run_on_large_test_stack(
-            "execute_runtime_dispatch_handoff_executes_internal_codex_carrier",
+            "execute_runtime_dispatch_handoff_emits_internal_codex_host_bridge_request",
             || {
                 let runtime =
                     tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -12472,13 +12597,12 @@ host_environment:
                 );
                 wait_for_state_unlock(harness.path());
 
-                let fake_bin = harness.path().join("fake-bin");
-                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-                let fake_codex = fake_codex_path(&fake_bin);
-                write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-                configure_fake_codex_dispatch(harness.path(), &fake_codex);
-                let patched_path = prepend_to_path(&fake_bin);
-                let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+                let config_path = harness.path().join("vida.config.yaml");
+                fs::copy(
+                    crate::state_store::repo_root().join("vida.config.yaml"),
+                    &config_path,
+                )
+                .expect("canonical host adapter registry fixture should copy");
 
                 let state_root = harness_state_root(&harness);
                 let store = runtime
@@ -12609,7 +12733,7 @@ host_environment:
                     downstream_dispatch_last_target: None,
                     activation_agent_type: Some("junior".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
-                    selected_backend: Some("junior".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
                     recorded_at: "2026-03-17T00:00:00Z".to_string(),
                 };
                 let handoff_plan = serde_json::json!({});
@@ -12622,8 +12746,40 @@ host_environment:
                 );
                 let dispatch_packet_path =
                     write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let carrier_id = role_selection
+                    .execution_plan
+                    .pointer("/runtime_assignment/selected_carrier_id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("runtime assignment should select a carrier");
+                let backend_id = receipt
+                    .selected_backend
+                    .as_deref()
+                    .expect("dispatch receipt should select a backend");
+                augment_runtime_dispatch_packet_host_bridge_identity(
+                    std::path::Path::new(&dispatch_packet_path),
+                    &state_root,
+                    &receipt.run_id,
+                    &receipt.dispatch_target,
+                    backend_id,
+                    carrier_id,
+                );
                 let mut persisted_receipt = receipt.clone();
                 persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+                let packet: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(&dispatch_packet_path)
+                        .expect("dispatch packet should reload"),
+                )
+                .expect("dispatch packet should decode");
+                persisted_receipt.selected_backend = packet
+                    .get("selected_backend")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        packet
+                            .pointer("/runtime_assignment/selected_backend_id")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .map(str::to_string)
+                    .or_else(|| persisted_receipt.selected_backend.clone());
                 runtime
                     .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
                     .expect("dispatch receipt should record");
@@ -12636,7 +12792,7 @@ host_environment:
                         "--execute-dispatch",
                         "--json",
                     ]))),
-                    ExitCode::SUCCESS
+                    ExitCode::FAILURE
                 );
                 wait_for_state_unlock(harness.path());
 
@@ -12655,34 +12811,79 @@ host_environment:
                     .expect("dispatch result artifact should load");
                 let parsed: serde_json::Value =
                     serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
-                assert_eq!(parsed["execution_state"], "executed");
-                assert_eq!(parsed["status"], "pass");
+                assert_eq!(parsed["execution_state"], "blocked");
+                assert_eq!(parsed["status"], "blocked");
+                assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
+                assert!(parsed.get("provider_result").is_none());
+                assert_ne!(parsed["execution_evidence"]["receipt_backed"], true);
+                for field in ["request_path", "result_path", "receipt_path"] {
+                    assert!(parsed["host_tool_bridge_request"][field]
+                        .as_str()
+                        .is_some_and(|value| !value.trim().is_empty()));
+                }
                 assert_eq!(
-                    parsed["activation_semantics"]["activation_kind"],
-                    "execution_evidence"
+                    parsed["host_tool_bridge_request"]["backend_id"],
+                    "internal_subagents"
                 );
-                assert_eq!(parsed["activation_semantics"]["view_only"], false);
-                assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
-                assert_eq!(parsed["execution_evidence"]["status"], "recorded");
+                assert_eq!(parsed["host_tool_bridge_request"]["carrier_id"], "junior");
                 assert_eq!(
-                    parsed["execution_evidence"]["evidence_kind"],
-                    "internal_carrier_completion"
+                    parsed["host_tool_bridge_request"]["dispatch_transport"],
+                    "host_tool_bridge"
                 );
-                assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
-                assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
+                assert_eq!(
+                    parsed["host_tool_bridge_request"]["receipt_mode"],
+                    "host_bridge_receipt"
+                );
+                assert_eq!(
+                    parsed["host_tool_bridge_request"]["adapter_contract_snapshot"]
+                        ["adapter_capability_id"],
+                    "codex.multi_agent_v1"
+                );
+                assert_eq!(
+                    parsed["host_tool_bridge_request"]["adapter_contract_snapshot"]["adapter_kind"],
+                    "codex_host_tools"
+                );
+                assert_eq!(
+                    parsed["host_tool_bridge_request"]["adapter_contract_snapshot"]["operations"]
+                        ["spawn"],
+                    "multi_agent_v1.spawn_agent"
+                );
+                assert_eq!(
+                    parsed["backend_dispatch"]["backend_id"],
+                    "internal_subagents"
+                );
+                assert_eq!(recorded_receipt.dispatch_status, "blocked");
+                assert_eq!(
+                    recorded_receipt.blocker_code.as_deref(),
+                    Some("host_tool_bridge_adapter_required")
+                );
+                let packet: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(&dispatch_packet_path)
+                        .expect("dispatch packet should remain readable"),
+                )
+                .expect("dispatch packet should decode");
+                assert_eq!(
+                    packet.pointer("/runtime_assignment/selected_model_profile_id"),
+                    Some(&serde_json::json!("codex_gpt56_luna_high_write"))
+                );
+                assert_eq!(
+                    packet.pointer("/runtime_assignment/selected_model_ref"),
+                    Some(&serde_json::json!("gpt-5.6-luna"))
+                );
+                assert_eq!(
+                    packet.pointer("/runtime_assignment/selected_reasoning_effort"),
+                    Some(&serde_json::json!("high"))
+                );
             },
         );
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_sets_writable_runtime_env_for_internal_codex_carrier() {
+    fn execute_runtime_dispatch_handoff_emits_internal_codex_host_bridge_request_without_launch() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
-        let original_home = env::var("HOME").unwrap_or_default();
-        let original_xdg_data_home = env::var("XDG_DATA_HOME").unwrap_or_default();
-        let original_xdg_config_home = env::var("XDG_CONFIG_HOME").unwrap_or_default();
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -12701,17 +12902,11 @@ host_environment:
             ExitCode::SUCCESS
         );
         wait_for_state_unlock(harness.path());
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-
-        let fake_bin = harness.path().join("fake-bin");
-        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let env_capture = harness.path().join("internal-host-env.txt");
-        let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_env_capture(&fake_codex, &env_capture);
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
-        let patched_path = prepend_to_path(&fake_bin);
-        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+        fs::copy(
+            crate::state_store::repo_root().join("vida.config.yaml"),
+            harness.path().join("vida.config.yaml"),
+        )
+        .expect("canonical host adapter registry fixture should copy");
 
         let state_root = harness_state_root(&harness);
         runtime
@@ -12806,49 +13001,30 @@ host_environment:
                 &role_selection,
                 &receipt,
             ))
-            .expect("internal host should execute with writable runtime env");
+            .expect("internal host should emit a host bridge request");
 
-        assert!(
-            result["surface"]
+        assert_eq!(result["execution_state"], "bridge_request_pending");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["blocker_code"], "host_tool_bridge_adapter_required");
+        assert!(result.get("provider_result").is_none());
+        assert_ne!(result["execution_evidence"]["receipt_backed"], true);
+        for field in ["request_path", "result_path", "receipt_path"] {
+            assert!(result["host_tool_bridge_request"][field]
                 .as_str()
-                .is_some_and(|value| value.starts_with("internal_cli:")),
-            "expected internal host execution result, got {result}"
-        );
-        assert_eq!(result["execution_state"], "executed");
-        let captured = fs::read_to_string(&env_capture).expect("env capture should exist");
-        let rows: Vec<_> = captured.lines().collect();
-        assert_eq!(
-            rows.len(),
-            6,
-            "expected HOME, XDG config/data, state/cache, and TMPDIR"
-        );
-        assert_eq!(
-            rows[0], original_home,
-            "HOME should stay intact for auth/config discovery"
-        );
-        assert_ne!(
-            rows[1], original_xdg_config_home,
-            "XDG_CONFIG_HOME should move into the writable project runtime root"
-        );
-        assert_ne!(
-            rows[2], original_xdg_data_home,
-            "XDG_DATA_HOME should move into the writable project runtime root"
-        );
-        for row in &rows[1..] {
-            let path = Path::new(row);
-            assert!(
-                path.starts_with(harness.path().join(".vida/data/internal-host/codex/junior")),
-                "runtime env path should stay inside writable project runtime root: {}",
-                row
-            );
-            assert!(path.is_dir(), "runtime env dir should exist: {}", row);
+                .is_some_and(|value| !value.trim().is_empty()));
         }
+        assert_eq!(result["host_tool_bridge_request"]["backend_id"], "internal_subagents");
+        assert_eq!(result["host_tool_bridge_request"]["carrier_id"], "junior");
+        assert_eq!(
+            result["host_tool_bridge_request"]["adapter_contract_snapshot"]["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
     }
 
     #[test]
-    fn agent_init_execute_dispatch_executes_internal_codex_carrier() {
+    fn agent_init_execute_dispatch_emits_internal_codex_host_bridge_request() {
         run_on_large_test_stack(
-            "agent_init_execute_dispatch_executes_internal_codex_carrier",
+            "agent_init_execute_dispatch_emits_internal_codex_host_bridge_request",
             || {
                 let runtime =
                     tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -12876,13 +13052,11 @@ host_environment:
                 assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
                 wait_for_state_unlock(harness.path());
 
-                let fake_bin = harness.path().join("fake-bin");
-                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-                let fake_codex = fake_codex_path(&fake_bin);
-                write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-                configure_fake_codex_dispatch(harness.path(), &fake_codex);
-                let patched_path = prepend_to_path(&fake_bin);
-                let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+                fs::copy(
+                    crate::state_store::repo_root().join("vida.config.yaml"),
+                    harness.path().join("vida.config.yaml"),
+                )
+                .expect("canonical host adapter registry fixture should copy");
 
                 let state_root = harness_state_root(&harness);
                 let store = runtime
@@ -12982,7 +13156,7 @@ host_environment:
                     downstream_dispatch_last_target: None,
                     activation_agent_type: Some("junior".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
-                    selected_backend: Some("junior".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
                     recorded_at: "2026-03-17T00:00:00Z".to_string(),
                 };
                 let handoff_plan = serde_json::json!({});
@@ -12995,8 +13169,36 @@ host_environment:
                 );
                 let dispatch_packet_path =
                     write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let carrier_id = role_selection
+                    .execution_plan
+                    .pointer("/runtime_assignment/selected_carrier_id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("runtime assignment should select a carrier");
+                augment_runtime_dispatch_packet_host_bridge_identity(
+                    std::path::Path::new(&dispatch_packet_path),
+                    &state_root,
+                    &receipt.run_id,
+                    &receipt.dispatch_target,
+                    "internal_subagents",
+                    carrier_id,
+                );
                 let mut persisted_receipt = receipt.clone();
                 persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+                let packet: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(&dispatch_packet_path)
+                        .expect("dispatch packet should reload"),
+                )
+                .expect("dispatch packet should decode");
+                persisted_receipt.selected_backend = packet
+                    .get("selected_backend")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        packet
+                            .pointer("/runtime_assignment/selected_backend_id")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .map(str::to_string)
+                    .or_else(|| persisted_receipt.selected_backend.clone());
                 runtime
                     .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
                     .expect("dispatch receipt should record");
@@ -13009,7 +13211,7 @@ host_environment:
                         "--execute-dispatch",
                         "--json",
                     ]))),
-                    ExitCode::SUCCESS
+                    ExitCode::FAILURE
                 );
                 wait_for_state_unlock(harness.path());
 
@@ -13028,21 +13230,24 @@ host_environment:
                     .expect("dispatch result artifact should load");
                 let parsed: serde_json::Value =
                     serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
-                assert_eq!(parsed["execution_state"], "executed");
-                assert_eq!(parsed["status"], "pass");
+                assert_eq!(parsed["execution_state"], "blocked");
+                assert_eq!(parsed["status"], "blocked");
+                assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
+                assert!(parsed.get("provider_result").is_none());
+                assert_ne!(parsed["execution_evidence"]["receipt_backed"], true);
+                for field in ["request_path", "result_path", "receipt_path"] {
+                    assert!(parsed["host_tool_bridge_request"][field]
+                        .as_str()
+                        .is_some_and(|value| !value.trim().is_empty()));
+                }
+                assert_eq!(parsed["host_tool_bridge_request"]["backend_id"], "internal_subagents");
+                assert_eq!(parsed["host_tool_bridge_request"]["carrier_id"], "junior");
                 assert_eq!(
-                    parsed["activation_semantics"]["activation_kind"],
-                    "execution_evidence"
+                    parsed["host_tool_bridge_request"]["adapter_contract_snapshot"]
+                        ["adapter_capability_id"],
+                    "codex.multi_agent_v1"
                 );
-                assert_eq!(parsed["activation_semantics"]["view_only"], false);
-                assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
-                assert_eq!(parsed["execution_evidence"]["status"], "recorded");
-                assert_eq!(
-                    parsed["execution_evidence"]["evidence_kind"],
-                    "internal_carrier_completion"
-                );
-                assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
-                assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
+                assert_eq!(parsed["backend_dispatch"]["backend_id"], "internal_subagents");
             },
         );
     }
@@ -26888,6 +27093,11 @@ agent_system:
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        fs::copy(
+            crate::state_store::repo_root().join("vida.config.yaml"),
+            harness.path().join("vida.config.yaml"),
+        )
+        .expect("current carrier policy fixture should copy");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
             .expect("runtime-consumption dir should exist");
@@ -26939,7 +27149,14 @@ agent_system:
                 "runtime_assignment": {
                     "selected_tier": "junior",
                     "activation_agent_type": "junior",
-                    "activation_runtime_role": "worker"
+                    "activation_runtime_role": "worker",
+                    "selected_carrier_id": "junior",
+                    "selected_backend_id": "internal_subagents",
+                    "selected_model_profile_id": "codex_gpt56_luna_high_write",
+                    "selected_model_ref": "gpt-5.6-luna",
+                    "selected_reasoning_effort": "high",
+                    "selected_runtime_role": "worker",
+                    "task_class": "implementation"
                 }
             }),
             reason: "test".to_string(),

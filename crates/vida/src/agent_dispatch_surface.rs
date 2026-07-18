@@ -8362,6 +8362,19 @@ mod tests {
                     "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
                     "candidate_scope": "unified_carrier_model_profiles",
                     "free_profiles_allowed": false,
+                    "semantic_scores": {
+                        "reasoning_effort": {"low": 35.0, "medium": 60.0, "high": 82.0},
+                        "quality_tier": {"medium": 60.0, "high": 82.0},
+                        "speed_tier": {"medium": 60.0, "fast": 82.0}
+                    },
+                    "ordinal_ranks": {
+                        "reasoning_effort": {"low": 2, "medium": 3, "high": 4},
+                        "quality_tier": {"medium": 3, "high": 4}
+                    },
+                    "missing_reasoning_effort_policy": {
+                        "mode": "use_configured_default",
+                        "default": "medium"
+                    },
                     "quality_floor_by_runtime_role": {
                         "business_analyst": "medium"
                     },
@@ -15924,40 +15937,41 @@ mod tests {
                         "quality_tier": "medium",
                         "write_scope": "scoped_only",
                         "model_profiles": {
-                            "gpt-5.5-low": {
-                                "profile_id": "gpt-5.5-low",
-                                "model_ref": "gpt-5.5",
-                                "provider": "openai",
-                                "reasoning_effort": "low",
+                            "codex_gpt56_luna_high_write": {
+                                "profile_id": "codex_gpt56_luna_high_write",
+                                "model_ref": "gpt-5.6-luna",
+                                "provider": "openai-codex",
+                                "reasoning_effort": "high",
                                 "quality_tier": "medium",
                                 "speed_tier": "fast",
                                 "sandbox_mode": "workspace-write",
                                 "write_scope": "scoped_only",
                                 "runtime_roles": ["worker"],
                                 "task_classes": ["implementation", "verification"],
-                                "normalized_cost_units": 1
+                                "normalized_cost_units": 1,
+                                "readiness": {"required": true, "ready": true}
                             }
                         }
                     },
                     {
-                        "role_id": "coach-seat",
+                        "role_id": "middle",
                         "tier": "middle",
                         "default_runtime_role": "coach",
                         "runtime_roles": ["coach"],
                         "task_classes": ["coach"],
                         "normalized_cost_units": 3,
                         "quality_tier": "medium",
-                        "write_scope": "read_only",
+                        "write_scope": "workspace-write",
                         "model_profiles": {
-                            "coach-profile": {
-                                "profile_id": "coach-profile",
-                                "model_ref": "gpt-5.5-coach",
-                                "provider": "openai",
-                                "reasoning_effort": "low",
+                            "codex_gpt56_luna_xhigh_write": {
+                                "profile_id": "codex_gpt56_luna_xhigh_write",
+                                "model_ref": "gpt-5.6-luna",
+                                "provider": "openai-codex",
+                                "reasoning_effort": "xhigh",
                                 "quality_tier": "medium",
                                 "speed_tier": "fast",
-                                "sandbox_mode": "read-only",
-                                "write_scope": "read_only",
+                                "sandbox_mode": "workspace-write",
+                                "write_scope": "workspace-write",
                                 "runtime_roles": ["coach"],
                                 "task_classes": ["coach"],
                                 "normalized_cost_units": 3
@@ -15988,7 +16002,12 @@ mod tests {
                 }
             },
             "agent_system": {
-                "max_parallel_agents": 4
+                "max_parallel_agents": 4,
+                "routing": {
+                    "default": {
+                        "executor_backend": "internal_subagents"
+                    }
+                }
             }
         }))
     }
@@ -16413,7 +16432,7 @@ mod tests {
         );
         assert_eq!(
             preview.selected_lanes[0].selection_truth.selected_model_ref,
-            "gpt-5.5"
+            "gpt-5.6-luna"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
         assert!(
