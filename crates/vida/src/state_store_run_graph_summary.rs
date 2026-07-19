@@ -947,6 +947,28 @@ fn terminal_closure_status(status: &RunGraphStatus) -> bool {
     status.is_terminal_closure()
 }
 
+fn stale_host_bridge_handoff_receipt_fields(
+    dispatch_kind: &str,
+    dispatch_status: &str,
+    lane_status: Option<&str>,
+    blocker_code: Option<&str>,
+    supersedes_receipt_id: Option<&str>,
+    exception_path_receipt_id: Option<&str>,
+) -> bool {
+    dispatch_kind == "agent_lane"
+        && dispatch_status == "bridge_request_pending"
+        && blocker_code.map(str::trim)
+            == Some(crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired,
+            ))
+        && matches!(
+            lane_status.map(str::trim),
+            Some("lane_open" | "lane_running" | "lane_blocked") | None
+        )
+        && !has_receipt_evidence_id(supersedes_receipt_id)
+        && !has_receipt_evidence_id(exception_path_receipt_id)
+}
+
 fn terminal_closure_supersedes_stale_handoff_receipt_fields(
     status: &RunGraphStatus,
     dispatch_kind: &str,
@@ -968,16 +990,14 @@ fn terminal_closure_supersedes_stale_handoff_receipt_fields(
             == Some(crate::release1_contracts::blocker_code_str(
                 crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
             ));
-    let stale_host_bridge_handoff = dispatch_kind == "agent_lane"
-        && dispatch_status == "bridge_request_pending"
-        && blocker_code
-            == Some(crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired,
-            ))
-        && matches!(
-            lane_status.map(str::trim),
-            Some("lane_open" | "lane_running" | "lane_blocked") | None
-        );
+    let stale_host_bridge_handoff = stale_host_bridge_handoff_receipt_fields(
+        dispatch_kind,
+        dispatch_status,
+        lane_status,
+        blocker_code,
+        supersedes_receipt_id,
+        exception_path_receipt_id,
+    );
     stale_downstream_handoff || stale_host_bridge_handoff
 }
 
@@ -1078,6 +1098,19 @@ fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceip
         && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
 }
 
+fn stored_receipt_has_stale_host_bridge_handoff(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    stale_host_bridge_handoff_receipt_fields(
+        &receipt.dispatch_kind,
+        &receipt.dispatch_status,
+        receipt.lane_status.as_deref(),
+        receipt.blocker_code.as_deref(),
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+}
+
 fn active_exception_takeover_receipt_is_behind_status(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceiptStored,
@@ -1105,6 +1138,51 @@ fn active_exception_takeover_receipt_is_behind_status(
         && status.resume_target.starts_with("dispatch.")
         && status.active_node != dispatch_target
         && !next_node_matches_dispatch_target
+}
+
+fn lawful_current_exception_takeover(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
+) -> bool {
+    receipt.is_some_and(|receipt| {
+        stored_receipt_has_active_exception_takeover(receipt)
+            && !active_exception_takeover_receipt_is_behind_status(status, receipt)
+    })
+}
+
+fn receiptless_closed_task_operator_archive_sentinel(status: &RunGraphStatus) -> bool {
+    if status.status == "completed"
+        || terminal_closure_status(status)
+        || [
+            status.active_node.as_str(),
+            status.next_node.as_deref().unwrap_or_default(),
+            status.lifecycle_stage.as_str(),
+            status.handoff_state.as_str(),
+            status.resume_target.as_str(),
+        ]
+        .into_iter()
+        .any(|value| value.to_ascii_lowercase().contains("exception"))
+    {
+        return false;
+    }
+    let Some(next_node) = status
+        .next_node
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let delegation_gate = status.delegation_gate();
+    delegation_gate.delegated_cycle_open
+        && delegation_gate.delegated_cycle_state == "handoff_pending"
+        && status.handoff_state == format!("awaiting_{next_node}")
+        && matches!(
+            status.resume_target.as_str(),
+            value if value == format!("dispatch.{next_node}")
+                || value == format!("dispatch.{next_node}_lane")
+        )
+        && status.recovery_ready
 }
 
 fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
@@ -4404,28 +4482,31 @@ impl StateStore {
                 .await?;
             let task = self.show_task(&latest.task_id).await.ok();
             let task_exists = task.is_some();
+            let receipt = self
+                .run_graph_dispatch_receipt_stored(&latest.run_id)
+                .await?;
             let active_receipt = self
                 .run_graph_dispatch_receipt_has_active_lane_evidence(&latest.run_id)
                 .await?;
             let task_is_closed = task
                 .as_ref()
                 .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status));
-            if task_is_closed {
+            let lawful_takeover = if task_is_closed {
                 let status = self.run_graph_status(&latest.run_id).await?;
-                let verdict =
-                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
-                        self, &status,
-                    )
-                    .await?;
-                if !verdict.stale_for_active_projection() {
-                    continue;
-                }
-            } else if terminal_task_active && (task_exists || !active_receipt) {
+                lawful_current_exception_takeover(&status, receipt.as_ref())
+            } else {
+                false
+            };
+            if task_is_closed && !lawful_takeover {
                 continue;
             }
-            if self
-                .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
-                .await?
+            if !task_is_closed && terminal_task_active && (task_exists || !active_receipt) {
+                continue;
+            }
+            if !lawful_takeover
+                && self
+                    .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
+                    .await?
             {
                 continue;
             }
@@ -4444,25 +4525,30 @@ impl StateStore {
             if run_id.is_empty() {
                 continue;
             }
-            if self
-                .run_graph_latest_receipt_row_supersedes_lane(run_id)
-                .await?
-            {
-                continue;
-            }
             match self.run_graph_status_from_task_rows(run_id, &[]).await {
                 Ok(status) => {
-                    if self
-                        .show_task(&status.task_id)
-                        .await
-                        .ok()
-                        .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status))
+                    let task = self.show_task(&status.task_id).await.ok();
+                    let task_is_closed = task
+                        .as_ref()
+                        .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status));
+                    let lawful_takeover = lawful_current_exception_takeover(&status, Some(&receipt));
+                    if task_is_closed && !lawful_takeover {
+                        continue;
+                    }
+                    if !lawful_takeover
+                        && self
+                            .run_graph_latest_receipt_row_supersedes_lane(run_id)
+                            .await?
                     {
                         continue;
                     }
-                    if !self
-                        .run_graph_status_points_to_terminal_task_active(&status)
-                        .await?
+                    if lawful_takeover
+                        || self
+                            .run_graph_dispatch_receipt_has_active_lane_evidence(run_id)
+                            .await?
+                        || !self
+                            .run_graph_status_points_to_terminal_task_active(&status)
+                            .await?
                     {
                         return Ok(Some(run_id.to_string()));
                     }
@@ -4757,9 +4843,25 @@ impl StateStore {
         }
 
         let task = self.show_task(&status.task_id).await.ok();
-        if task.as_ref().is_some_and(|task| {
-            task_status_is_terminal_for_continuation(&task.status) && status.is_terminal_closure()
-        }) {
+        let task_is_closed = task
+            .as_ref()
+            .is_some_and(|task| task_status_is_terminal_for_continuation(&task.status));
+        let receipt = self
+            .run_graph_dispatch_receipt_stored(&status.run_id)
+            .await?;
+        let active_lawful_exception_takeover =
+            lawful_current_exception_takeover(&status, receipt.as_ref());
+        let stale_host_bridge_archive = receipt
+            .as_ref()
+            .is_some_and(stored_receipt_has_stale_host_bridge_handoff);
+        let receiptless_host_bridge_archive =
+            receipt.is_none() && receiptless_closed_task_operator_archive_sentinel(&status);
+        if task_is_closed
+            && !active_lawful_exception_takeover
+            && (terminal_closure_status(&status)
+                || stale_host_bridge_archive
+                || receiptless_host_bridge_archive)
+        {
             return Ok(project_closed_task_scoped_run_graph_status(status));
         }
         Ok(status)
@@ -5865,6 +5967,50 @@ mod tests {
                 "{non_terminal} should not be terminal for run-graph continuation"
             );
         }
+    }
+
+    #[test]
+    fn receiptless_operator_archive_sentinel_requires_exact_open_handoff_geometry() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-receiptless-archive",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "coder".to_string();
+        status.next_node = Some("tester".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coder_active".to_string();
+        status.handoff_state = "awaiting_tester".to_string();
+        status.resume_target = "dispatch.tester_lane".to_string();
+        status.recovery_ready = true;
+        assert!(receiptless_closed_task_operator_archive_sentinel(&status));
+
+        let mut generic = status.clone();
+        generic.next_node = None;
+        generic.handoff_state = "none".to_string();
+        generic.resume_target = "none".to_string();
+        assert!(!receiptless_closed_task_operator_archive_sentinel(&generic));
+
+        let mut malformed_handoff = status.clone();
+        malformed_handoff.handoff_state = "awaiting_coach".to_string();
+        assert!(!receiptless_closed_task_operator_archive_sentinel(
+            &malformed_handoff
+        ));
+
+        let mut malformed_resume = status.clone();
+        malformed_resume.resume_target = "dispatch.coach_lane".to_string();
+        assert!(!receiptless_closed_task_operator_archive_sentinel(
+            &malformed_resume
+        ));
+
+        let mut recovery_closed = status.clone();
+        recovery_closed.recovery_ready = false;
+        assert!(!receiptless_closed_task_operator_archive_sentinel(
+            &recovery_closed
+        ));
+
+        status.lifecycle_stage = "lane_exception_takeover".to_string();
+        assert!(!receiptless_closed_task_operator_archive_sentinel(&status));
     }
 
     #[test]
@@ -9339,6 +9485,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operator_run_graph_selector_archives_latest_receiptless_open_handoff_without_mutating_raw_status()
+    {
+        let root = temp_run_graph_root("vida-operator-receiptless-archive");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let task_id = "task-receiptless-archive";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id,
+                title: "Closed task with receiptless open handoff",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut older = crate::taskflow_run_graph::default_run_graph_status(
+            "run-a-receiptless-archive",
+            "implementation",
+            "implementation",
+        );
+        older.task_id = task_id.to_string();
+        older.status = "in_progress".to_string();
+        older.next_node = None;
+        older.handoff_state = "none".to_string();
+        older.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&older)
+            .await
+            .expect("persist older generic run");
+
+        let mut current = crate::taskflow_run_graph::default_run_graph_status(
+            "run-z-receiptless-archive",
+            "implementation",
+            "implementation",
+        );
+        current.task_id = task_id.to_string();
+        current.active_node = "coder".to_string();
+        current.next_node = Some("tester".to_string());
+        current.status = "ready".to_string();
+        current.lifecycle_stage = "coder_active".to_string();
+        current.handoff_state = "awaiting_tester".to_string();
+        current.context_state = "sealed".to_string();
+        current.checkpoint_kind = "execution_cursor".to_string();
+        current.resume_target = "dispatch.tester_lane".to_string();
+        current.recovery_ready = true;
+        store
+            .record_run_graph_status(&current)
+            .await
+            .expect("persist current receiptless handoff");
+
+        let scoped = store
+            .run_graph_status_for_operator_selector(task_id)
+            .await
+            .expect("resolve latest task-scoped run");
+        assert_eq!(scoped.run_id, current.run_id);
+        assert_eq!(scoped.status, "completed");
+        assert_eq!(scoped.active_node, "closure");
+        assert_eq!(scoped.lifecycle_stage, "closure_complete");
+        assert_eq!(scoped.policy_gate, "closed_run_archived");
+
+        let raw_after = store
+            .run_graph_status(&current.run_id)
+            .await
+            .expect("read raw current run");
+        assert_eq!(raw_after.status, "ready");
+        assert_eq!(raw_after.active_node, "coder");
+        assert_eq!(raw_after.next_node.as_deref(), Some("tester"));
+        assert_eq!(raw_after.handoff_state, "awaiting_tester");
+        assert_eq!(raw_after.resume_target, "dispatch.tester_lane");
+        assert!(raw_after.recovery_ready);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn operator_run_graph_selector_keeps_lawful_exception_takeover_active() {
+        let root = temp_run_graph_root("vida-operator-active-exception-takeover");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let task_id = "task-operator-active-exception";
+        let run_id = "run-operator-active-exception";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id,
+                title: "Closed task with active exception takeover",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = task_id.to_string();
+        status.active_node = "tester".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "tester_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.tester".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist active exception status");
+
+        let mut receipt = sample_dispatch_receipt(run_id);
+        receipt.dispatch_target = "tester".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.blocker_code = Some("pending_test_evidence".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("superseded-receipt".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist active exception receipt");
+
+        let scoped = store
+            .run_graph_status_for_operator_selector(run_id)
+            .await
+            .expect("resolve exception-takeover run");
+        assert_ne!(scoped.status, "completed");
+        assert_ne!(scoped.active_node, "closure");
+        assert_ne!(scoped.policy_gate, "closed_run_archived");
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
     async fn run_graph_status_reconciles_closed_terminal_closure_blocker_into_completed() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -10469,6 +10765,75 @@ mod tests {
                 "present-task run should remain latest after stale missing-task run is skipped",
             );
         assert_eq!(latest.run_id, "run-active-present-task");
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_retains_active_receipt_only_missing_execution_as_global_stale() {
+        let root = temp_run_graph_root("vida-run-graph-receipt-only-missing-execution");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-receipt-only-missing-execution";
+        let packet_path = root.join("receipt-only-packet.json").display().to_string();
+        let receipt = RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "synthetic_target".to_string(),
+            dispatch_status: "bridge_request_pending".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: Some(packet_path),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-07-19T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist active receipt-only run");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("read latest status")
+            .expect("active receipt-only stale run should remain global");
+        assert_eq!(latest.run_id, run_id);
+        assert_eq!(latest.checkpoint_kind, "missing_execution_plan_state");
+        assert_eq!(latest.status, "blocked");
+
+        let mut executed = receipt;
+        executed.dispatch_status = "executed".to_string();
+        executed.recorded_at = "2026-07-19T00:00:01Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&executed)
+            .await
+            .expect("persist executed receipt-only run");
+        assert!(
+            store
+                .latest_run_graph_status()
+                .await
+                .expect("read latest status after receipt closure")
+                .is_none(),
+            "missing execution without active receipt must be dropped"
+        );
 
         close_store_and_remove_root(store, root).await;
     }

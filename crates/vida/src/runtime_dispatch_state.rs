@@ -7668,37 +7668,79 @@ fn lawful_explicit_downstream_dispatch_target(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     explicit_target: &str,
 ) -> Option<RuntimeDispatchTargetResolution> {
-    if matches!(
-        canonical_dispatch_target_name(explicit_target).as_str(),
+    let canonical_explicit_target = canonical_dispatch_target_name(explicit_target);
+    let terminal_alias = matches!(
+        canonical_explicit_target.as_str(),
         "closure" | "terminal_closure" | "release_closure"
-    ) && terminal_closure_downstream_target_from_execution_plan(execution_plan, receipt)
-        .is_some()
-    {
-        return Some(RuntimeDispatchTargetResolution {
-            dispatch_target: canonical_dispatch_target_name(explicit_target),
-            lane_id: None,
-        });
-    }
-    let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target)?;
-    let target = target_resolution.dispatch_target.as_str();
-    let current_index = execution_lane_sequence_index_for_target(
-        allowed_next_lane_sequence,
+    );
+    let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target);
+    let normalized_sequence = allowed_next_lane_sequence
+        .iter()
+        .map(|candidate| {
+            resolve_runtime_dispatch_target(execution_plan, candidate)
+                .map(|resolution| canonical_dispatch_target_name(&resolution.dispatch_target))
+                .unwrap_or_else(|| canonical_dispatch_target_name(candidate))
+        })
+        .collect::<Vec<_>>();
+    let normalized_current_target = resolve_runtime_dispatch_target(
+        execution_plan,
         &receipt.dispatch_target,
-        receipt.downstream_dispatch_last_target.as_deref(),
+    )
+    .map(|resolution| canonical_dispatch_target_name(&resolution.dispatch_target))
+    .unwrap_or_else(|| canonical_dispatch_target_name(&receipt.dispatch_target));
+    let normalized_previous_target = receipt
+        .downstream_dispatch_last_target
+        .as_deref()
+        .map(|previous_target| {
+            resolve_runtime_dispatch_target(execution_plan, previous_target)
+                .map(|resolution| canonical_dispatch_target_name(&resolution.dispatch_target))
+                .unwrap_or_else(|| canonical_dispatch_target_name(previous_target))
+        });
+    let current_index = execution_lane_sequence_index_for_target(
+        &normalized_sequence,
+        &normalized_current_target,
+        normalized_previous_target.as_deref(),
     );
 
     if let Some(current_index) = current_index {
-        return allowed_next_lane_sequence
-            .get(current_index + 1)
-            .and_then(|next_target| resolve_runtime_dispatch_target(execution_plan, next_target))
-            .filter(|next_resolution| next_resolution.dispatch_target == target)
-            .map(|_| target_resolution);
+        let next_matches_target = target_resolution.as_ref().is_some_and(|target_resolution| {
+            normalized_sequence
+                .get(current_index + 1)
+                .is_some_and(|next_target| {
+                    *next_target == canonical_dispatch_target_name(&target_resolution.dispatch_target)
+                })
+        });
+        if next_matches_target {
+            return target_resolution;
+        }
+        if terminal_alias
+            && terminal_closure_downstream_target_from_execution_plan(execution_plan, receipt)
+                .is_some()
+        {
+            return target_resolution.or_else(|| {
+                Some(RuntimeDispatchTargetResolution {
+                    dispatch_target: canonical_explicit_target,
+                    lane_id: None,
+                })
+            });
+        }
+        return None;
     }
 
-    allowed_next_lane_sequence
+    if terminal_alias
+        && terminal_closure_downstream_target_from_execution_plan(execution_plan, receipt).is_some()
+    {
+        return Some(RuntimeDispatchTargetResolution {
+            dispatch_target: canonical_explicit_target,
+            lane_id: None,
+        });
+    }
+
+    let target_resolution = target_resolution?;
+    let target = canonical_dispatch_target_name(&target_resolution.dispatch_target);
+    normalized_sequence
         .iter()
-        .filter_map(|candidate| resolve_runtime_dispatch_target(execution_plan, candidate))
-        .any(|candidate| candidate.dispatch_target == target)
+        .any(|candidate| candidate == &target)
         .then_some(target_resolution)
 }
 
@@ -7928,18 +7970,19 @@ fn execution_lane_sequence_index_for_target(
     target: &str,
     previous_target: Option<&str>,
 ) -> Option<usize> {
-    let target = target.trim();
+    let target = canonical_dispatch_target_name(target.trim());
     if target.is_empty() {
         return None;
     }
     let previous_target = previous_target
         .map(str::trim)
+        .map(canonical_dispatch_target_name)
         .filter(|value| !value.is_empty());
 
     if let Some(previous_target) = previous_target {
         let target_count = execution_lane_sequence
             .iter()
-            .filter(|candidate| candidate.as_str() == target)
+            .filter(|candidate| canonical_dispatch_target_name(candidate) == target)
             .count();
         if target_count > 1 {
             if let Some(index) =
@@ -7947,11 +7990,13 @@ fn execution_lane_sequence_index_for_target(
                     .iter()
                     .enumerate()
                     .find_map(|(index, candidate)| {
-                        (candidate.as_str() == target
+                        (canonical_dispatch_target_name(candidate) == target
                             && index > 0
                             && execution_lane_sequence
                                 .get(index - 1)
-                                .is_some_and(|previous| previous.as_str() == previous_target))
+                                .is_some_and(|previous| {
+                                    canonical_dispatch_target_name(previous) == previous_target
+                                }))
                         .then_some(index)
                     })
             {
@@ -7962,7 +8007,7 @@ fn execution_lane_sequence_index_for_target(
 
     execution_lane_sequence
         .iter()
-        .position(|candidate| candidate.as_str() == target)
+        .position(|candidate| canonical_dispatch_target_name(candidate) == target)
 }
 
 pub(crate) fn downstream_dispatch_ready_blocker_parity_error(
@@ -22380,6 +22425,144 @@ host_environment:
             "terminal_closure",
         )
         .is_none());
+    }
+
+    #[test]
+    fn lawful_explicit_configured_release_closure_precedes_terminal_alias_fallback() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vida.config.yaml"
+        )))
+        .expect("canonical config should parse");
+        let config: serde_json::Value =
+            serde_json::to_value(yaml).expect("canonical config should convert to json");
+        let (role_id, runtime_role, next_role) = config
+            .pointer("/dev_team/roles")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|roles| {
+                roles.iter().find_map(|(role_id, role)| {
+                    let runtime_role = role
+                        .get("runtime_role")
+                        .and_then(serde_json::Value::as_str)?;
+                    let next_role = role
+                        .pointer("/handoff/next_role")
+                        .and_then(serde_json::Value::as_str)?;
+                    (next_role == "release_closure"
+                        && canonical_dispatch_target_name(runtime_role) != role_id.as_str())
+                        .then(|| {
+                            (
+                                role_id.to_string(),
+                                runtime_role.to_string(),
+                                next_role.to_string(),
+                            )
+                        })
+                })
+            })
+            .expect("canonical role with aliased runtime successor should exist");
+        let canonical_runtime_role = canonical_dispatch_target_name(&runtime_role);
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_sequence": [role_id, next_role],
+                    "execution_lane_sequence": [role_id, next_role],
+                    "lane_catalog": {
+                        role_id.clone(): {"dispatch_target": canonical_runtime_role, "runtime_role": runtime_role},
+                        next_role.clone(): {"dispatch_target": next_role}
+                    }
+                }
+            }
+        });
+        assert_ne!(canonical_runtime_role, role_id);
+
+        assert_eq!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &execution_plan,
+                &role_id,
+                None,
+                &next_role,
+            ),
+            Some(next_role.clone())
+        );
+        assert_eq!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &execution_plan,
+                &role_id,
+                Some(&role_id),
+                &next_role,
+            ),
+            Some(next_role)
+        );
+        assert!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &execution_plan,
+                &role_id,
+                None,
+                "closure",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn runtime_dispatch_target_resolver_accepts_raw_and_canonical_catalog_targets_but_rejects_unknown() {
+        let raw_plan = json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["prover", "release_closure"],
+                    "lane_catalog": {
+                        "prover": {
+                            "dispatch_target": "verification",
+                            "task_class": "verification",
+                            "stage": "quality_gate",
+                            "runtime_role": "prover"
+                        },
+                        "release_closure": {
+                            "dispatch_target": "release_closure",
+                            "task_class": "release_readiness",
+                            "stage": "release_readiness",
+                            "runtime_role": "prover"
+                        }
+                    }
+                }
+            }
+        });
+        let canonical_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["verification", "release_closure"],
+                    "lane_catalog": raw_plan["development_flow"]["dispatch_contract"]["lane_catalog"].clone()
+                }
+            }
+        });
+        assert_eq!(
+            resolve_runtime_dispatch_target(&raw_plan, "prover")
+                .map(|resolution| resolution.dispatch_target),
+            Some("verification".to_string())
+        );
+        assert_eq!(
+            resolve_runtime_dispatch_target(&raw_plan, "verification")
+                .map(|resolution| resolution.dispatch_target),
+            Some("verification".to_string())
+        );
+        assert_eq!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &raw_plan,
+                "prover",
+                None,
+                "release_closure",
+            ),
+            Some("release_closure".to_string())
+        );
+        assert_eq!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &canonical_plan,
+                "verification",
+                None,
+                "release_closure",
+            ),
+            Some("release_closure".to_string())
+        );
+        assert!(resolve_runtime_dispatch_target(&raw_plan, "unknown").is_none());
     }
 
     #[test]

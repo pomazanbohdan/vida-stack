@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::types::SurrealValue;
 use taskflow_host_bridge::{
     host_bridge_completion_identity_matches, host_bridge_dispatch_identity_blockers,
 };
@@ -167,7 +168,7 @@ fn vida_dispatch_validator_matches_completion_validator_for_packet_path_spelling
 }
 
 #[test]
-fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
+fn host_bridge_request_uses_current_packet_scoped_receipt_only() {
     let state_dir = unique_state_dir();
     let run_id = unique_test_id("legacy-host-bridge-retry");
     let parent_id = unique_test_id("legacy-host-bridge-parent");
@@ -207,24 +208,34 @@ fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
     fs::create_dir_all(format!("{}/attempt-artifacts", state_dir))
         .expect("create attempt artifact dir");
 
+    let attempt_id = format!("{run_id}::coder::attempt");
+    let packet_id = format!("{run_id}::coder::delivery");
     let packet = serde_json::json!({
         "run_id": run_id,
         "task_id": run_id,
         "dispatch_target": "coder",
         "selected_backend": "internal_subagents",
+        "attempt_id": attempt_id,
+        "packet_id": packet_id,
         "delivery_task_packet": {
-            "packet_id": format!("{}::coder::delivery", run_id),
+            "packet_id": packet_id,
+            "attempt_id": attempt_id,
             "task_id": run_id
         }
     });
     fs::write(&packet_path, packet.to_string()).expect("write legacy packet");
+    let stale_attempt_id = format!("{run_id}::coder::stale-attempt");
+    let stale_packet_id = format!("{run_id}::coder::stale-delivery");
     let stale_packet = serde_json::json!({
         "run_id": run_id,
         "task_id": run_id,
         "dispatch_target": "coder",
         "selected_backend": "internal_subagents",
+        "attempt_id": stale_attempt_id,
+        "packet_id": stale_packet_id,
         "delivery_task_packet": {
-            "packet_id": format!("{}::coder::delivery", run_id),
+            "packet_id": stale_packet_id,
+            "attempt_id": stale_attempt_id,
             "task_id": run_id
         }
     });
@@ -262,37 +273,30 @@ fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
     };
     let persisted_packet_path = persisted_path_identity(&canonical_packet_path);
     let persisted_stale_packet_path = persisted_path_identity(&canonical_stale_packet_path);
-    let request = serde_json::json!({
-        "schema_version": 1,
-        "status": "pending",
-        "request_id": request_id,
-        "run_id": run_id,
-        "task_id": run_id,
-        "legacy_artifact": true,
-        "dispatch_target": "coder",
-        "runtime_role": "worker",
-        "task_class": "implementation",
-        "packet_path": canonical_packet_path,
-        "backend_id": "internal_subagents",
-        "carrier_id": "junior",
-        "execution_boundary": "parent_host_session",
-        "dispatch_transport": "host_tool_bridge",
-        "receipt_mode": "host_bridge_receipt",
-        "adapter_kind": "codex_host_tools",
-        "adapter_capability_id": "codex.multi_agent_v1",
-        "invocation_mode": "parent_host_tool_api",
-        "expected_implementation_artifact_kinds": [
-            "patch_proposal",
-            "isolated_worktree_manifest"
-        ],
-        "owned_paths": ["crates/vida/src/agent_dispatch_surface.rs"],
-        "proof_artifact_paths": [],
-        "implementation_isolation": {
-            "owned_paths": ["crates/vida/src/agent_dispatch_surface.rs"]
-        },
-        "request_path": request_path,
-        "result_path": result_path,
-        "receipt_path": receipt_path
+    let mut request = current_host_bridge_request(
+        &state_dir,
+        &request_path,
+        &result_path,
+        &receipt_path,
+        &run_id,
+        &run_id,
+        "coder",
+        "junior",
+        &attempt_id,
+        &packet_id,
+        &canonical_packet_path,
+    );
+    request["request_id"] = serde_json::json!(request_id);
+    request["runtime_role"] = serde_json::json!("worker");
+    request["task_class"] = serde_json::json!("implementation");
+    request["expected_implementation_artifact_kinds"] = serde_json::json!([
+        "patch_proposal",
+        "isolated_worktree_manifest"
+    ]);
+    request["owned_paths"] = serde_json::json!(["crates/vida/src/agent_dispatch_surface.rs"]);
+    request["proof_artifact_paths"] = serde_json::json!([]);
+    request["implementation_isolation"] = serde_json::json!({
+        "owned_paths": ["crates/vida/src/agent_dispatch_surface.rs"]
     });
     fs::write(&request_path, request.to_string()).expect("write legacy request");
 
@@ -305,62 +309,47 @@ fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
             .use_db("primary")
             .await
             .expect("select surreal database");
-        let current_receipt = serde_json::json!({
-            "run_id": run_id,
-            "dispatch_target": "coder",
-            "dispatch_status": "blocked",
-            "lane_status": "lane_blocked",
-            "dispatch_kind": "agent_lane",
-            "dispatch_surface": "vida agent-init",
-            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
-            "dispatch_packet_path": persisted_packet_path,
-            "dispatch_result_path": "host-tool-bridge/results/result.json",
-            "blocker_code": "host_tool_bridge_adapter_required",
-            "downstream_dispatch_target": "tester",
-            "downstream_dispatch_ready": false,
-            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
-            "downstream_dispatch_status": "blocked",
-            "downstream_dispatch_executed_count": 0,
-            "downstream_dispatch_active_target": "coder",
-            "activation_agent_type": "junior",
-            "activation_runtime_role": "worker",
-            "selected_backend": "internal_subagents",
-            "recorded_at": "2026-07-17T13:58:17Z"
-        });
-        let stale_receipt = serde_json::json!({
-            "run_id": run_id,
-            "dispatch_target": "coder",
-            "dispatch_status": "blocked",
-            "lane_status": "lane_blocked",
-            "dispatch_kind": "agent_lane",
-            "dispatch_surface": "vida agent-init",
-            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
-            "dispatch_packet_path": persisted_stale_packet_path,
-            "dispatch_result_path": "host-tool-bridge/results/stale-result.json",
-            "blocker_code": "host_tool_bridge_adapter_required",
-            "downstream_dispatch_target": "tester",
-            "downstream_dispatch_ready": false,
-            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
-            "downstream_dispatch_status": "blocked",
-            "downstream_dispatch_executed_count": 0,
-            "downstream_dispatch_active_target": "coder",
-            "activation_agent_type": "junior",
-            "activation_runtime_role": "worker",
-            "selected_backend": "internal_subagents",
-            "recorded_at": "2026-07-17T12:06:37Z"
-        });
-        db.query(
-            "UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $current; \
-             UPSERT type::record('run_graph_dispatch_lane_receipt', $current_id) CONTENT $current; \
-             UPSERT type::record('run_graph_dispatch_lane_receipt', $stale_id) CONTENT $stale;",
-        )
-        .bind(("run", run_id.clone()))
-        .bind(("current_id", format!("{}-current", run_id)))
-        .bind(("stale_id", format!("{}-stale", run_id)))
-        .bind(("current", current_receipt))
-        .bind(("stale", stale_receipt))
-        .await
-        .expect("seed current projection and packet receipt history");
+        let current_receipt = HostBridgeDispatchReceiptFixture {
+            run_id: run_id.clone(),
+            dispatch_target: "coder".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: "vida agent-init".to_string(),
+            dispatch_command: "vida agent-init --dispatch-packet packet --execute-dispatch".to_string(),
+            dispatch_packet_path: persisted_packet_path,
+            dispatch_result_path: "host-tool-bridge/results/result.json".to_string(),
+            blocker_code: "host_tool_bridge_adapter_required".to_string(),
+            downstream_dispatch_target: "tester".to_string(),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["host_tool_bridge_adapter_required".to_string()],
+            downstream_dispatch_status: "blocked".to_string(),
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: "coder".to_string(),
+            activation_agent_type: "junior".to_string(),
+            activation_runtime_role: "worker".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            recorded_at: "2026-07-17T13:58:17Z".to_string(),
+        };
+        let mut stale_receipt = current_receipt.clone();
+        stale_receipt.dispatch_packet_path = persisted_stale_packet_path;
+        stale_receipt.dispatch_result_path = "host-tool-bridge/results/stale-result.json".to_string();
+        stale_receipt.recorded_at = "2026-07-17T12:06:37Z".to_string();
+        let _: Option<HostBridgeDispatchReceiptFixture> = db
+            .upsert(("run_graph_dispatch_receipt", run_id.clone()))
+            .content(current_receipt.clone())
+            .await
+            .expect("seed current dispatch receipt");
+        let _: Option<HostBridgeDispatchReceiptFixture> = db
+            .upsert(("run_graph_dispatch_lane_receipt", format!("{run_id}-current")))
+            .content(current_receipt)
+            .await
+            .expect("seed current lane receipt");
+        let _: Option<HostBridgeDispatchReceiptFixture> = db
+            .upsert(("run_graph_dispatch_lane_receipt", format!("{run_id}-stale")))
+            .content(stale_receipt)
+            .await
+            .expect("seed stale lane receipt");
         drop(db);
     });
 
@@ -410,8 +399,8 @@ fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
         &fs::read_to_string(&request_path).expect("read attached legacy request"),
     )
     .expect("attached legacy request should remain JSON");
-    assert_eq!(updated_request["attempt_id"], Value::Null);
-    assert_eq!(updated_request["packet_id"], Value::Null);
+    assert_eq!(updated_request["attempt_id"], attempt_id);
+    assert_eq!(updated_request["packet_id"], packet_id);
     assert_eq!(updated_request["packet_path"], canonical_packet_path);
 
     let mut stale_request = request.clone();
@@ -457,6 +446,92 @@ fn legacy_host_bridge_request_uses_current_packet_scoped_receipt_only() {
     let _ = fs::remove_dir_all(state_dir);
 }
 
+#[test]
+fn identity_less_legacy_host_bridge_attach_fails_strict_without_request_mutation() {
+    let state_dir = unique_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    let packet_path = format!("{state_dir}/runtime-consumption/dispatch-packets/legacy.json");
+    let request_path = format!("{bridge_dir}/request.json");
+    let result_path = format!("{bridge_dir}/result.json");
+    let receipt_path = format!("{bridge_dir}/receipt.json");
+    let artifact_path = format!("{state_dir}/attempt-artifacts/patch-proposal.json");
+    for path in [&packet_path, &request_path, &result_path, &receipt_path, &artifact_path] {
+        fs::create_dir_all(std::path::Path::new(path).parent().expect("legacy parent"))
+            .expect("create legacy fixture parent");
+    }
+    fs::write(&packet_path, "{}").expect("write identity-less packet");
+    fs::write(
+        &artifact_path,
+        serde_json::json!({
+            "artifact_kind": "patch_proposal",
+            "changed_files": ["crates/vida/src/agent_dispatch_surface.rs"]
+        })
+        .to_string(),
+    )
+    .expect("write legacy artifact");
+    let mut request = current_host_bridge_request(
+        &state_dir,
+        &request_path,
+        &result_path,
+        &receipt_path,
+        "legacy-identity-less",
+        "legacy-identity-less",
+        "coder",
+        "junior",
+        "legacy-attempt",
+        "legacy-packet",
+        &packet_path,
+    );
+    request["legacy_artifact"] = serde_json::json!(true);
+    request["expected_implementation_artifact_kinds"] =
+        serde_json::json!(["patch_proposal", "isolated_worktree_manifest"]);
+    request["owned_paths"] = serde_json::json!(["crates/vida/src/agent_dispatch_surface.rs"]);
+    request["implementation_isolation"] = serde_json::json!({
+        "owned_paths": ["crates/vida/src/agent_dispatch_surface.rs"]
+    });
+    request.as_object_mut().expect("legacy request object").remove("attempt_id");
+    request.as_object_mut().expect("legacy request object").remove("packet_id");
+    fs::write(&request_path, request.to_string()).expect("write identity-less request");
+    let canonical_request_path =
+        fs::canonicalize(&request_path).expect("identity-less request should canonicalize");
+    let canonical_request_bytes =
+        fs::read(&canonical_request_path).expect("read canonical identity-less request bytes");
+    let canonical_request: Value = serde_json::from_slice(&canonical_request_bytes)
+        .expect("canonical identity-less request should parse");
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "agent", "host-bridge", "--request", &request_path, "--attach-artifact", &artifact_path,
+            "--artifact-kind", "patch_proposal", "--changed-file",
+            "crates/vida/src/agent_dispatch_surface.rs", "--attempt-id", "legacy-attempt",
+            "--consolidation-receipt", "legacy-receipt", "--state-dir", &state_dir, "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success, "identity-less legacy attach must fail strict: {blocked}");
+    assert_eq!(blocked["status"], "blocked", "strict attach status: {blocked}");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["host_bridge_request_unreadable"]),
+        "strict attach blocker codes: {blocked}"
+    );
+    let persisted_bytes =
+        fs::read(&canonical_request_path).expect("read persisted identity-less request bytes");
+    assert_eq!(
+        persisted_bytes, canonical_request_bytes,
+        "strict identity-less attach must preserve canonical request bytes"
+    );
+    let persisted: Value = serde_json::from_slice(&persisted_bytes)
+        .expect("persisted identity-less request remains JSON");
+    assert_eq!(
+        persisted, canonical_request,
+        "strict identity-less attach must preserve canonical request JSON"
+    );
+    assert!(persisted.get("attempt_id").is_none());
+    assert!(persisted.get("packet_id").is_none());
+    let _ = fs::remove_dir_all(state_dir);
+}
+
 fn unique_state_dir() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -480,6 +555,148 @@ fn unique_test_id(prefix: &str) -> String {
     static UNIQUE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
     let counter = UNIQUE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}-{}-{}", prefix, std::process::id(), nanos, counter)
+}
+
+fn current_host_bridge_request(
+    state_dir: &str,
+    request_path: &str,
+    result_path: &str,
+    receipt_path: &str,
+    run_id: &str,
+    task_id: &str,
+    dispatch_target: &str,
+    carrier_id: &str,
+    attempt_id: &str,
+    packet_id: &str,
+    packet_path: &str,
+) -> Value {
+    let adapter_snapshot = serde_json::json!({
+        "adapter_kind": "codex_host_tools",
+        "adapter_capability_id": "codex.multi_agent_v1",
+        "invocation_mode": "parent_host_tool_api",
+        "dispatch_transport": "host_tool_bridge",
+        "receipt_mode": "host_bridge_receipt",
+        "operations": {
+            "dispose": "multi_agent_v1.close_agent",
+            "spawn": "multi_agent_v1.spawn_agent",
+            "wait": "multi_agent_v1.wait_agent"
+        },
+        "dispose_policy": "configured"
+    });
+    let adapter_contract_hash = blake3::hash(
+        &serde_json::to_vec(&adapter_snapshot).expect("adapter snapshot should serialize"),
+    )
+    .to_hex()
+    .to_string();
+    let request = serde_json::json!({
+        "schema_version": 1,
+        "status": "pending",
+        "request_id": format!("{run_id}-request"),
+        "run_id": run_id,
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "packet_id": packet_id,
+        "dispatch_target": dispatch_target,
+        "packet_path": packet_path,
+        "backend_id": "internal_subagents",
+        "carrier_id": carrier_id,
+        "execution_boundary": "parent_host_session",
+        "dispatch_transport": "host_tool_bridge",
+        "receipt_mode": "host_bridge_receipt",
+        "adapter_kind": "codex_host_tools",
+        "adapter_capability_id": "codex.multi_agent_v1",
+        "invocation_mode": "parent_host_tool_api",
+        "adapter_contract_source": "configured_registry",
+        "adapter_contract_snapshot": adapter_snapshot,
+        "adapter_contract_hash": adapter_contract_hash,
+        "adapter_operations": adapter_snapshot,
+        "request_path": request_path,
+        "result_path": result_path,
+        "receipt_path": receipt_path,
+        "state_dir": state_dir,
+        "required_result_fields": [
+            "decision", "verdict", "blocker_codes", "rework_target", "allowed_next_node"
+        ]
+    });
+    request
+}
+
+fn fixture_host_bridge_request_id(run_id: &str, dispatch_target: &str, packet_path: &str) -> String {
+    let segment = |value: &str| {
+        value
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .replace("--", "-")
+            .trim_matches('-')
+            .chars()
+            .take(96)
+            .collect::<String>()
+    };
+    let packet = std::path::Path::new(packet_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(segment)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "packet".to_string());
+    format!("{}-{}-{}-host-tool-bridge", segment(run_id), segment(dispatch_target), packet)
+}
+
+#[derive(Clone, serde::Serialize, SurrealValue)]
+struct HostBridgeDispatchReceiptFixture {
+    run_id: String,
+    dispatch_target: String,
+    dispatch_status: String,
+    lane_status: String,
+    dispatch_kind: String,
+    dispatch_surface: String,
+    dispatch_command: String,
+    dispatch_packet_path: String,
+    dispatch_result_path: String,
+    blocker_code: String,
+    downstream_dispatch_target: String,
+    downstream_dispatch_ready: bool,
+    downstream_dispatch_blockers: Vec<String>,
+    downstream_dispatch_status: String,
+    downstream_dispatch_executed_count: u32,
+    downstream_dispatch_active_target: String,
+    activation_agent_type: String,
+    activation_runtime_role: String,
+    selected_backend: String,
+    recorded_at: String,
+}
+
+#[derive(Clone, serde::Serialize, SurrealValue)]
+struct HostBridgeReceiptIdentityFixture {
+    schema_version: String,
+    request_id: String,
+    run_id: String,
+    task_id: String,
+    attempt_id: String,
+    packet_id: String,
+    dispatch_target: String,
+    packet_path: String,
+    backend_id: String,
+    carrier_id: String,
+    adapter_kind: String,
+    adapter_capability_id: String,
+    invocation_mode: String,
+    dispatch_transport: String,
+    receipt_mode: String,
+    adapter_contract_source: String,
+    adapter_contract_snapshot: Value,
+    adapter_contract_hash: String,
+    adapter_operations: Value,
+    request_path: String,
+    result_path: String,
+    receipt_path: String,
+    recorded_at: String,
 }
 
 fn run_and_assert_failure(args: &[&str], state_dir: &str) -> (String, String) {
@@ -781,17 +998,25 @@ host_environment:
       execution_class: internal
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
-      host_tool_bridge:
-        adapter_required: true
-        adapter_kind: codex_host_tools
-        adapter_capability_id: codex.multi_agent_v1
       carriers:
-        middle:
+        bridge_middle:
           model: test-model-middle
           model_reasoning_effort: medium
           sandbox_mode: workspace-write
           runtime_roles: [business_analyst]
           task_classes: [specification]
+      host_tool_bridge:
+        adapter_required: true
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
       dispatch:
         command: configured-host
         static_args:
@@ -18538,6 +18763,13 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
 fn agent_init_execute_dispatch_explicit_materialized_packet_reaches_host_bridge_gate() {
     let (project_root, state_dir) = project_bound_state_dir();
     append_internal_host_bridge_config(&project_root);
+    let config_path = std::path::Path::new(&project_root).join("vida.config.yaml");
+    let config = fs::read_to_string(&config_path).expect("project config should read");
+    let config = config.replace(
+        "      dispatch:\n        command: configured-host\n",
+        "      dispatch:\n        receipt_backed_completion_supported: true\n        command: configured-host\n",
+    );
+    fs::write(&config_path, config).expect("project config should enable receipt-backed bridge");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let parent_id = "agent-init-explicit-materialized-parent";
@@ -18570,7 +18802,16 @@ fn agent_init_execute_dispatch_explicit_materialized_packet_reaches_host_bridge_
     );
     assert_eq!(task["status"], "pass");
 
-    let dispatch = run_command_json(
+    let session_status = run_command_json(
+        &["status", "--json", "--view", "full"],
+        &state_dir,
+    );
+    let session_id = session_status["current_session"]["session_id"]
+        .as_str()
+        .expect("project-bound fixture should expose current session id")
+        .to_string();
+
+    let dispatch = run_command_json_with_session(
         &[
             "agent",
             "dispatch-next",
@@ -18584,24 +18825,192 @@ fn agent_init_execute_dispatch_explicit_materialized_packet_reaches_host_bridge_
             "--json",
         ],
         &state_dir,
+        &session_id,
     );
     let packet_path = dispatch["packet_materialization"]["artifacts"][0]["dispatch_packet_path"]
         .as_str()
-        .expect("materialized packet path should render");
+        .expect("materialized packet path should render")
+        .to_string();
+    let mut packet: Value = serde_json::from_str(
+        &fs::read_to_string(&packet_path).expect("materialized packet should read"),
+    )
+    .expect("materialized packet should parse");
+    let run_id = packet["run_id"].as_str().expect("packet run id").to_string();
+    let dispatch_target = packet["dispatch_target"]
+        .as_str()
+        .expect("packet dispatch target")
+        .to_string();
+    let assignment = packet["carrier_runtime_assignment"].clone();
+    let backend_id = assignment["selected_backend_id"]
+        .as_str()
+        .expect("selected backend id")
+        .to_string();
+    let config_body = fs::read_to_string(
+        std::path::Path::new(&project_root).join("vida.config.yaml"),
+    )
+    .expect("project config should read");
+    let config_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&config_body).expect("project config should parse");
+    let host_system_id = config_yaml
+        .get("host_environment")
+        .and_then(|value| value.get("cli_system"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .expect("project config should identify the active host system");
+    let carriers = config_yaml
+        .get("host_environment")
+        .and_then(|value| value.get("systems"))
+        .and_then(|value| value.get(host_system_id))
+        .and_then(|value| value.get("carriers"))
+        .and_then(serde_yaml::Value::as_mapping)
+        .expect("active host system should expose configured carriers");
+    let runtime_role = assignment["runtime_role"]
+        .as_str()
+        .or_else(|| assignment["selected_runtime_role"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .expect("materialized assignment should expose runtime role");
+    let task_class = assignment["task_class"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .expect("materialized assignment should expose task class");
+    let matching_carriers = carriers
+        .iter()
+        .filter(|(_, carrier)| {
+            let runtime_role_matches = carrier
+                .get("runtime_roles")
+                .and_then(serde_yaml::Value::as_sequence)
+                .is_some_and(|roles| {
+                    roles.iter().filter_map(serde_yaml::Value::as_str).any(|role| {
+                        role.trim().eq_ignore_ascii_case(runtime_role)
+                    })
+                });
+            let task_class_matches = carrier
+                .get("task_classes")
+                .and_then(serde_yaml::Value::as_sequence)
+                .is_some_and(|classes| {
+                    classes.iter().filter_map(serde_yaml::Value::as_str).any(|class| {
+                        class.trim().eq_ignore_ascii_case(task_class)
+                    })
+                });
+            runtime_role_matches && task_class_matches
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_carriers.len(),
+        1,
+        "active host config should have exactly one carrier for runtime_role={runtime_role} task_class={task_class}"
+    );
+    let carrier_id = matching_carriers[0]
+        .0
+        .as_str()
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .expect("matched host carrier should expose a non-empty role_id");
+    let attempt_id = packet["attempt_id"].as_str().expect("packet attempt id").to_string();
+    let packet_id = packet["packet_id"].as_str().expect("packet id").to_string();
+    let request_id = fixture_host_bridge_request_id(&run_id, &dispatch_target, &packet_path);
+    let bridge_root = std::path::Path::new(&state_dir).join("host-tool-bridge");
+    let request_path = bridge_root.join("requests").join(format!("{request_id}.json"));
+    let result_path = bridge_root.join("results").join(format!("{request_id}.json"));
+    let receipt_path = bridge_root.join("receipts").join(format!("{request_id}.json"));
+    for path in [&request_path, &result_path, &receipt_path] {
+        fs::create_dir_all(path.parent().expect("host bridge path parent"))
+            .expect("create host bridge artifact parent");
+    }
+    let request_path = request_path.display().to_string();
+    let result_path = result_path.display().to_string();
+    let receipt_path = receipt_path.display().to_string();
+    let config_source = std::path::Path::new(&project_root)
+        .join("vida.config.yaml")
+        .display()
+        .to_string();
+    let mut request = current_host_bridge_request(
+        &state_dir,
+        &request_path,
+        &result_path,
+        &receipt_path,
+        &run_id,
+        &run_id,
+        &dispatch_target,
+        &carrier_id,
+        &attempt_id,
+        &packet_id,
+        &packet_path,
+    );
+    request["request_id"] = serde_json::json!(request_id);
+    request["backend_id"] = serde_json::json!(backend_id);
+    request["adapter_contract_source"] = serde_json::json!(config_source);
+    fs::write(&request_path, request.to_string()).expect("write canonical host bridge request");
+    packet["dispatch_transport"] = serde_json::json!("host_tool_bridge");
+    packet["selected_backend"] = serde_json::json!(backend_id);
+    packet["activation_agent_type"] = serde_json::json!(carrier_id);
+    for field in [
+        "activation_vs_execution_evidence",
+        "activation_semantics",
+        "activation_evidence",
+    ] {
+        packet.as_object_mut().expect("materialized packet object").remove(field);
+    }
+    fs::write(&packet_path, packet.to_string()).expect("revalidate materialized packet identity");
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open explicit dispatch state store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("select explicit dispatch state store");
+        let identity = HostBridgeReceiptIdentityFixture {
+            schema_version: "host-bridge-receipt-identity-v1".to_string(),
+            request_id: request_id.clone(),
+            run_id: run_id.clone(),
+            task_id: run_id.clone(),
+            attempt_id: attempt_id.clone(),
+            packet_id: packet_id.clone(),
+            dispatch_target: dispatch_target.clone(),
+            packet_path: packet_path.clone(),
+            backend_id: backend_id.clone(),
+            carrier_id: carrier_id.clone(),
+            adapter_kind: request["adapter_kind"].as_str().unwrap().to_string(),
+            adapter_capability_id: request["adapter_capability_id"].as_str().unwrap().to_string(),
+            invocation_mode: request["invocation_mode"].as_str().unwrap().to_string(),
+            dispatch_transport: "host_tool_bridge".to_string(),
+            receipt_mode: request["receipt_mode"].as_str().unwrap().to_string(),
+            adapter_contract_source: config_source.clone(),
+            adapter_contract_snapshot: request["adapter_contract_snapshot"].clone(),
+            adapter_contract_hash: request["adapter_contract_hash"].as_str().unwrap().to_string(),
+            adapter_operations: request["adapter_operations"].clone(),
+            request_path: request_path.clone(),
+            result_path: result_path.clone(),
+            receipt_path: receipt_path.clone(),
+            recorded_at: "2026-07-19T00:00:00Z".to_string(),
+        };
+        let _: Option<HostBridgeReceiptIdentityFixture> = db
+            .upsert(("host_bridge_receipt_identity", request_id.as_str()))
+            .content(identity)
+            .await
+            .expect("seed typed host bridge receipt identity");
+        drop(db);
+    });
     let output = run_with_state_lock_retry(|| {
         let mut command = vida();
         command
             .args([
                 "agent-init",
                 "--dispatch-packet",
-                packet_path,
+                &packet_path,
                 "--execute-dispatch",
                 "--state-dir",
                 &state_dir,
                 "--json",
             ])
             .env("VIDA_STATE_DIR", &state_dir)
-            .env_remove("VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER");
+            .env("VIDA_SESSION_ID", &session_id)
+            .env("VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER", "1");
         command
     });
     let execute: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
@@ -19317,29 +19726,20 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
     let result_path = format!("{bridge_dir}/result.json");
     let receipt_path = format!("{bridge_dir}/receipt.json");
     fs::write(&packet_path, "{}").expect("write dispatch packet");
-    fs::write(
+    let request = current_host_bridge_request(
+        &state_dir,
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-host-bridge",
-            "run_id": "run-host-bridge",
-            "dispatch_target": "implementation",
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "junior",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path,
-            "result_path": result_path,
-            "receipt_path": receipt_path
-        })
-        .to_string(),
-    )
-    .expect("write host bridge request");
+        &result_path,
+        &receipt_path,
+        "run-host-bridge",
+        "run-host-bridge",
+        "implementation",
+        "junior",
+        "attempt-host-bridge",
+        "packet-host-bridge",
+        &packet_path,
+    );
+    fs::write(&request_path, request.to_string()).expect("write host bridge request");
 
     let (ready_payload, ready_success) = run_command_json_allow_failure(
         &[
@@ -19409,7 +19809,10 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
     );
     assert_eq!(
         ready_payload["shared_fields"]["artifact_refs"]["request_path"],
-        request_path
+        fs::canonicalize(&request_path)
+            .expect("request path should canonicalize")
+            .display()
+            .to_string()
     );
 
     let output = run_command_capture(
@@ -19483,29 +19886,35 @@ fn host_bridge_lock_timeout_classification_zombie_d() {
         )
         .expect("create host bridge artifact parent");
     }
+    let packet_id = "zombie-lock-packet";
+    let attempt_id = "zombie-lock-attempt";
     fs::write(
         &packet_path,
-        serde_json::json!({"run_id": "zombie-lock", "dispatch_target": "worker"}).to_string(),
+        serde_json::json!({
+            "run_id": "zombie-lock",
+            "task_id": "zombie-lock",
+            "dispatch_target": "worker",
+            "selected_backend": "internal_subagents",
+            "carrier_id": "junior",
+            "attempt_id": attempt_id,
+            "packet_id": packet_id
+        })
+        .to_string(),
     )
     .expect("write non-empty packet");
-    let request = serde_json::json!({
-        "schema_version": 1,
-        "status": "pending",
-        "request_id": "zombie-lock-request",
-        "run_id": "zombie-lock",
-        "task_id": "zombie-lock",
-        "dispatch_target": "worker",
-        "packet_path": packet_path,
-        "backend_id": "internal_subagents",
-        "carrier_id": "junior",
-        "dispatch_transport": "host_tool_bridge",
-        "receipt_mode": "host_bridge_receipt",
-        "adapter_kind": "codex_host_tools",
-        "adapter_capability_id": "codex.multi_agent_v1",
-        "request_path": request_path,
-        "result_path": result_path,
-        "receipt_path": receipt_path
-    });
+    let request = current_host_bridge_request(
+        &state_dir,
+        &request_path,
+        &result_path,
+        &receipt_path,
+        "zombie-lock",
+        "zombie-lock",
+        "worker",
+        "junior",
+        attempt_id,
+        packet_id,
+        &packet_path,
+    );
     fs::write(&request_path, request.to_string()).expect("write host bridge request");
 
     let run_request = || {
@@ -19661,63 +20070,80 @@ fn host_bridge_lock_timeout_classification_zombie_d() {
 
 #[test]
 fn agent_host_bridge_scaffold_result_generates_and_validates_analyst_pass_to_designer() {
-    let state_dir = unique_state_dir();
+    let (project_root, state_dir) = project_bound_state_dir();
+    append_internal_host_bridge_config(&project_root);
+    run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "host-bridge-scaffold-parent";
+    let task_id = "host-bridge-scaffold-task";
+    create_epic_parent(&state_dir, parent_id, "Host bridge scaffold parent", "open");
+    let task = run_command_json(
+        &[
+            "task", "create", task_id, "Host bridge scaffold task", "--type", "runtime_defect",
+            "--status", "in_progress", "--priority", "1", "--parent-id", parent_id,
+            "--owned-path", "crates/vida/src/agent_dispatch_surface.rs", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    let dispatch = run_command_json(
+        &[
+            "agent", "dispatch-next", "--dev-team", "--current-task-id", task_id,
+            "--lanes", "1", "--state-dir", &state_dir, "--json",
+        ],
+        &state_dir,
+    );
+    let packet_path = dispatch["packet_materialization"]["artifacts"][0]["dispatch_packet_path"]
+        .as_str()
+        .expect("materialized packet path should render")
+        .to_string();
+    let packet: Value = serde_json::from_str(
+        &fs::read_to_string(&packet_path).expect("materialized packet should read"),
+    )
+    .expect("materialized packet should parse");
+    let assignment = packet["carrier_runtime_assignment"].clone();
+    let run_id = packet["run_id"].as_str().expect("packet run id").to_string();
+    let dispatch_target = packet["dispatch_target"]
+        .as_str()
+        .expect("packet dispatch target")
+        .to_string();
+    let carrier_id = assignment["selected_carrier_id"]
+        .as_str()
+        .expect("selected carrier id")
+        .to_string();
+    let backend_id = assignment["selected_backend_id"]
+        .as_str()
+        .expect("selected backend id")
+        .to_string();
+    let profile_id = assignment["selected_model_profile_id"]
+        .as_str()
+        .expect("selected model profile id")
+        .to_string();
+    let attempt_id = packet["attempt_id"].as_str().expect("packet attempt id").to_string();
+    let packet_id = packet["packet_id"].as_str().expect("packet id").to_string();
+    let request_id = packet["request_id"].as_str().expect("packet request id").to_string();
     let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
-    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
-    fs::create_dir_all(&packet_dir).expect("create packet dir");
-    let packet_path = format!("{packet_dir}/analyst.json");
     let request_path = format!("{bridge_dir}/request.json");
     let result_path = "runtime-consumption/host-tool-bridge/analyst-result.json";
-    let attempt_id = "attempt-analyst-scaffold";
-    let packet_id = "packet-analyst-scaffold";
-    fs::write(
-        &packet_path,
-        serde_json::json!({
-            "packet_id": packet_id,
-            "attempt_id": attempt_id,
-            "delivery_task_packet": {
-                "packet_id": packet_id,
-                "attempt_id": attempt_id
-            }
-        })
-        .to_string(),
-    )
-    .expect("write packet");
-    fs::write(
+    let receipt_path = "runtime-consumption/host-tool-bridge/analyst-receipt.json";
+    let mut request = current_host_bridge_request(
+        &state_dir,
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-analyst-scaffold",
-            "run_id": "runtime-host-bridge-result-scaffold-20260701",
-            "task_id": "runtime-host-bridge-result-scaffold-20260701",
-            "attempt_id": attempt_id,
-            "packet_id": packet_id,
-            "dispatch_target": "analyst",
-            "allowed_next_node": "pass_to_designer",
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "developer",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path,
-            "result_path": result_path,
-            "receipt_path": "runtime-consumption/host-tool-bridge/analyst-receipt.json",
-            "required_result_fields": [
-                "decision",
-                "verdict",
-                "blocker_codes",
-                "rework_target",
-                "allowed_next_node"
-            ]
-        })
-        .to_string(),
-    )
-    .expect("write request");
+        result_path,
+        receipt_path,
+        &run_id,
+        task_id,
+        &dispatch_target,
+        &carrier_id,
+        &attempt_id,
+        &packet_id,
+        &packet_path,
+    );
+    request["request_id"] = serde_json::json!(request_id);
+    request["backend_id"] = serde_json::json!(backend_id);
+    request["model_profile_id"] = serde_json::json!(profile_id);
+    request["allowed_next_node"] = serde_json::json!("pass_to_designer");
+    fs::write(&request_path, request.to_string()).expect("write request");
 
     let help = run_and_assert_success(&["agent", "host-bridge", "--help"], &state_dir);
     assert!(help.contains("--scaffold-result"));
@@ -19765,17 +20191,18 @@ fn agent_host_bridge_scaffold_result_generates_and_validates_analyst_pass_to_des
     assert_eq!(scaffold["result"]["decision"], "approve");
     assert_eq!(scaffold["result"]["verdict"], "pass");
     assert_eq!(scaffold["result"]["allowed_next_node"], "pass_to_designer");
-    assert_eq!(scaffold["result"]["backend_id"], "internal_subagents");
-    assert_eq!(scaffold["result"]["selected_backend"], "internal_subagents");
+    assert_eq!(scaffold["result"]["backend_id"], backend_id);
+    assert_eq!(scaffold["result"]["selected_backend"], backend_id);
+    assert_eq!(scaffold["result"]["carrier_id"], carrier_id);
     assert_eq!(scaffold["result"]["attempt_id"], attempt_id);
     assert_eq!(scaffold["result"]["packet_id"], packet_id);
     assert_eq!(
         scaffold["result"]["identity_binding"]["request_id"],
-        "req-analyst-scaffold"
+        request_id
     );
     assert_eq!(
         scaffold["result"]["identity_binding"]["run_id"],
-        "runtime-host-bridge-result-scaffold-20260701"
+        run_id
     );
     assert_eq!(
         scaffold["result"]["identity_binding"]["attempt_id"],
@@ -19799,15 +20226,15 @@ fn agent_host_bridge_scaffold_result_generates_and_validates_analyst_pass_to_des
     );
     assert_eq!(
         scaffold["result"]["execution_evidence"]["task_id"],
-        "runtime-host-bridge-result-scaffold-20260701"
+        task_id
     );
     assert_eq!(
         scaffold["result"]["execution_evidence"]["backend_id"],
-        "internal_subagents"
+        backend_id
     );
     assert_eq!(
         scaffold["result"]["execution_evidence"]["selected_backend"],
-        "internal_subagents"
+        backend_id
     );
     assert_eq!(scaffold["artifact_refs"]["state_dir"], state_dir);
     assert!(
@@ -19842,37 +20269,32 @@ fn agent_host_bridge_scaffold_result_generates_and_validates_analyst_pass_to_des
     assert_eq!(validation["status"], "pass");
     assert_eq!(validation["blocker_codes"], serde_json::json!([]));
 
-    let (submitted, submitted_success) = run_command_json_allow_failure(
+    let submitted_output = run_command_capture(
         &[
-            "agent",
-            "host-bridge",
-            "--request",
-            &request_path,
-            "--submit-result",
-            &generated_result_path,
-            "--state-dir",
-            &state_dir,
-            "--host-agent-id",
-            "host-agent-analyst",
-            "--receipt-id",
-            "receipt-analyst-submit",
-            "--json",
+            "agent", "host-bridge", "--request", &request_path, "--submit-result",
+            &generated_result_path, "--state-dir", &state_dir, "--host-agent-id",
+            "host-agent-analyst", "--receipt-id", "receipt-analyst-submit", "--json",
         ],
         &state_dir,
     );
-    let submitted_blockers = submitted["blocker_codes"]
-        .as_array()
-        .expect("submit blockers should render");
-    assert!(
-        !submitted_blockers
+    if submitted_output.status.success() {
+        let submitted: Value = serde_json::from_slice(&submitted_output.stdout)
+            .expect("successful submit should render json");
+        let submitted_blockers = submitted["blocker_codes"]
+            .as_array()
+            .expect("submit blockers should render");
+        assert!(!submitted_blockers
             .iter()
-            .any(|code| code == "host_bridge_result_identity_mismatch:backend_id"),
-        "submit must preserve scaffolded backend identity: {submitted}"
-    );
-    assert!(
-        submitted_success || submitted["status"] == "blocked",
-        "submit must either complete or fail closed after identity validation: {submitted}"
-    );
+            .any(|code| code == "host_bridge_result_identity_mismatch:backend_id"));
+    } else {
+        assert!(
+            String::from_utf8_lossy(&submitted_output.stderr)
+                .contains("not waiting on host bridge completion evidence"),
+            "strict submit blocker should remain actionable: stdout={} stderr={}",
+            String::from_utf8_lossy(&submitted_output.stdout),
+            String::from_utf8_lossy(&submitted_output.stderr)
+        );
+    }
 
     let blocked_result_path = "runtime-consumption/host-tool-bridge/blocked-result.json";
     let blocked = run_command_json(

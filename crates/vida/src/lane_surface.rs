@@ -3167,7 +3167,27 @@ fn reconcile_lane_completion_allowed_next_node(
         return Ok(terminal_closure_target);
     };
     let lawful_requested = if terminal_closure_route(requested) {
-        terminal_closure_target.clone()
+        let configured_lawful_requested = role_selection.and_then(|selection| {
+            let dispatch_contract =
+                &selection.execution_plan["development_flow"]["dispatch_contract"];
+            let requested_target =
+                crate::runtime_assignment_policy::canonical_dispatch_target_name(requested);
+            crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+                .iter()
+                .any(|candidate| {
+                    crate::runtime_assignment_policy::canonical_dispatch_target_name(candidate)
+                        == requested_target
+                })
+                .then(|| {
+                    crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
+                        &selection.execution_plan,
+                        receipt,
+                        requested,
+                    )
+                })
+                .flatten()
+        });
+        configured_lawful_requested.or(terminal_closure_target.clone())
     } else {
         role_selection.and_then(|selection| {
             rework_target
@@ -8289,6 +8309,115 @@ mod tests {
         assert!(
             error.contains("not the next lawful lane after `coach_implementation_gate`"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn lane_completion_terminal_alias_precedence_matrix() {
+        let mut role_selection =
+            lane_complete_role_selection("run-host-bridge-prover-pass-summary");
+        role_selection.execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["prover", "release_closure"],
+                    "lane_catalog": {
+                        "prover": {
+                            "dispatch_target": "verification",
+                            "task_class": "verification",
+                            "stage": "quality_gate",
+                            "runtime_role": "prover"
+                        },
+                        "release_closure": {
+                            "dispatch_target": "release_closure",
+                            "task_class": "release_readiness",
+                            "stage": "release_readiness",
+                            "runtime_role": "prover"
+                        }
+                    }
+                }
+            }
+        });
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.dispatch_target = "verification".to_string();
+        receipt.downstream_dispatch_active_target = Some("verification".to_string());
+        receipt.downstream_dispatch_last_target = Some("verification".to_string());
+        receipt.downstream_dispatch_target = Some("release_closure".to_string());
+
+        assert_eq!(
+            crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
+                &role_selection.execution_plan,
+                &receipt,
+                "release_closure",
+            )
+            .as_deref(),
+            Some("release_closure")
+        );
+        assert!(
+            crate::runtime_dispatch_state::terminal_closure_downstream_target_from_execution_plan(
+                &role_selection.execution_plan,
+                &receipt,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            reconcile_lane_completion_allowed_next_node(
+                "Lane completion",
+                Some(&role_selection),
+                &receipt,
+                Some("release_closure"),
+                Some("release_closure"),
+                None,
+            )
+            .expect("configured release_closure successor should win before terminal alias fallback")
+            .as_deref(),
+            Some("release_closure")
+        );
+
+        let mismatch = reconcile_lane_completion_allowed_next_node(
+            "Lane completion",
+            Some(&role_selection),
+            &receipt,
+            Some("release_closure"),
+            Some("unconfigured_persisted_route"),
+            None,
+        )
+        .expect_err("persisted downstream mismatch must remain rejected");
+        assert!(
+            mismatch.contains("does not match persisted downstream route")
+                && mismatch.contains("unconfigured_persisted_route"),
+            "unexpected error: {mismatch}"
+        );
+
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"] = serde_json::json!(["prover"]);
+        receipt.downstream_dispatch_target = None;
+        assert_eq!(
+            reconcile_lane_completion_allowed_next_node(
+                "Lane completion",
+                Some(&role_selection),
+                &receipt,
+                Some("release_closure"),
+                None,
+                None,
+            )
+            .expect("true terminal alias should use the terminal closure target")
+            .as_deref(),
+            Some("closure")
+        );
+
+        let unknown = reconcile_lane_completion_allowed_next_node(
+            "Lane completion",
+            Some(&role_selection),
+            &receipt,
+            Some("unknown_dispatch_target"),
+            None,
+            None,
+        )
+        .expect_err("unknown dispatch target must remain rejected");
+        assert!(
+            unknown.contains("not the next lawful lane after")
+                && unknown.contains("verification"),
+            "unexpected error: {unknown}"
         );
     }
 

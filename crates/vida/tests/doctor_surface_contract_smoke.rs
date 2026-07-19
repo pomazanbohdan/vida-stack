@@ -6,7 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
-use taskflow_host_bridge::effective_host_bridge_request_with_registry;
+use taskflow_host_bridge::{
+    effective_host_bridge_request_with_registry, HostBridgeAdapterOperations,
+};
 
 #[path = "support/runtime_consumption.rs"]
 mod runtime_consumption;
@@ -60,9 +62,39 @@ impl VidaCommand {
 }
 
 fn is_state_store_read_lock_contention(output: &Output) -> bool {
-    !output.status.success()
-        && (String::from_utf8_lossy(&output.stdout).contains("state_store_read_lock_contention")
-            || String::from_utf8_lossy(&output.stderr).contains("state_store_read_lock_contention"))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    !output.status.success() && is_state_store_read_lock_contention_text(&stdout, &stderr)
+}
+
+fn is_state_store_read_lock_contention_text(stdout: &str, stderr: &str) -> bool {
+    runtime_consumption::has_retryable_state_lock_signal(stdout, stderr)
+}
+
+#[test]
+fn doctor_state_store_lock_retry_classifier_is_narrow() {
+    for retryable in [
+        r#"{"blocker_codes":["authoritative_state_store_locked"]}"#,
+        "blocker_codes[1]: state_store_read_lock_contention",
+        "Failed to open authoritative state store: timed out while waiting for authoritative datastore lock",
+    ] {
+        assert!(
+            is_state_store_read_lock_contention_text(retryable, ""),
+            "transient lock signal should be retryable: {retryable}"
+        );
+    }
+
+    for non_retryable in [
+        r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"permission_access"}"#,
+        r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"storage_corruption"}"#,
+        r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"unknown"}"#,
+        r#"{"blocker_codes":["state_store_surrealkv_wal_replay_corruption"]}"#,
+    ] {
+        assert!(
+            !is_state_store_read_lock_contention_text(non_retryable, ""),
+            "non-lock state failure must not be retried: {non_retryable}"
+        );
+    }
 }
 
 fn vida() -> VidaCommand {
@@ -83,6 +115,283 @@ fn unique_state_dir() -> String {
         "/tmp/vida-doctor-contract-state-{}-{nanos}-{counter}",
         std::process::id()
     )
+}
+
+fn canonical_host_bridge_config() -> serde_json::Value {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vida.config.yaml"
+    )))
+    .expect("canonical VIDA config should parse");
+    serde_json::to_value(yaml).expect("canonical VIDA config should convert to json")
+}
+
+fn canonical_host_bridge_adapter_contract() -> HostBridgeAdapterOperations {
+    let config = canonical_host_bridge_config();
+    let registry = config
+        .pointer("/host_environment/systems/codex/host_tool_bridge")
+        .expect("canonical host bridge registry should exist");
+    HostBridgeAdapterOperations::from_registry_value(registry)
+        .expect("canonical host bridge registry should resolve")
+}
+
+fn canonical_host_bridge_backend_id() -> String {
+    canonical_host_bridge_config()
+        .pointer("/party_chat/single_agent/backend")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("canonical host bridge backend should exist")
+}
+
+fn canonical_host_bridge_execution_boundary() -> String {
+    canonical_host_bridge_config()
+        .pointer("/host_environment/systems/codex/execution_boundary")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("canonical host bridge execution boundary should exist")
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalHostBridgeClosureGate {
+    role_id: String,
+    dispatch_target: String,
+    runtime_role: String,
+    task_class: String,
+    next_role: String,
+    next_runtime_role: String,
+    next_task_class: String,
+}
+
+fn canonical_host_bridge_closure_gate() -> CanonicalHostBridgeClosureGate {
+    let config = canonical_host_bridge_config();
+    let roles = config
+        .pointer("/dev_team/roles")
+        .and_then(serde_json::Value::as_object)
+        .expect("canonical role registry should exist");
+    let (role_id, role) = roles
+        .iter()
+        .find(|(_, role)| {
+            role.pointer("/handoff/next_role")
+                .and_then(serde_json::Value::as_str)
+                == Some("release_closure")
+        })
+        .expect("canonical role handing off to release_closure should exist");
+    let next_role_id = role
+        .pointer("/handoff/next_role")
+        .and_then(serde_json::Value::as_str)
+        .expect("closure gate next role should exist");
+    let next_role_config = roles
+        .get(next_role_id)
+        .expect("canonical next role config should exist");
+    let runtime_role = role
+        .get("runtime_role")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("closure gate runtime role should exist");
+    let task_class = role
+        .get("task_classes")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|classes| classes.iter().find_map(serde_json::Value::as_str))
+        .map(ToOwned::to_owned)
+        .expect("closure gate task class should exist");
+    let dispatch_target = role
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| Some(task_class.as_str()))
+        .map(ToOwned::to_owned)
+        .expect("closure gate dispatch target should exist");
+    CanonicalHostBridgeClosureGate {
+        role_id: role_id.clone(),
+        dispatch_target,
+        runtime_role,
+        task_class,
+        next_role: next_role_id.to_owned(),
+        next_runtime_role: next_role_config
+            .get("runtime_role")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .expect("canonical next role runtime role should exist"),
+        next_task_class: next_role_config
+            .get("task_classes")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|classes| classes.iter().find_map(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .expect("canonical next role task class should exist"),
+    }
+}
+
+fn canonical_host_bridge_carrier_id(runtime_role: &str, task_class: &str) -> String {
+    let config = canonical_host_bridge_config();
+    let agents = config
+        .pointer("/host_environment/codex/agents")
+        .and_then(serde_json::Value::as_object)
+        .expect("canonical host bridge carrier catalog should exist");
+    agents
+        .iter()
+        .filter(|(_, entry)| {
+            let mut roles = entry
+                .get("runtime_roles")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten();
+            let mut task_classes = entry
+                .get("task_classes")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten();
+            roles
+                .any(|role| role.as_str() == Some(runtime_role))
+                && task_classes.any(|class| class.as_str() == Some(task_class))
+        })
+        .map(|(carrier_id, _)| carrier_id.clone())
+        .next()
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|(_, entry)| {
+                    entry.get("default_runtime_role").and_then(serde_json::Value::as_str)
+                        == Some(runtime_role)
+                })
+                .map(|(carrier_id, _)| carrier_id.clone())
+        })
+        .expect("canonical host bridge carrier should support the fixture lane")
+}
+
+fn host_bridge_request_value(
+    request_id: &str,
+    run_id: &str,
+    dispatch_target: &str,
+    runtime_role: &str,
+    task_class: &str,
+    packet_id: &str,
+    attempt_id: &str,
+    packet_path: &str,
+    request_path: &str,
+    result_path: &str,
+    receipt_path: &str,
+) -> serde_json::Value {
+    let contract = canonical_host_bridge_adapter_contract();
+    let adapter_contract_snapshot = contract.to_value();
+    let adapter_contract_hash = blake3::hash(
+        &serde_json::to_vec(&adapter_contract_snapshot)
+            .expect("adapter contract snapshot should serialize"),
+    )
+    .to_hex()
+    .to_string();
+    let adapter_contract_source = format!(
+        "{}{}vida.config.yaml",
+        env!("CARGO_MANIFEST_DIR"),
+        std::path::MAIN_SEPARATOR
+    );
+    let carrier_id = canonical_host_bridge_carrier_id(runtime_role, task_class);
+    let backend_id = canonical_host_bridge_backend_id();
+    let execution_boundary = canonical_host_bridge_execution_boundary();
+    serde_json::json!({
+        "schema_version": 1,
+        "status": "pending",
+        "request_id": request_id,
+        "run_id": run_id,
+        "task_id": run_id,
+        "attempt_id": attempt_id,
+        "packet_id": packet_id,
+        "dispatch_target": dispatch_target,
+        "packet_path": packet_path,
+        "runtime_role": runtime_role,
+        "task_class": task_class,
+        "backend_id": backend_id,
+        "carrier_id": carrier_id,
+        "execution_boundary": execution_boundary,
+        "dispatch_transport": contract.dispatch_transport,
+        "receipt_mode": contract.receipt_mode,
+        "adapter_kind": contract.adapter_kind,
+        "adapter_capability_id": contract.adapter_capability_id,
+        "invocation_mode": contract.invocation_mode,
+        "adapter_operations": adapter_contract_snapshot,
+        "adapter_contract_snapshot": adapter_contract_snapshot,
+        "adapter_contract_hash": adapter_contract_hash,
+        "adapter_contract_source": adapter_contract_source,
+        "request_path": request_path,
+        "result_path": result_path,
+        "receipt_path": receipt_path
+    })
+}
+
+fn host_bridge_result_with_request_identity(
+    mut result: serde_json::Value,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    const IDENTITY_FIELDS: &[&str] = &[
+        "request_id",
+        "run_id",
+        "task_id",
+        "attempt_id",
+        "packet_id",
+        "packet_path",
+        "result_path",
+        "receipt_path",
+        "dispatch_target",
+        "backend_id",
+        "carrier_id",
+        "adapter_kind",
+        "adapter_capability_id",
+        "invocation_mode",
+        "dispatch_transport",
+        "receipt_mode",
+        "adapter_contract_source",
+        "adapter_contract_snapshot",
+        "adapter_contract_hash",
+        "adapter_operations",
+        "request_path",
+    ];
+    if let Some(object) = result.as_object_mut() {
+        for field in IDENTITY_FIELDS {
+            if let Some(value) = request.get(*field) {
+                object.insert((*field).to_string(), value.clone());
+            }
+        }
+    }
+    result
+}
+
+fn host_bridge_receipt_with_request_identity(
+    mut receipt: serde_json::Value,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    const IDENTITY_FIELDS: &[&str] = &[
+        "request_id",
+        "run_id",
+        "task_id",
+        "attempt_id",
+        "packet_id",
+        "dispatch_target",
+        "backend_id",
+        "carrier_id",
+        "adapter_kind",
+        "adapter_capability_id",
+        "invocation_mode",
+        "dispatch_transport",
+        "receipt_mode",
+        "adapter_contract_source",
+        "adapter_contract_snapshot",
+        "adapter_contract_hash",
+        "adapter_operations",
+        "request_path",
+        "result_path",
+        "receipt_path",
+    ];
+    let object = receipt
+        .as_object_mut()
+        .expect("host bridge receipt should be an object");
+    for field in IDENTITY_FIELDS {
+        if let Some(value) = request.get(*field) {
+            object.insert((*field).to_string(), value.clone());
+        }
+    }
+    if let Some(packet_path) = request.get("packet_path") {
+        object.insert("dispatch_packet_path".to_string(), packet_path.clone());
+        object.insert("source_dispatch_packet_path".to_string(), packet_path.clone());
+    }
+    receipt
 }
 
 fn project_bound_state_dir() -> (String, String) {
@@ -2637,24 +2946,19 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
     std::fs::write(&packet_path, "{}").expect("dispatch packet should be written");
     std::fs::write(
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-host-bridge",
-            "run_id": "run-host-bridge",
-            "dispatch_target": "implementation",
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "junior",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path,
-            "result_path": result_path,
-            "receipt_path": receipt_path
-        })
+        host_bridge_request_value(
+            "req-host-bridge",
+            "run-host-bridge",
+            "implementation",
+            "worker",
+            "implementation",
+            "packet-host-bridge",
+            "attempt-host-bridge",
+            &packet_path,
+            &request_path,
+            &result_path,
+            &receipt_path,
+        )
         .to_string(),
     )
     .expect("host bridge request should be written");
@@ -2838,14 +3142,23 @@ fn persist_host_bridge_lane_receipt_with_helper(
     activation_result_path: &str,
     dispatch_target: &str,
 ) {
-    let (downstream_target, task_class) = match dispatch_target {
-        "coach" => ("tester", "coach"),
-        "tester" => ("reviewer", "verification"),
-        "reviewer" => ("release_closure", "review"),
-        _ => ("developer", "implementation"),
+    let closure_gate = canonical_host_bridge_closure_gate();
+    let pass_case = run_id.contains("-pass");
+    let receipt_dispatch_target = if dispatch_target == closure_gate.role_id {
+        closure_gate.dispatch_target.clone()
+    } else {
+        dispatch_target.to_string()
     };
-    let lifecycle_stage = format!("{dispatch_target}_blocked");
-    let resume_target = format!("dispatch.{dispatch_target}");
+    let (downstream_target, task_class) = match dispatch_target {
+        "coach" => ("tester".to_string(), "coach".to_string()),
+        "tester" => (closure_gate.role_id.clone(), "verification".to_string()),
+        target if target == closure_gate.role_id => {
+            (closure_gate.next_role.clone(), closure_gate.task_class.clone())
+        }
+        _ => ("developer".to_string(), "implementation".to_string()),
+    };
+    let lifecycle_stage = format!("{receipt_dispatch_target}_blocked");
+    let resume_target = format!("dispatch.{receipt_dispatch_target}");
     let helper = std::env::current_exe().expect("current test binary should resolve");
     let output = Command::new(helper)
         .args([
@@ -2858,7 +3171,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
         .env(runtime_consumption::RECEIPT_HELPER_RUN_ID_ENV, run_id)
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
-            dispatch_target,
+            &receipt_dispatch_target,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
@@ -2866,7 +3179,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV,
-            downstream_target,
+            &downstream_target,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV,
@@ -2874,15 +3187,27 @@ fn persist_host_bridge_lane_receipt_with_helper(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_READY_ENV,
-            "false",
+            if pass_case { "true" } else { "false" },
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV,
-            "blocked",
+            if pass_case { "packet_ready" } else { "blocked" },
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV,
-            "pending_host_bridge_completion",
+            if pass_case {
+                ""
+            } else {
+                "pending_host_bridge_completion"
+            },
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV,
+            if pass_case {
+                &receipt_dispatch_target
+            } else {
+                ""
+            },
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_RESULT_PATH_ENV,
@@ -2985,6 +3310,7 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
     downstream_ready: &str,
     downstream_status: &str,
 ) {
+    let closure_gate = canonical_host_bridge_closure_gate();
     let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let downstream_packet_dir =
@@ -3018,8 +3344,8 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
                                 "developer_rework",
                                 "coach",
                                 "tester",
-                                "reviewer",
-                                "release_closure"
+                                closure_gate.role_id.clone(),
+                                closure_gate.next_role.clone()
                             ],
                             "lane_catalog": {
                                 "developer": {
@@ -3046,17 +3372,17 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
                                     "stage": "verification",
                                     "runtime_role": "verifier"
                                 },
-                                "reviewer": {
-                                    "dispatch_target": "reviewer",
-                                    "task_class": "review",
-                                    "stage": "review",
-                                    "runtime_role": "verifier"
+                                (closure_gate.role_id.clone()): {
+                                    "dispatch_target": closure_gate.dispatch_target.clone(),
+                                    "task_class": closure_gate.task_class,
+                                    "stage": "quality_gate",
+                                    "runtime_role": closure_gate.runtime_role
                                 },
-                                "release_closure": {
-                                    "dispatch_target": "release_closure",
-                                    "task_class": "release_readiness",
+                                (closure_gate.next_role.clone()): {
+                                    "dispatch_target": closure_gate.next_role.clone(),
+                                    "task_class": closure_gate.next_task_class.clone(),
                                     "stage": "release_readiness",
-                                    "runtime_role": "release"
+                                    "runtime_role": closure_gate.next_runtime_role.clone()
                                 }
                             }
                         }
@@ -3311,11 +3637,24 @@ fn create_host_bridge_lane_fixture_for_target(
     let result_path = format!("{bridge_dir}/{test_name}-result.json");
     let bridge_receipt_path = format!("{bridge_dir}/{test_name}-receipt.json");
     let activation_result_path = format!("{activation_dir}/{test_name}-activation.json");
+    let packet_id = format!("{test_name}-packet");
+    let attempt_id = format!("{test_name}-attempt");
+    let closure_gate = canonical_host_bridge_closure_gate();
+    let pass_case = test_name.contains("-pass");
     let (task_class, runtime_role, downstream_target) = match dispatch_target {
         "coach" => ("coach", "coach", "tester"),
-        "tester" => ("verification", "verifier", "reviewer"),
-        "reviewer" => ("review", "verifier", "release_closure"),
+        "tester" => ("verification", "verifier", closure_gate.role_id.as_str()),
+        target if target == closure_gate.role_id => (
+            closure_gate.task_class.as_str(),
+            closure_gate.runtime_role.as_str(),
+            closure_gate.next_role.as_str(),
+        ),
         _ => ("implementation", "worker", "developer"),
+    };
+    let request_dispatch_target = if dispatch_target == closure_gate.role_id {
+        closure_gate.dispatch_target.as_str()
+    } else {
+        dispatch_target
     };
     let role_selection_full = serde_json::json!({
         "ok": true,
@@ -3341,8 +3680,8 @@ fn create_host_bridge_lane_fixture_for_target(
                         "developer_rework",
                         "coach",
                         "tester",
-                        "reviewer",
-                        "release_closure"
+                        closure_gate.role_id.clone(),
+                        closure_gate.next_role.clone()
                     ],
                     "lane_catalog": {
                         "implementer": {
@@ -3375,34 +3714,72 @@ fn create_host_bridge_lane_fixture_for_target(
                             "stage": "verification",
                             "runtime_role": "verifier"
                         },
-                        "reviewer": {
-                            "dispatch_target": "reviewer",
-                            "task_class": "review",
-                            "stage": "review",
-                            "runtime_role": "verifier"
+                        (closure_gate.role_id.clone()): {
+                            "dispatch_target": closure_gate.dispatch_target.clone(),
+                            "task_class": closure_gate.task_class.clone(),
+                            "stage": "quality_gate",
+                            "runtime_role": closure_gate.runtime_role.clone()
                         },
-                        "release_closure": {
-                            "dispatch_target": "release_closure",
-                            "task_class": "release_readiness",
+                        (closure_gate.next_role.clone()): {
+                            "dispatch_target": closure_gate.next_role.clone(),
+                            "task_class": closure_gate.next_task_class.clone(),
                             "stage": "release_readiness",
-                            "runtime_role": "release"
+                            "runtime_role": closure_gate.next_runtime_role.clone()
                         }
                     }
                 }
             }
         }
     });
+    let canonical_request = host_bridge_request_value(
+        test_name,
+        &run_id,
+        request_dispatch_target,
+        runtime_role,
+        task_class,
+        &packet_id,
+        &attempt_id,
+        &packet_path,
+        &request_path,
+        &result_path,
+        &bridge_receipt_path,
+    );
+    let downstream_dispatch_active_target = if pass_case {
+        request_dispatch_target
+    } else {
+        "implementer"
+    };
+    let downstream_dispatch_ready = pass_case;
+    let downstream_dispatch_status = if pass_case { "packet_ready" } else { "blocked" };
+    let downstream_lane_status = if pass_case { "lane_ready" } else { "lane_blocked" };
+    let downstream_dispatch_blockers = if pass_case {
+        Vec::<&str>::new()
+    } else {
+        vec!["pending_implementation_evidence"]
+    };
+    let request_task_id = canonical_request
+        .get("task_id")
+        .cloned()
+        .expect("canonical host bridge request should include task_id");
 
     std::fs::write(
         &packet_path,
         serde_json::json!({
             "run_id": run_id,
+            "task_id": request_task_id.clone(),
+            "packet_id": packet_id,
+            "attempt_id": attempt_id,
             "dispatch_target": dispatch_target,
+            "backend_id": canonical_host_bridge_backend_id(),
             "activation_runtime_role": runtime_role,
             "packet_template_kind": "delivery_task_packet",
             "owned_paths": ["crates/vida/src/lib.rs"],
             "read_only_paths": ["crates/vida/src"],
             "delivery_task_packet": {
+                "task_id": request_task_id,
+                "packet_id": packet_id,
+                "attempt_id": attempt_id,
+                "backend_id": canonical_host_bridge_backend_id(),
                 "goal": "Complete host bridge lane evidence.",
                 "scope_in": [format!("dispatch_target:{dispatch_target}")],
                 "handoff_task_class": task_class,
@@ -3416,11 +3793,11 @@ fn create_host_bridge_lane_fixture_for_target(
                 "blocking_question": "none"
             },
             "downstream_dispatch_target": downstream_target,
-            "downstream_dispatch_active_target": "implementer",
-            "downstream_dispatch_ready": false,
-            "downstream_dispatch_blockers": ["pending_implementation_evidence"],
-            "downstream_dispatch_status": "blocked",
-            "downstream_lane_status": "lane_blocked",
+            "downstream_dispatch_active_target": downstream_dispatch_active_target,
+            "downstream_dispatch_ready": downstream_dispatch_ready,
+            "downstream_dispatch_blockers": downstream_dispatch_blockers,
+            "downstream_dispatch_status": downstream_dispatch_status,
+            "downstream_lane_status": downstream_lane_status,
             "run_graph_bootstrap": {},
             "role_selection_full": role_selection_full
         })
@@ -3430,27 +3807,36 @@ fn create_host_bridge_lane_fixture_for_target(
 
     std::fs::write(
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": test_name,
-            "run_id": run_id,
-            "task_id": run_id,
-            "dispatch_target": dispatch_target,
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "middle",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "implementation_isolation": {
-                "schema_version": "implementation-isolation-v1",
-                "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                "owned_paths": ["crates/vida/src/lib.rs"]
-            },
-            "implementation_artifacts": [],
-            "result_path": result_path,
-            "receipt_path": bridge_receipt_path
+        canonical_request
+        .as_object()
+        .map(|request| {
+            let mut request = request.clone();
+            request.insert(
+                "implementation_isolation".to_string(),
+                serde_json::json!({
+                    "schema_version": "implementation-isolation-v1",
+                    "canonical_worktree_writes_allowed": false,
+                    "default_mode": "patch_proposal",
+                    "allowed_modes": ["patch_proposal", "isolated_worktree"],
+                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                    "owned_paths": ["crates/vida/src/lib.rs"],
+                    "required_result_fields": [
+                        "artifact_kind",
+                        "attempt_id",
+                        "task_id",
+                        "stage_id",
+                        "changed_files"
+                    ],
+                    "scope_policy": {
+                        "changed_files_must_be_subset_of_owned_paths": true,
+                        "patch_paths_must_be_subset_of_owned_paths": true
+                    }
+                }),
+            );
+            request.insert("implementation_artifacts".to_string(), serde_json::json!([]));
+            serde_json::Value::Object(request)
         })
+        .expect("host bridge request should be an object")
         .to_string(),
     )
     .expect("request should be written");
@@ -3725,6 +4111,7 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
 
 #[test]
 fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions() {
+    let closure_gate = canonical_host_bridge_closure_gate();
     let cases = [
         (
             "coach",
@@ -3748,7 +4135,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "reviewer",
+            closure_gate.dispatch_target.as_str(),
         ),
         (
             "tester",
@@ -3759,20 +4146,20 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             "developer_rework",
         ),
         (
-            "reviewer",
-            "reviewer decision=approve; proof review accepted",
+            closure_gate.role_id.as_str(),
+            "configured closure-gate decision=approve; proof review accepted",
             true,
             None,
             None,
-            "release_closure",
+            closure_gate.next_role.as_str(),
         ),
         (
-            "reviewer",
-            "reviewer decision=blocked; proof review needs tester rework",
+            closure_gate.role_id.as_str(),
+            "configured closure-gate decision=blocked; proof review needs tester rework",
             false,
             Some("review_rework_required"),
             Some("tester"),
-            "tester",
+            closure_gate.next_role.as_str(),
         ),
     ];
 
@@ -3785,6 +4172,22 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             "crates/vida/src/lib.rs",
             target,
         );
+        if target == closure_gate.role_id.as_str() {
+            let packet: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(&fixture.packet_path)
+                    .expect("quality gate dispatch packet should exist"),
+            )
+            .expect("quality gate dispatch packet should parse");
+            let lane = packet
+                .pointer(&format!(
+                    "/role_selection_full/execution_plan/development_flow/dispatch_contract/lane_catalog/{}",
+                    closure_gate.role_id
+                ))
+                .expect("closure gate lane catalog row should exist");
+            assert_eq!(lane["dispatch_target"], closure_gate.dispatch_target);
+            assert_eq!(lane["runtime_role"], closure_gate.runtime_role);
+            assert_eq!(lane["task_class"], closure_gate.task_class);
+        }
         let receipt_id = format!(
             "host-bridge-{target}-{}-summary-receipt",
             if should_pass { "pass" } else { "blocked" }
@@ -4058,7 +4461,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
     .expect("request should write");
     std::fs::write(
         &fixture.result_path,
-        serde_json::json!({
+        host_bridge_result_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "status": "blocked",
             "request_id": "host-bridge-public-retry",
@@ -4073,13 +4476,13 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "blocker_codes": ["implementation_artifacts_missing"],
             "rework_target": "developer",
             "allowed_next_node": "developer"
-        })
+        }), &request)
         .to_string(),
     )
     .expect("blocked bridge result should write");
     std::fs::write(
         &fixture.bridge_receipt_path,
-        serde_json::json!({
+        host_bridge_receipt_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_receipt",
             "status": "blocked",
             "request_id": "host-bridge-public-retry",
@@ -4090,7 +4493,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "dispatch_packet_path": &fixture.packet_path,
             "blocker_code": "implementation_artifacts_missing",
             "blocker_codes": ["implementation_artifacts_missing"]
-        })
+        }), &request)
         .to_string(),
     )
     .expect("blocked bridge receipt should write");
@@ -4123,7 +4526,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
     let corrected_result_path = std::path::PathBuf::from(&fixture.result_path);
     std::fs::write(
         &corrected_result_path,
-        serde_json::json!({
+        host_bridge_result_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "status": "pass",
             "execution_state": "executed",
@@ -4139,7 +4542,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "execution_evidence": {
                 "receipt_backed": true
             }
-        })
+        }), &request)
         .to_string(),
     )
     .expect("corrected bridge result should write");
@@ -4203,7 +4606,7 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
 
     std::fs::write(
         &fixture.result_path,
-        serde_json::json!({
+        host_bridge_result_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "status": "blocked",
             "execution_state": "executed",
@@ -4221,7 +4624,7 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
             "execution_evidence": {
                 "receipt_backed": true
             }
-        })
+        }), &request)
         .to_string(),
     )
     .expect("rework bridge result should write");
@@ -4530,7 +4933,7 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
 
     std::fs::write(
         &fixture.result_path,
-        serde_json::json!({
+        host_bridge_result_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "status": "blocked",
             "execution_state": "executed",
@@ -4548,13 +4951,13 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
             "execution_evidence": {
                 "receipt_backed": true
             }
-        })
+        }), &request)
         .to_string(),
     )
     .expect("rework bridge result should write");
     std::fs::write(
         &fixture.bridge_receipt_path,
-        serde_json::json!({
+        host_bridge_receipt_with_request_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_receipt",
             "status": "blocked",
             "completion_receipt_id": "stale-public-retry-receipt",
@@ -4564,7 +4967,7 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
             "dispatch_target": "coach",
             "backend_id": "internal_subagents",
             "dispatch_packet_path": &fixture.packet_path
-        })
+        }), &request)
         .to_string(),
     )
     .expect("stale canonical receipt should write");
@@ -4674,9 +5077,20 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         .env("VIDA_STATE_DIR", &fixture.state_dir)
         .output()
         .expect("lane show should run");
-    assert_failure(&lane_show, "lane show stale receipt guidance");
-    let lane_payload: serde_json::Value =
-        serde_json::from_slice(&lane_show.stdout).expect("lane show json should parse");
+    assert!(
+        !lane_show.status.success(),
+        "lane show stale receipt guidance should fail closed: stdout={} stderr={}",
+        String::from_utf8_lossy(&lane_show.stdout),
+        String::from_utf8_lossy(&lane_show.stderr)
+    );
+    let lane_payload: serde_json::Value = serde_json::from_slice(&lane_show.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "lane show json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&lane_show.stdout),
+                String::from_utf8_lossy(&lane_show.stderr)
+            )
+        });
     assert_eq!(
         lane_payload["recommended_surface"],
         "vida agent host-bridge"
@@ -4685,6 +5099,7 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         .as_str()
         .expect("recommended command")
         .contains(&fixture.request_path));
+    drop(lane_show);
 
     let output = vida()
         .args([
@@ -7687,12 +8102,16 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     assert_not_json_output("vida taskflow consume continue", &default_toon_stdout);
     assert_no_raw_terminal_controls("vida taskflow consume continue", &default_toon_stdout);
     assert!(
-        default_toon_stdout.contains("stale_missing_task_run_graph"),
-        "default consume continue should expose the shared stale-run blocker: {default_toon_stdout}"
+        !default_toon_stdout.contains("stale_missing_task_run_graph"),
+        "ownerless default consume must not adopt the missing-task run graph: {default_toon_stdout}"
     );
     assert!(
-        default_toon_stdout.contains("vida lane retire"),
-        "default consume continue should expose the shared repair action: {default_toon_stdout}"
+        default_toon_stdout.contains("consume_continue_resume_blocked"),
+        "ownerless default consume should expose the unbound continuation blocker: {default_toon_stdout}"
+    );
+    assert!(
+        default_toon_stdout.contains("vida taskflow recovery latest"),
+        "ownerless default consume should expose the shared recovery action: {default_toon_stdout}"
     );
     assert!(
         !default_toon_stdout.contains("--json"),
@@ -7713,7 +8132,15 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     assert_eq!(default_consume_json["status"], "blocked");
     assert_eq!(
         default_consume_json["blocker_codes"],
-        serde_json::json!(["stale_missing_task_run_graph"])
+        serde_json::json!(["consume_continue_resume_blocked"])
+    );
+    assert_eq!(
+        default_consume_json["artifact_refs"]["run_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        default_consume_json["artifact_refs"]["task_id"],
+        serde_json::Value::Null
     );
     assert_ne!(
         default_consume_json["blocker_codes"],

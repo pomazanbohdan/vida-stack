@@ -2,8 +2,247 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use taskflow_host_bridge::HostBridgeAdapterOperations;
+
 fn vida() -> Command {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+}
+
+fn canonical_host_bridge_config_path() -> PathBuf {
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida.config.yaml");
+    std::fs::canonicalize(&source_path).unwrap_or_else(|error| {
+        panic!(
+            "canonical VIDA config source should exist at {}: {error}",
+            source_path.display()
+        )
+    })
+}
+
+fn canonical_host_bridge_config() -> serde_json::Value {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vida.config.yaml"
+    )))
+    .expect("canonical VIDA config should parse");
+    serde_json::to_value(yaml).expect("canonical VIDA config should convert to json")
+}
+
+#[test]
+fn host_bridge_fixture_config_source_is_canonical_worktree_root_path() {
+    let source_path = canonical_host_bridge_config_path();
+    assert!(source_path.is_file(), "canonical config should be a file");
+    let worktree_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("vida crate should have a worktree root ancestor")
+        .join("vida.config.yaml");
+    assert_eq!(
+        source_path,
+        std::fs::canonicalize(&worktree_root).expect("worktree-root config should exist")
+    );
+}
+
+fn canonical_host_bridge_adapter_contract() -> HostBridgeAdapterOperations {
+    let config = canonical_host_bridge_config();
+    let registry = config
+        .pointer("/host_environment/systems/codex/host_tool_bridge")
+        .expect("canonical host bridge registry should exist");
+    HostBridgeAdapterOperations::from_registry_value(registry)
+        .expect("canonical host bridge registry should resolve")
+}
+
+fn canonical_host_bridge_backend_id() -> String {
+    canonical_host_bridge_config()
+        .pointer("/party_chat/single_agent/backend")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("canonical host bridge backend should exist")
+}
+
+fn canonical_host_bridge_execution_boundary() -> String {
+    canonical_host_bridge_config()
+        .pointer("/host_environment/systems/codex/execution_boundary")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("canonical host bridge execution boundary should exist")
+}
+
+fn canonical_host_bridge_carrier_id(runtime_role: &str, task_class: &str) -> String {
+    let config = canonical_host_bridge_config();
+    let agents = config
+        .pointer("/host_environment/codex/agents")
+        .and_then(serde_json::Value::as_object)
+        .expect("canonical host bridge carrier catalog should exist");
+    agents
+        .iter()
+        .find(|(_, entry)| {
+            entry
+                .get("runtime_roles")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|role| role.as_str() == Some(runtime_role))
+                && entry
+                    .get("task_classes")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|class| class.as_str() == Some(task_class))
+        })
+        .map(|(carrier_id, _)| carrier_id.clone())
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|(_, entry)| {
+                    entry.get("default_runtime_role").and_then(serde_json::Value::as_str)
+                        == Some(runtime_role)
+                })
+                .map(|(carrier_id, _)| carrier_id.clone())
+        })
+        .expect("canonical host bridge carrier should support the fixture lane")
+}
+
+fn strict_host_bridge_request(
+    mut request: serde_json::Value,
+    packet_id: &str,
+    attempt_id: &str,
+    packet_path: &Path,
+    request_path: &Path,
+    result_path: &Path,
+    receipt_path: &Path,
+) -> serde_json::Value {
+    let object = request
+        .as_object_mut()
+        .expect("host bridge request fixture should be an object");
+    let run_id = object
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("host bridge request should supply run_id")
+        .to_owned();
+    let runtime_role = object
+        .get("runtime_role")
+        .and_then(serde_json::Value::as_str)
+        .expect("host bridge request should supply runtime_role")
+        .to_owned();
+    let task_class = object
+        .get("task_class")
+        .and_then(serde_json::Value::as_str)
+        .expect("host bridge request should supply task_class")
+        .to_owned();
+    let contract = canonical_host_bridge_adapter_contract();
+    let adapter_contract_snapshot = contract.to_value();
+    let adapter_contract_hash = blake3::hash(
+        &serde_json::to_vec(&adapter_contract_snapshot)
+            .expect("adapter contract snapshot should serialize"),
+    )
+    .to_hex()
+    .to_string();
+    object.insert("schema_version".to_owned(), serde_json::json!(1));
+    object.insert("status".to_owned(), serde_json::json!("pending"));
+    object
+        .entry("task_id".to_owned())
+        .or_insert_with(|| serde_json::json!(run_id));
+    object.insert("attempt_id".to_owned(), serde_json::json!(attempt_id));
+    object.insert("packet_id".to_owned(), serde_json::json!(packet_id));
+    object
+        .entry("packet_path".to_owned())
+        .or_insert_with(|| serde_json::json!(packet_path.display().to_string()));
+    object.insert(
+        "backend_id".to_owned(),
+        serde_json::json!(canonical_host_bridge_backend_id()),
+    );
+    object.insert(
+        "carrier_id".to_owned(),
+        serde_json::json!(canonical_host_bridge_carrier_id(&runtime_role, &task_class)),
+    );
+    object.insert(
+        "execution_boundary".to_owned(),
+        serde_json::json!(canonical_host_bridge_execution_boundary()),
+    );
+    object.insert(
+        "dispatch_transport".to_owned(),
+        serde_json::json!(contract.dispatch_transport),
+    );
+    object.insert("receipt_mode".to_owned(), serde_json::json!(contract.receipt_mode));
+    object.insert("adapter_kind".to_owned(), serde_json::json!(contract.adapter_kind));
+    object.insert(
+        "adapter_capability_id".to_owned(),
+        serde_json::json!(contract.adapter_capability_id),
+    );
+    object.insert(
+        "invocation_mode".to_owned(),
+        serde_json::json!(contract.invocation_mode),
+    );
+    object.insert(
+        "adapter_operations".to_owned(),
+        adapter_contract_snapshot.clone(),
+    );
+    object.insert(
+        "adapter_contract_snapshot".to_owned(),
+        adapter_contract_snapshot,
+    );
+    object.insert(
+        "adapter_contract_hash".to_owned(),
+        serde_json::json!(adapter_contract_hash),
+    );
+    object.insert(
+        "adapter_contract_source".to_owned(),
+        serde_json::json!(canonical_host_bridge_config_path().display().to_string()),
+    );
+    object
+        .entry("request_path".to_owned())
+        .or_insert_with(|| serde_json::json!(request_path.display().to_string()));
+    object
+        .entry("result_path".to_owned())
+        .or_insert_with(|| serde_json::json!(result_path.display().to_string()));
+    object
+        .entry("receipt_path".to_owned())
+        .or_insert_with(|| serde_json::json!(receipt_path.display().to_string()));
+    request
+}
+
+fn project_host_bridge_result_identity(
+    mut result: serde_json::Value,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    const IDENTITY_FIELDS: &[&str] = &[
+        "request_id",
+        "run_id",
+        "task_id",
+        "attempt_id",
+        "packet_id",
+        "packet_path",
+        "result_path",
+        "receipt_path",
+        "dispatch_target",
+        "backend_id",
+        "carrier_id",
+        "adapter_kind",
+        "adapter_capability_id",
+        "invocation_mode",
+        "dispatch_transport",
+        "receipt_mode",
+        "adapter_contract_source",
+        "adapter_contract_snapshot",
+        "adapter_contract_hash",
+        "adapter_operations",
+        "request_path",
+    ];
+    let object = result
+        .as_object_mut()
+        .expect("host bridge result fixture should be an object");
+    for field in IDENTITY_FIELDS {
+        if let Some(value) = request.get(*field) {
+            object.insert((*field).to_owned(), value.clone());
+        }
+    }
+    if let Some(packet_path) = request.get("packet_path") {
+        object.insert(
+            "source_dispatch_packet_path".to_owned(),
+            packet_path.clone(),
+        );
+    }
+    result
 }
 
 fn unique_lane_state_root(prefix: &str) -> std::path::PathBuf {
@@ -64,9 +303,7 @@ fn create_host_bridge_fixture(prefix: &str) -> HostBridgeFixture {
     let invalid_result_path = bridge_dir.join("invalid-next-lane.json");
     let stale_result_path = bridge_dir.join("stale-result.json");
     let missing_result_path = bridge_dir.join("missing-result.json");
-    std::fs::write(&packet_path, "{}").expect("write packet");
-    std::fs::write(
-        &request_path,
+    let request = strict_host_bridge_request(
         serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -76,13 +313,8 @@ fn create_host_bridge_fixture(prefix: &str) -> HostBridgeFixture {
             "dispatch_target": "analyst",
             "allowed_next_node": "designer",
             "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "developer",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
+            "runtime_role": "business_analyst",
+            "task_class": "specification",
             "request_path": request_path,
             "result_path": result_path,
             "receipt_path": bridge_dir.join("receipt.json"),
@@ -93,8 +325,30 @@ fn create_host_bridge_fixture(prefix: &str) -> HostBridgeFixture {
                 "rework_target",
                 "allowed_next_node"
             ]
+        }),
+        "packet-zombie-d-analyst",
+        "attempt-zombie-d-analyst",
+        &packet_path,
+        &request_path,
+        &result_path,
+        &bridge_dir.join("receipt.json"),
+    );
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": request["run_id"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"],
+            "dispatch_target": request["dispatch_target"]
         })
         .to_string(),
+    )
+    .expect("write packet");
+    std::fs::write(
+        &request_path,
+        request.to_string(),
     )
     .expect("write request");
     HostBridgeFixture {
@@ -150,9 +404,43 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
     let packet_path = packet_dir.join("gamma-review.json");
     let request_path = bridge_dir.join("gamma-review-request.json");
     let result_path = bridge_dir.join("gamma-review-terminal-closure.json");
+    let request = strict_host_bridge_request(
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-gamma-review",
+            "run_id": "run-gamma-review",
+            "task_id": "run-gamma-review",
+            "dispatch_target": "gamma_review",
+            "allowed_next_node": "reviewer",
+            "runtime_role": "verifier",
+            "task_class": "review",
+            "packet_path": packet_path,
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": bridge_dir.join("receipt.json"),
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "allowed_next_node"
+            ]
+        }),
+        "packet-gamma-review",
+        "attempt-gamma-review",
+        &packet_path,
+        &request_path,
+        &result_path,
+        &bridge_dir.join("receipt.json"),
+    );
     std::fs::write(
         &packet_path,
         serde_json::json!({
+            "run_id": request["run_id"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"],
             "dispatch_target": "gamma_review",
             "role_selection_full": {
                 "execution_plan": {
@@ -193,47 +481,16 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
     .expect("write packet");
     std::fs::write(
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-gamma-review",
-            "run_id": "run-gamma-review",
-            "task_id": "run-gamma-review",
-            "dispatch_target": "gamma_review",
-            "allowed_next_node": "reviewer",
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "reviewer",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path,
-            "result_path": result_path,
-            "receipt_path": bridge_dir.join("receipt.json"),
-            "required_result_fields": [
-                "decision",
-                "verdict",
-                "blocker_codes",
-                "allowed_next_node"
-            ]
-        })
-        .to_string(),
+        request.to_string(),
     )
     .expect("write request");
     std::fs::write(
         &result_path,
-        serde_json::json!({
+        project_host_bridge_result_identity(serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "schema_version": 1,
             "status": "pass",
             "execution_state": "completed",
-            "request_id": "req-gamma-review",
-            "run_id": "run-gamma-review",
-            "task_id": "run-gamma-review",
-            "dispatch_target": "gamma_review",
-            "backend_id": "internal_subagents",
             "decision": "approve",
             "verdict": "pass",
             "completion_verdict": "pass",
@@ -242,7 +499,7 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
             "allowed_next_node": "terminal_closure",
             "execution_evidence": {"receipt_backed": true},
             "source_dispatch_packet_path": packet_path
-        })
+        }), &request)
         .to_string(),
     )
     .expect("write terminal closure result");
@@ -265,9 +522,45 @@ fn create_host_bridge_rework_fixture(prefix: &str) -> HostBridgeReworkFixture {
     let request_path = bridge_dir.join("coach-request.json");
     let result_path = bridge_dir.join("coach-rework.json");
     let pass_result_path = bridge_dir.join("coach-pass-invalid-rework.json");
+    let request = strict_host_bridge_request(
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-coach-rework",
+            "run_id": "run-coach-rework",
+            "task_id": "run-coach-rework",
+            "dispatch_target": "coach_implementation_gate",
+            "allowed_next_node": "tester",
+            "runtime_role": "coach",
+            "task_class": "coach",
+            "packet_path": packet_path,
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": bridge_dir.join("receipt.json"),
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ]
+        }),
+        "packet-coach-rework",
+        "attempt-coach-rework",
+        &packet_path,
+        &request_path,
+        &result_path,
+        &bridge_dir.join("receipt.json"),
+    );
     std::fs::write(
         &packet_path,
         serde_json::json!({
+            "run_id": request["run_id"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"],
+            "dispatch_target": request["dispatch_target"],
             "role_selection_full": {
                 "execution_plan": {
                     "development_flow": {
@@ -305,46 +598,14 @@ fn create_host_bridge_rework_fixture(prefix: &str) -> HostBridgeReworkFixture {
     .expect("write packet");
     std::fs::write(
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-coach-rework",
-            "run_id": "run-coach-rework",
-            "task_id": "run-coach-rework",
-            "dispatch_target": "coach_implementation_gate",
-            "allowed_next_node": "tester",
-            "packet_path": packet_path,
-            "backend_id": "internal_subagents",
-            "carrier_id": "coach",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path,
-            "result_path": result_path,
-            "receipt_path": bridge_dir.join("receipt.json"),
-            "required_result_fields": [
-                "decision",
-                "verdict",
-                "blocker_codes",
-                "rework_target",
-                "allowed_next_node"
-            ]
-        })
-        .to_string(),
+        request.to_string(),
     )
     .expect("write request");
-    let rework_result = serde_json::json!({
+    let rework_result = project_host_bridge_result_identity(serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
         "status": "blocked",
         "execution_state": "blocked",
-        "request_id": "req-coach-rework",
-        "run_id": "run-coach-rework",
-        "task_id": "run-coach-rework",
-        "dispatch_target": "coach_implementation_gate",
-        "backend_id": "internal_subagents",
         "decision": "rework_required",
         "verdict": "rework_required",
         "completion_verdict": "rework_required",
@@ -353,7 +614,7 @@ fn create_host_bridge_rework_fixture(prefix: &str) -> HostBridgeReworkFixture {
         "allowed_next_node": "developer_rework",
         "execution_evidence": {"receipt_backed": true},
         "source_dispatch_packet_path": packet_path
-    });
+    }), &request);
     std::fs::write(&result_path, rework_result.to_string()).expect("write rework result");
     let mut pass_result = rework_result;
     pass_result["status"] = serde_json::json!("pass");
@@ -483,20 +744,7 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
         .expect("create packet parent");
     std::fs::create_dir_all(request_path.parent().expect("request parent"))
         .expect("create request parent");
-    std::fs::write(
-        &packet_path,
-        serde_json::json!({
-            "packet_kind": "runtime_dispatch_packet",
-            "run_id": "run-analyst",
-            "dispatch_target": "analyst",
-            "downstream_dispatch_active_target": "analyst",
-            "downstream_dispatch_target": "designer"
-        })
-        .to_string(),
-    )
-    .expect("write packet");
-    std::fs::write(
-        &request_path,
+    let request = strict_host_bridge_request(
         serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -505,21 +753,39 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
             "task_id": "run-analyst",
             "dispatch_target": "analyst",
             "allowed_next_node": "closure",
-            "packet_path": packet_path.display().to_string(),
+            "packet_path": packet_path,
             "runtime_role": "business_analyst",
             "task_class": "specification",
-            "backend_id": "internal_subagents",
-            "carrier_id": "middle",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path.display().to_string(),
-            "result_path": result_path.display().to_string(),
-            "receipt_path": receipt_path.display().to_string()
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        }),
+        "packet-analyst",
+        "attempt-analyst",
+        &packet_path,
+        &request_path,
+        &result_path,
+        &receipt_path,
+    );
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "packet_kind": "runtime_dispatch_packet",
+            "run_id": request["run_id"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"],
+            "dispatch_target": request["dispatch_target"],
+            "downstream_dispatch_active_target": "analyst",
+            "downstream_dispatch_target": "designer"
         })
         .to_string(),
+    )
+    .expect("write packet");
+    std::fs::write(
+        &request_path,
+        request.to_string(),
     )
     .expect("write request");
 
@@ -575,12 +841,38 @@ fn host_bridge_completion_command_does_not_read_packet_outside_state_root() {
     let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
     std::fs::create_dir_all(request_path.parent().expect("request parent"))
         .expect("create request parent");
+    let request = strict_host_bridge_request(
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-analyst",
+            "run_id": "run-analyst",
+            "task_id": "run-analyst",
+            "dispatch_target": "analyst",
+            "packet_path": outside_packet_path,
+            "runtime_role": "business_analyst",
+            "task_class": "specification",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        }),
+        "packet-analyst-outside-root",
+        "attempt-analyst-outside-root",
+        &outside_packet_path,
+        &request_path,
+        &result_path,
+        &receipt_path,
+    );
     std::fs::write(
         &outside_packet_path,
         serde_json::json!({
             "packet_kind": "runtime_dispatch_packet",
-            "run_id": "run-analyst",
-            "dispatch_target": "analyst",
+            "run_id": request["run_id"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"],
+            "dispatch_target": request["dispatch_target"],
             "downstream_dispatch_active_target": "analyst",
             "downstream_dispatch_target": "leaked-target"
         })
@@ -589,28 +881,7 @@ fn host_bridge_completion_command_does_not_read_packet_outside_state_root() {
     .expect("write outside packet");
     std::fs::write(
         &request_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-analyst",
-            "run_id": "run-analyst",
-            "task_id": "run-analyst",
-            "dispatch_target": "analyst",
-            "packet_path": outside_packet_path.display().to_string(),
-            "runtime_role": "business_analyst",
-            "task_class": "specification",
-            "backend_id": "internal_subagents",
-            "carrier_id": "middle",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path.display().to_string(),
-            "result_path": result_path.display().to_string(),
-            "receipt_path": receipt_path.display().to_string()
-        })
-        .to_string(),
+        request.to_string(),
     )
     .expect("write request");
 

@@ -5,7 +5,8 @@ mod vida_client;
 #[path = "../src/vida_client_inprocess.rs"]
 mod vida_client_inprocess;
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +15,7 @@ use taskflow_contracts::{
     VidaAggregateRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef,
     VidaEventRef, VidaSchemaId, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
 };
+use taskflow_host_bridge::HostBridgeAdapterOperations;
 use taskflow_state::{JournalAppendRequest, OperationalJournal};
 use taskflow_state_redb::RedbOperationalJournal;
 use vida_client::VidaClient;
@@ -23,6 +25,9 @@ use vida_contracts::{
     VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId,
     VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
     VIDA_CONTRACTS_SCHEMA_VERSION,
+};
+use vida_runtime_local::jobs::{
+    plan_host_bridge_request_job, DurableJobLifecycle, HostBridgeRequestJobSnapshot, RetryPolicy,
 };
 
 fn envelope(operation: &str) -> VidaCommandEnvelope {
@@ -69,6 +74,329 @@ fn local_project_ref() -> VidaProjectRef {
     VidaProjectRef::ProjectId {
         project_id: VidaProjectId(project_id),
     }
+}
+
+fn current_host_bridge_request_fixture(
+    state_root: &Path,
+    request_path: &Path,
+    attempt_count: u64,
+) -> serde_json::Value {
+    let project_root = std::env::current_dir()
+        .expect("current dir")
+        .ancestors()
+        .find(|path| path.join("vida.config.yaml").is_file())
+        .map(Path::to_path_buf)
+        .expect("project config root");
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(project_root.join("vida.config.yaml")).expect("project config"),
+    )
+    .expect("project config yaml");
+    let host_environment = config
+        .get("host_environment")
+        .expect("host environment config");
+    let system_id = host_environment
+        .get("cli_system")
+        .and_then(serde_yaml::Value::as_str)
+        .expect("configured host system");
+    let system_id = system_id.trim();
+    assert!(
+        !system_id.is_empty(),
+        "configured host system must be nonempty"
+    );
+    let system = host_environment
+        .get("systems")
+        .and_then(|systems| systems.get(system_id))
+        .expect("configured host system entry");
+    let adapter_value = system
+        .get("host_tool_bridge")
+        .expect("configured host bridge adapter");
+    let adapter = HostBridgeAdapterOperations::from_registry_value(
+        &serde_json::to_value(adapter_value).expect("adapter config json"),
+    )
+    .expect("configured host bridge adapter contract");
+    let backend_id = config
+        .get("party_chat")
+        .and_then(|party_chat| party_chat.get("single_agent"))
+        .and_then(|single_agent| single_agent.get("backend"))
+        .and_then(serde_yaml::Value::as_str)
+        .expect("configured backend")
+        .trim()
+        .to_string();
+    assert!(
+        !backend_id.is_empty(),
+        "configured backend must be nonempty"
+    );
+    let worker_strategy: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(project_root.join(".vida/state/worker-strategy.json"))
+            .expect("worker strategy"),
+    )
+    .expect("worker strategy json");
+    let selected_tier = worker_strategy
+        .get("agents")
+        .and_then(|agents| agents.get(backend_id.as_str()))
+        .and_then(|agent| agent.get("tier"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|tier| !tier.trim().is_empty())
+        .expect("backend carrier tier")
+        .trim();
+    assert!(
+        !selected_tier.is_empty(),
+        "backend carrier tier must be nonempty"
+    );
+    let carriers = system.get("carriers").expect("configured carrier catalog");
+    let carrier_rows = carriers
+        .as_mapping()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(id, carrier)| {
+                    let map_key = id.as_str()?.trim();
+                    if map_key.is_empty() {
+                        return None;
+                    }
+                    let mut row = serde_json::to_value(carrier).ok()?;
+                    let row_role_id = row
+                        .get("role_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or(map_key);
+                    assert!(
+                        !row_role_id.is_empty(),
+                        "carrier row role_id must be nonempty"
+                    );
+                    assert_eq!(
+                        row_role_id, map_key,
+                        "materialized carrier row role_id must match catalog map key"
+                    );
+                    row["role_id"] = serde_json::json!(row_role_id);
+                    Some((map_key.to_string(), row))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let carrier_role_ids = carrier_rows
+        .iter()
+        .map(|(role_id, _)| role_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        carrier_role_ids.len(),
+        carrier_rows.len(),
+        "materialized carrier role ids must be globally unique"
+    );
+    let tier_carriers = carrier_rows
+        .iter()
+        .filter(|(_, carrier)| {
+            carrier
+                .get("tier")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                == Some(selected_tier)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !tier_carriers.is_empty(),
+        "backend tier must resolve host carriers"
+    );
+    let dev_team_roles = config
+        .get("dev_team")
+        .and_then(|dev_team| dev_team.get("roles"))
+        .and_then(serde_yaml::Value::as_mapping)
+        .expect("configured dev team roles");
+    let mut route_candidates = Vec::<(String, String, String, String, String)>::new();
+    for (carrier_id, carrier) in &tier_carriers {
+        let runtime_roles = carrier
+            .get("runtime_roles")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|role| !role.is_empty())
+            .collect::<Vec<_>>();
+        let task_classes = carrier
+            .get("task_classes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|class| !class.is_empty())
+            .collect::<Vec<_>>();
+        for runtime_role in &runtime_roles {
+            for task_class in &task_classes {
+                for (role_id, role) in dev_team_roles {
+                    let role_id = role_id.as_str().map(str::trim).unwrap_or_default();
+                    let role_runtime = role
+                        .get("runtime_role")
+                        .and_then(serde_yaml::Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    let role_task_match = role
+                        .get("task_classes")
+                        .and_then(serde_yaml::Value::as_sequence)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_yaml::Value::as_str)
+                        .map(str::trim)
+                        .any(|class| class == *task_class);
+                    if role_id.is_empty() || role_runtime != *runtime_role || !role_task_match {
+                        continue;
+                    }
+                    let dispatch_target = role
+                        .get("dispatch_target")
+                        .and_then(serde_yaml::Value::as_str)
+                        .map(str::trim)
+                        .filter(|target| !target.is_empty())
+                        .unwrap_or(task_class);
+                    route_candidates.push((
+                        carrier_id.clone(),
+                        runtime_role.to_string(),
+                        task_class.to_string(),
+                        role_id.to_string(),
+                        dispatch_target.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        !route_candidates.is_empty(),
+        "config must yield a host bridge route"
+    );
+    route_candidates.sort();
+    let (carrier_id, runtime_role, task_class, role_id, dispatch_target) = route_candidates
+        .into_iter()
+        .next()
+        .expect("deterministic host bridge route");
+    assert!(
+        !carrier_id.is_empty(),
+        "configured carrier id must be nonempty"
+    );
+    assert!(
+        !runtime_role.is_empty(),
+        "configured runtime role must be nonempty"
+    );
+    assert!(
+        !task_class.is_empty(),
+        "configured task class must be nonempty"
+    );
+    assert!(!role_id.is_empty(), "configured role id must be nonempty");
+    assert!(
+        !dispatch_target.is_empty(),
+        "configured dispatch target must be nonempty"
+    );
+    let carrier = tier_carriers
+        .into_iter()
+        .find(|(candidate_id, _)| candidate_id == &carrier_id)
+        .map(|(_, carrier)| carrier.clone())
+        .expect("selected configured carrier");
+    assert!(
+        carrier
+            .get("runtime_roles")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .any(|role| role == runtime_role),
+        "selected carrier must contain resolved runtime role"
+    );
+    assert!(
+        carrier
+            .get("task_classes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .any(|class| class == task_class),
+        "selected carrier must contain resolved task class"
+    );
+    let request_id = "req-scoped";
+    let run_id = "run-scoped";
+    let task_id = format!("{run_id}-task");
+    let attempt_id = format!("{request_id}-attempt");
+    let packet_id = format!("{request_id}-packet");
+    let result_path = state_root.join("host-tool-bridge/results/result-1.json");
+    let receipt_path = state_root.join("host-tool-bridge/receipts/receipt-1.json");
+    let packet_path = state_root.join("host-tool-bridge/packets/packet-1.json");
+    for (label, path) in [
+        ("request", request_path),
+        ("result", result_path.as_path()),
+        ("receipt", receipt_path.as_path()),
+        ("packet", packet_path.as_path()),
+    ] {
+        assert_state_scoped_path(state_root, path, label);
+    }
+    let adapter_contract_snapshot = adapter.to_value();
+    let adapter_contract_hash = blake3::hash(
+        &serde_json::to_vec(&adapter_contract_snapshot).expect("adapter snapshot json"),
+    )
+    .to_hex()
+    .to_string();
+
+    serde_json::json!({
+        "schema_version": 1,
+        "status": "failed",
+        "request_id": request_id,
+        "run_id": run_id,
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "packet_id": packet_id,
+        "dispatch_target": dispatch_target,
+        "attempt_count": attempt_count,
+        "packet_path": packet_path.display().to_string(),
+        "backend_id": backend_id,
+        "carrier_id": carrier_id,
+        "runtime_role": runtime_role,
+        "task_class": task_class,
+        "execution_boundary": system
+            .get("execution_boundary")
+            .and_then(serde_yaml::Value::as_str)
+            .expect("configured execution boundary"),
+        "dispatch_transport": adapter.dispatch_transport.clone(),
+        "receipt_mode": adapter.receipt_mode.clone(),
+        "adapter_kind": adapter.adapter_kind.clone(),
+        "adapter_capability_id": adapter.adapter_capability_id.clone(),
+        "invocation_mode": adapter.invocation_mode.clone(),
+        "adapter_contract_source": project_root.join("vida.config.yaml").display().to_string(),
+        "adapter_contract_snapshot": adapter_contract_snapshot,
+        "adapter_contract_hash": adapter_contract_hash,
+        "adapter_operations": adapter.to_value(),
+        "request_path": request_path.display().to_string(),
+        "result_path": result_path.display().to_string(),
+        "receipt_path": receipt_path.display().to_string(),
+        "required_result_fields": taskflow_host_bridge::default_host_bridge_required_result_fields(),
+        "owned_paths": [],
+        "failure_reason": "adapter exhausted inside state root"
+    })
+}
+
+fn assert_state_scoped_path(state_root: &Path, path: &Path, label: &str) {
+    let canonical_state_root = std::fs::canonicalize(state_root).expect("canonical state root");
+    assert!(
+        state_root.is_absolute(),
+        "state root must be an absolute canonicalization anchor"
+    );
+    assert!(path.is_absolute(), "{label} path must be absolute");
+    let relative = path
+        .strip_prefix(state_root)
+        .unwrap_or_else(|_| panic!("{label} path must remain below state root"));
+    assert!(
+        !relative.as_os_str().is_empty(),
+        "{label} path must name a state file"
+    );
+    assert!(
+        relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_))),
+        "{label} path must use component-safe descendants"
+    );
+    let canonical_candidate = canonical_state_root.join(relative);
+    assert!(
+        canonical_candidate.starts_with(&canonical_state_root),
+        "{label} path must remain below canonical state root"
+    );
 }
 
 #[test]
@@ -393,21 +721,23 @@ fn jobs_get_host_bridge_request_path_is_scoped_to_state_root() {
     let root = unique_test_project_root("vida-client-host-bridge-path");
     let state_root = root.join(".vida/data/state");
     let request_path = state_root.join("host-tool-bridge/requests/request-1.json");
+    let retry_policy = RetryPolicy::default();
+    let max_attempts = retry_policy.max_attempts;
     std::fs::create_dir_all(request_path.parent().expect("request parent"))
         .expect("create request parent");
+    let request = current_host_bridge_request_fixture(&state_root, &request_path, max_attempts);
+    let snapshot = HostBridgeRequestJobSnapshot::from_request(&request)
+        .expect("current host bridge request snapshot");
+    assert_eq!(snapshot.attempt_count, max_attempts);
+    let expected_plan = plan_host_bridge_request_job(&snapshot, &retry_policy);
+    assert_eq!(
+        expected_plan.lifecycle,
+        DurableJobLifecycle::DeadLettered,
+        "retry policy max_attempts must deadletter the exhausted request"
+    );
     std::fs::write(
         &request_path,
-        serde_json::to_string(&json!({
-            "schema_version": 1,
-            "status": "failed",
-            "request_id": "req-scoped",
-            "run_id": "run-scoped",
-            "task_id": "task-scoped",
-            "dispatch_target": "worker",
-            "attempt_count": 3,
-            "failure_reason": "adapter exhausted inside state root"
-        }))
-        .expect("serialize request"),
+        serde_json::to_string(&request).expect("serialize request"),
     )
     .expect("write request");
 
@@ -425,7 +755,10 @@ fn jobs_get_host_bridge_request_path_is_scoped_to_state_root() {
         .execute(command)
         .result
         .expect("host bridge job result");
-    assert_eq!(job["status"], "deadlettered");
+    assert_eq!(
+        job["status"],
+        format!("{:?}", expected_plan.lifecycle).to_ascii_lowercase()
+    );
     assert_eq!(job["authority"], "host_bridge_request");
     assert_eq!(job["job"]["outbox_id"], "req-scoped");
 }

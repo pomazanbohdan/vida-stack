@@ -398,6 +398,32 @@ pub(crate) fn carrier_policy_revalidation(
         });
     };
 
+    let duplicate_role_ids =
+        crate::carrier_runtime_catalog::duplicate_non_empty_carrier_role_ids(roles);
+    if !duplicate_role_ids.is_empty() {
+        let validation_errors =
+            crate::carrier_runtime_catalog::carrier_role_validation_errors(roles);
+        blockers.push(carrier_policy_mismatch_code().to_string());
+        blockers.push(carrier_policy_reselection_code().to_string());
+        blockers.sort();
+        blockers.dedup();
+        reasons.push("current carrier policy contains duplicate role ids".to_string());
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "validation_errors": validation_errors,
+            "mismatches": [{
+                "field": "carrier_role_id",
+                "selected": selected_carrier,
+                "current": duplicate_role_ids,
+                "reason": "carrier role_id must be globally unique before assignment or dispatch"
+            }]
+        });
+    }
+
     let Some(selected_carrier) = selected_carrier.as_deref() else {
         blockers.push(carrier_policy_reselection_code().to_string());
         reasons.push("selected carrier is missing from the assignment".to_string());
@@ -754,11 +780,130 @@ mod tests {
         })
     }
 
+    fn duplicate_role_bundle() -> serde_json::Value {
+        json!({
+            "agent_system": {"subagents": {"middle": {}}},
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "middle",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "model_profiles": {
+                            "host-profile": {
+                                "model_ref": "host-model",
+                                "reasoning_effort": "host-effort",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation"]
+                            }
+                        }
+                    },
+                    {
+                        "role_id": "middle",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "model_profiles": {
+                            "subagent-profile": {
+                                "model_ref": "subagent-model",
+                                "reasoning_effort": "subagent-effort",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation"]
+                            }
+                        }
+                    }
+                ]
+            }
+        })
+    }
+
+    fn duplicate_role_assignment() -> serde_json::Value {
+        json!({
+            "selected_carrier_id": "middle",
+            "selected_backend_id": "middle",
+            "selected_model_profile_id": "subagent-profile",
+            "selected_model_ref": "subagent-model",
+            "selected_reasoning_effort": "subagent-effort",
+            "selected_runtime_role": "worker",
+            "task_class": "implementation"
+        })
+    }
+
     #[test]
     fn carrier_policy_revalidation_accepts_current_selection() {
         let result = super::carrier_policy_revalidation(&test_bundle(), &test_assignment());
         assert_eq!(result["status"], "pass");
         assert_eq!(result["blocker_codes"], json!([]));
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_blocks_duplicate_role_ids_before_first_match() {
+        let result = super::carrier_policy_revalidation(
+            &duplicate_role_bundle(),
+            &duplicate_role_assignment(),
+        );
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(
+            result["validation_errors"],
+            json!(["duplicate carrier role id `middle`: role_id must be globally unique"])
+        );
+        assert_eq!(
+            result["mismatches"][0]["current"],
+            json!(["middle"])
+        );
+        assert_eq!(result["mismatches"][0]["field"], "carrier_role_id");
+
+        let mut reversed = duplicate_role_bundle();
+        reversed["carrier_runtime"]["roles"]
+            .as_array_mut()
+            .expect("roles")
+            .reverse();
+        let reversed_result =
+            super::carrier_policy_revalidation(&reversed, &duplicate_role_assignment());
+        assert_eq!(reversed_result["validation_errors"], result["validation_errors"]);
+        assert_eq!(reversed_result["mismatches"], result["mismatches"]);
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_selects_unique_role_id_without_profile_fallback() {
+        let mut bundle = test_bundle();
+        bundle["carrier_runtime"]["roles"] = json!([
+            {
+                "role_id": "host-middle",
+                "model_profiles": {
+                    "shared-profile": {
+                        "model_ref": "host-model",
+                        "reasoning_effort": "host-effort",
+                        "runtime_roles": ["runtime-a"],
+                        "task_classes": ["class-a"]
+                    }
+                }
+            },
+            {
+                "role_id": "subagent-middle",
+                "model_profiles": {
+                    "shared-profile": {
+                        "model_ref": "subagent-model",
+                        "reasoning_effort": "subagent-effort",
+                        "runtime_roles": ["runtime-a"],
+                        "task_classes": ["class-a"]
+                    }
+                }
+            }
+        ]);
+        let assignment = json!({
+            "selected_carrier_id": "subagent-middle",
+            "selected_backend_id": "backend-a",
+            "selected_model_profile_id": "shared-profile",
+            "selected_model_ref": "subagent-model",
+            "selected_reasoning_effort": "subagent-effort",
+            "selected_runtime_role": "runtime-a",
+            "task_class": "class-a"
+        });
+
+        let result = super::carrier_policy_revalidation(&bundle, &assignment);
+
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["carrier"]["role_id"], "subagent-middle");
     }
 
     #[test]

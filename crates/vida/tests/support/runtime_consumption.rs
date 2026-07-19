@@ -29,6 +29,8 @@ pub(crate) const RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_STATUS";
 pub(crate) const RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_BLOCKERS";
+pub(crate) const RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_ACTIVE_TARGET";
 pub(crate) const RECEIPT_HELPER_DISPATCH_STATUS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_STATUS";
 pub(crate) const RECEIPT_HELPER_LANE_STATUS_ENV: &str =
@@ -68,6 +70,7 @@ pub(crate) struct RuntimeReceiptFixture {
     pub(crate) downstream_ready: bool,
     pub(crate) downstream_status: String,
     pub(crate) downstream_blockers: Vec<String>,
+    pub(crate) downstream_active_target: Option<String>,
     pub(crate) dispatch_status: String,
     pub(crate) lane_status: String,
     pub(crate) blocker_code: Option<String>,
@@ -105,6 +108,7 @@ impl RuntimeReceiptFixture {
             downstream_ready: true,
             downstream_status: "packet_ready".to_string(),
             downstream_blockers: Vec::new(),
+            downstream_active_target: None,
             dispatch_status: "executed".to_string(),
             lane_status: "lane_completed".to_string(),
             blocker_code: None,
@@ -154,6 +158,10 @@ impl RuntimeReceiptFixture {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        fixture.downstream_active_target = std::env::var(RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         fixture.dispatch_status = std::env::var(RECEIPT_HELPER_DISPATCH_STATUS_ENV)
             .unwrap_or_else(|_| "executed".to_string());
         fixture.lane_status = std::env::var(RECEIPT_HELPER_LANE_STATUS_ENV)
@@ -199,6 +207,7 @@ impl RuntimeReceiptFixture {
             self.downstream_ready,
             &self.downstream_status,
             self.downstream_blockers.clone(),
+            self.downstream_active_target.clone(),
         );
     }
 }
@@ -577,6 +586,7 @@ fn persist_ready_downstream_receipt(
     downstream_ready: bool,
     downstream_status: &str,
     downstream_blockers: Vec<String>,
+    downstream_active_target: Option<String>,
 ) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
@@ -657,7 +667,7 @@ fn persist_ready_downstream_receipt(
             downstream_dispatch_result_path: Some(result_path.to_string()),
             downstream_dispatch_trace_path: None,
             downstream_dispatch_executed_count: 0,
-            downstream_dispatch_active_target: None,
+            downstream_dispatch_active_target: downstream_active_target,
             downstream_dispatch_last_target: Some(dispatch_target.to_string()),
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some(dispatch_target.to_string()),
@@ -798,10 +808,27 @@ fn is_state_lock_output(output: &Output) -> bool {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stderr.contains("timed out while waiting for authoritative datastore lock")
-        || stdout.contains("timed out while waiting for authoritative datastore lock")
+    is_state_lock_output_text(&stdout, &stderr)
+}
+
+fn is_state_lock_output_text(stdout: &str, stderr: &str) -> bool {
+    has_retryable_state_lock_signal(stdout, stderr)
         || stderr.contains("authoritative_state_required_for_mutation")
         || stdout.contains("authoritative_state_required_for_mutation")
+}
+
+pub(crate) fn has_retryable_state_lock_signal(stdout: &str, stderr: &str) -> bool {
+    [stdout, stderr].iter().any(|stream| {
+        stream
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .any(|token| {
+                matches!(
+                    token,
+                    "state_store_read_lock_contention" | "authoritative_state_store_locked"
+                )
+            })
+            || stream.contains("timed out while waiting for authoritative datastore lock")
+    })
 }
 
 fn parse_json_output(args: &[&str], output: &Output) -> serde_json::Value {
@@ -819,4 +846,35 @@ fn parse_json_output(args: &[&str], output: &Output) -> serde_json::Value {
             String::from_utf8_lossy(&output.stderr)
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_lock_output_text_retries_only_transient_lock_blockers() {
+        for retryable in [
+            r#"{"blocker_codes":["authoritative_state_store_locked"]}"#,
+            "blocker_codes[1]: state_store_read_lock_contention",
+            "timed out while waiting for authoritative datastore lock",
+        ] {
+            assert!(
+                is_state_lock_output_text(retryable, ""),
+                "transient lock signal should be retryable: {retryable}"
+            );
+        }
+
+        for non_retryable in [
+            r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"permission_access"}"#,
+            r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"storage_corruption"}"#,
+            r#"{"blocker_codes":["authoritative_state_store_open_failed"],"error_kind":"unknown"}"#,
+            r#"{"blocker_codes":["state_store_surrealkv_wal_replay_corruption"]}"#,
+        ] {
+            assert!(
+                !is_state_lock_output_text(non_retryable, ""),
+                "non-lock state failure must not be retried: {non_retryable}"
+            );
+        }
+    }
 }

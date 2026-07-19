@@ -12077,26 +12077,30 @@ mod tests {
             .expect("request parent should be created");
         std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
             .expect("packet parent should be created");
-        std::fs::write(&request_path, b"{}").expect("request file should be written");
-        std::fs::write(
-            &packet_path,
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "run_id": "run-pending",
-                "dispatch_target": "implementer"
-            }))
-            .expect("packet should serialize"),
-        )
-        .expect("packet file should be written");
+
+        let fixture_identity = serde_json::json!({
+            "request_id": "req-pending",
+            "run_id": "run-pending",
+            "task_id": "task-pending",
+            "attempt_id": "attempt-pending",
+            "packet_id": "packet-pending",
+            "dispatch_target": "implementer",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior"
+        });
 
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
-            "request_id": "req-pending",
-            "run_id": "run-pending",
-            "dispatch_target": "implementer",
+            "request_id": fixture_identity["request_id"],
+            "run_id": fixture_identity["run_id"],
+            "dispatch_target": fixture_identity["dispatch_target"],
+            "task_id": fixture_identity["task_id"],
+            "attempt_id": fixture_identity["attempt_id"],
+            "packet_id": fixture_identity["packet_id"],
             "packet_path": packet_path.display().to_string(),
-            "backend_id": "internal_subagents",
-            "carrier_id": "junior",
+            "backend_id": fixture_identity["backend_id"],
+            "carrier_id": fixture_identity["carrier_id"],
             "execution_boundary": "parent_host_session",
             "dispatch_transport": "host_tool_bridge",
             "adapter_kind": "codex_host_tools",
@@ -12106,16 +12110,134 @@ mod tests {
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string()
         });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
 
+        let run_id = request["run_id"]
+            .as_str()
+            .expect("request run id should be present");
+        let dispatch_target = request["dispatch_target"]
+            .as_str()
+            .expect("request dispatch target should be present");
+        let backend_id = request["backend_id"]
+            .as_str()
+            .expect("request backend id should be present");
+        let packet = serde_json::json!({
+            "run_id": request["run_id"],
+            "dispatch_target": request["dispatch_target"],
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "packet_id": request["packet_id"],
+            "backend_id": request["backend_id"]
+        });
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&packet).expect("packet should serialize"),
+        )
+        .expect("packet file should be written");
+
+        let fixture_session_id = format!("host-bridge-pending-{run_id}");
+        let _session_env = EnvVarGuard::set("VIDA_SESSION_ID", &fixture_session_id);
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let blockers = runtime.block_on(async {
             let store = crate::StateStore::open(state_root.to_path_buf())
                 .await
                 .expect("state store should open");
+            let fixture_parent_id = format!("{run_id}-fixture-parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: &fixture_parent_id,
+                    title: "Fixture parent epic",
+                    display_id: None,
+                    description: "Test-only parent epic for pending bridge fixture",
+                    issue_type: "epic",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create pending bridge fixture parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: run_id,
+                    title: "Pending host bridge provenance fixture",
+                    display_id: None,
+                    description: "",
+                    issue_type: "defect",
+                    status: "in_progress",
+                    priority: 1,
+                    parent_id: Some(fixture_parent_id.as_str()),
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata {
+                        owned_paths: vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()],
+                        ..Default::default()
+                    },
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create pending bridge task");
+            store
+                .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                    claim_id: format!("{fixture_session_id}-claim"),
+                    state_root_id: state_root.display().to_string(),
+                    worktree_environment_id: std::env::current_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                        .display()
+                        .to_string(),
+                    orchestrator_session_id: fixture_session_id.clone(),
+                    process_id: Some(std::process::id()),
+                    task_id: Some(run_id.to_string()),
+                    run_id: Some(run_id.to_string()),
+                    lane_id: Some(dispatch_target.to_string()),
+                    claim_kind: "write".to_string(),
+                    conflict_domain: Some(format!("run:{run_id}")),
+                    owned_paths: vec![
+                        "crates/vida/src/agent_dispatch_surface.rs".to_string(),
+                    ],
+                    read_only_paths: Vec::new(),
+                    lease_mode: crate::state_store::LeaseMode::Exclusive,
+                    lease_seconds: 60,
+                })
+                .await
+                .expect("claim pending bridge run");
+            let mut status = crate::taskflow_run_graph::default_run_graph_status(
+                run_id,
+                "implementation",
+                "implementation",
+            );
+            status.task_id = run_id.to_string();
+            status.active_node = dispatch_target.to_string();
+            status.next_node = Some(dispatch_target.to_string());
+            status.status = "blocked".to_string();
+            status.lifecycle_stage = "implementer_blocked".to_string();
+            status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+            status.handoff_state = "none".to_string();
+            status.context_state = "sealed".to_string();
+            status.checkpoint_kind = "execution_cursor".to_string();
+            status.resume_target = format!("dispatch.{dispatch_target}");
+            status.recovery_ready = false;
+            status.selected_backend = backend_id.to_string();
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("pending bridge run graph state should record");
+            let canonical_packet_path =
+                std::fs::canonicalize(&packet_path).expect("packet path should canonicalize");
+
             store
                 .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
-                    run_id: "run-pending".to_string(),
-                    dispatch_target: "implementer".to_string(),
+                    run_id: run_id.to_string(),
+                    dispatch_target: dispatch_target.to_string(),
                     dispatch_status: "bridge_request_pending".to_string(),
                     lane_status: "lane_running".to_string(),
                     supersedes_receipt_id: None,
@@ -12123,7 +12245,9 @@ mod tests {
                     dispatch_kind: "implementation".to_string(),
                     dispatch_surface: Some("vida agent-init".to_string()),
                     dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
-                    dispatch_packet_path: Some(packet_path.display().to_string()),
+                    dispatch_packet_path: Some(
+                        super::host_bridge_packet_selector_path(canonical_packet_path.as_path()),
+                    ),
                     dispatch_result_path: None,
                     blocker_code: None,
                     downstream_dispatch_target: None,
@@ -12138,22 +12262,20 @@ mod tests {
                     downstream_dispatch_executed_count: 0,
                     downstream_dispatch_active_target: None,
                     downstream_dispatch_last_target: None,
-                    activation_agent_type: Some("internal_subagents".to_string()),
+                    activation_agent_type: Some(backend_id.to_string()),
                     activation_runtime_role: Some("worker".to_string()),
-                    selected_backend: Some("internal_subagents".to_string()),
+                    selected_backend: Some(backend_id.to_string()),
                     recorded_at: "2026-06-04T00:00:00Z".to_string(),
                 })
                 .await
                 .expect("pending host bridge receipt should record");
-            let canonical_packet_path =
-                std::fs::canonicalize(&packet_path).expect("packet path should canonicalize");
             let mut blockers = Vec::new();
             super::append_host_bridge_dispatch_receipt_blockers(
                 &mut blockers,
                 &store,
                 state_root,
                 &request,
-                "run-pending",
+                run_id,
                 Some(canonical_packet_path.as_path()),
             )
             .await;
@@ -12162,7 +12284,7 @@ mod tests {
         });
 
         assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
-        assert!(blockers.is_empty());
+        assert!(blockers.is_empty(), "unexpected pending bridge blockers: {blockers:?}");
     }
 
     #[test]

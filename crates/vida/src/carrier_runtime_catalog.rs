@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 pub(crate) fn resolved_carrier_roles(
     config: &serde_yaml::Value,
     catalog_root: &std::path::Path,
@@ -11,7 +13,7 @@ pub(crate) fn resolved_carrier_roles(
 }
 
 pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec<String> {
-    roles
+    let mut errors = roles
         .iter()
         .filter_map(|row| {
             let role_id = row["role_id"].as_str().unwrap_or("<unknown>");
@@ -39,6 +41,35 @@ pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec
                 ))
             }
         })
+        .collect::<Vec<_>>();
+    errors.extend(
+        duplicate_non_empty_carrier_role_ids(roles)
+            .into_iter()
+            .map(|role_id| {
+                format!(
+                    "duplicate carrier role id `{role_id}`: role_id must be globally unique"
+                )
+            }),
+    );
+    errors.sort();
+    errors
+}
+
+pub(crate) fn duplicate_non_empty_carrier_role_ids(
+    roles: &[serde_json::Value],
+) -> Vec<String> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for role_id in roles.iter().filter_map(|row| {
+        row["role_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|role_id| !role_id.is_empty())
+    }) {
+        *counts.entry(role_id.to_string()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(role_id, count)| (count > 1).then_some(role_id))
         .collect()
 }
 
@@ -117,7 +148,10 @@ pub(crate) fn carrier_dispatch_alias_validation_errors(
 
 #[cfg(test)]
 mod tests {
-    use super::{carrier_dispatch_alias_validation_errors, carrier_role_validation_errors};
+    use super::{
+        carrier_dispatch_alias_validation_errors, carrier_role_validation_errors,
+        duplicate_non_empty_carrier_role_ids,
+    };
 
     #[test]
     fn role_validation_errors_are_carrier_neutral() {
@@ -127,6 +161,36 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("carrier role `junior`"));
         assert!(!errors[0].contains("codex"));
+    }
+
+    #[test]
+    fn role_validation_errors_reject_duplicate_non_empty_ids_deterministically() {
+        let roles = [
+            serde_json::json!({
+                "role_id": "middle",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"]
+            }),
+            serde_json::json!({
+                "role_id": "middle",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"]
+            }),
+        ];
+
+        assert_eq!(duplicate_non_empty_carrier_role_ids(&roles), vec!["middle"]);
+        assert_eq!(
+            carrier_role_validation_errors(&roles),
+            vec!["duplicate carrier role id `middle`: role_id must be globally unique"]
+        );
+    }
+
+    #[test]
+    fn role_validation_errors_ignore_duplicate_blank_ids_per_existing_law() {
+        let roles = [serde_json::json!({"role_id": ""}), serde_json::json!({"role_id": ""})];
+
+        assert!(duplicate_non_empty_carrier_role_ids(&roles).is_empty());
+        assert_eq!(carrier_role_validation_errors(&roles).len(), 2);
     }
 
     #[test]
