@@ -261,6 +261,104 @@ host_environment:
         no_adapter_policy: fail_closed_emit_request
         process_carrier_requires_explicit_backend: true
         fallback_process_carrier: codex_cli_exec
+        adapter_command_schema_ref: vida/config/schemas/host_tool_bridge_adapter_command.schema.json
+        adapter_command:
+          executable: vida-host-bridge-adapter
+          subcommands:
+            - dispatch
+          args:
+            - --request
+            - "{{request_path}}"
+        adapter_command_contract:
+          schema_version: 1
+          placeholder_open: "{{"
+          placeholder_close: "}}"
+          request_placeholder: "{{request_path}}"
+          placeholder_scope: args
+          supported_fields:
+            - executable
+            - subcommands
+            - args
+          supported_capabilities:
+            - parent_host_adapter_invocation
+            - request_path_substitution
+            - single_request_placeholder
+          command_token_rules:
+            executable: non_empty_single_line_scalar
+            subcommands: non_empty_single_line_string_sequence
+            args: non_empty_single_line_string_sequence
+          adapter_command_states:
+            - configured_valid
+            - missing
+            - invalid_missing_executable
+            - invalid_empty_token
+            - invalid_multiline_token
+            - invalid_missing_placeholder
+            - invalid_multiple_placeholders
+            - invalid_mixed_route
+            - not_applicable
+          matrix_required_fields:
+            - id
+            - dispatch_transport
+            - execution_boundary
+            - adapter_command_state
+            - expected_state
+            - fail_closed
+          admissible_route_command_combinations:
+            - id: host_bridge_configured_valid
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: configured_valid
+              expected_state: invoke_configured_adapter_command
+              fail_closed: false
+            - id: host_bridge_missing_adapter_command
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: missing
+              expected_state: emit_host_bridge_request
+              fail_closed: true
+            - id: host_bridge_invalid_missing_executable
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: invalid_missing_executable
+              expected_state: reject_invalid_adapter_command
+              fail_closed: true
+            - id: host_bridge_invalid_empty_token
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: invalid_empty_token
+              expected_state: reject_invalid_adapter_command
+              fail_closed: true
+            - id: host_bridge_invalid_multiline_token
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: invalid_multiline_token
+              expected_state: reject_invalid_adapter_command
+              fail_closed: true
+            - id: host_bridge_invalid_missing_placeholder
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: invalid_missing_placeholder
+              expected_state: reject_invalid_adapter_command
+              fail_closed: true
+            - id: host_bridge_invalid_multiple_placeholders
+              dispatch_transport: host_tool_bridge
+              execution_boundary: parent_host_session
+              adapter_command_state: invalid_multiple_placeholders
+              expected_state: reject_invalid_adapter_command
+              fail_closed: true
+            - id: host_bridge_invalid_mixed_route
+              dispatch_transport: host_tool_bridge
+              execution_boundary: child_process
+              adapter_command_state: invalid_mixed_route
+              expected_state: reject_mixed_route
+              fail_closed: true
+            - id: explicit_process_carrier
+              dispatch_transport: codex_cli_exec
+              execution_boundary: child_process
+              adapter_command_state: not_applicable
+              expected_state: invoke_explicit_process_backend
+              fail_closed: false
         request_dir: .vida/data/state/host-tool-bridge/requests
         result_dir: .vida/data/state/host-tool-bridge/results
         receipt_dir: .vida/data/state/host-tool-bridge/receipts

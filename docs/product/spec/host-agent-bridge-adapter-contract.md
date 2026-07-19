@@ -88,6 +88,67 @@ host_tool_bridge:
   receipt_dir: .vida/data/state/host-tool-bridge/receipts
 ```
 
+### FR-1A: Adapter command recipe authority and schema
+
+The master template is the authoritative catalog for host-bridge command options,
+capabilities, placeholders, and route/command combinations:
+
+- master template: `docs/framework/templates/vida.config.yaml.template`
+- command schema: `vida/config/schemas/host_tool_bridge_adapter_command.schema.json`
+- project config: `vida.config.yaml` may select or override only fields declared by
+  that template/schema; it must not add an executable, subcommand, flag, or
+  placeholder form outside the catalog.
+
+An active host system may declare the optional command recipe below. The recipe is
+an argv plan for invoking a configured parent-host adapter; it is not a process
+carrier fallback and it is not execution evidence by itself.
+
+```yaml
+host_tool_bridge:
+  adapter_command_schema_ref: vida/config/schemas/host_tool_bridge_adapter_command.schema.json
+  adapter_command:
+    executable: <project-selected-executable>
+    subcommands: [<zero-or-more-project-selected-tokens>]
+    args: [<project-selected-token>, "{{request_path}}"]
+```
+
+Schema invariants:
+
+1. `executable` is a non-empty, single-line scalar and is placeholder-free.
+2. `subcommands` is a sequence of non-empty, single-line, placeholder-free
+   tokens; an empty sequence is admissible.
+3. `args` is a non-empty sequence of non-empty, single-line tokens containing
+   exactly one non-empty `{{...}}` request placeholder occurrence. The
+   placeholder may be embedded in the argument token selected by the project;
+   the runtime replaces that one occurrence with the request path.
+4. Unknown fields, empty tokens, NUL/newline-bearing tokens, missing placeholders,
+   multiple placeholders, and unterminated/empty placeholders are invalid and
+   fail closed before invocation.
+5. The template's machine-readable
+   `host_tool_bridge.adapter_command_contract.admissible_route_command_combinations`
+   matrix is exhaustive. This document explains the matrix but does not create a
+   second option authority.
+
+### Route/command admissibility matrix
+
+| Matrix state | Dispatch transport | Execution boundary | Adapter command | Expected state | Fail closed |
+| --- | --- | --- | --- | --- | --- |
+| `configured_valid` | `host_tool_bridge` | `parent_host_session` | valid map | invoke configured adapter command | no |
+| `missing` | `host_tool_bridge` | `parent_host_session` | absent | emit host-bridge request | yes |
+| `invalid_missing_executable` | `host_tool_bridge` | `parent_host_session` | malformed | reject invalid adapter command | yes |
+| `invalid_empty_token` | `host_tool_bridge` | `parent_host_session` | malformed | reject invalid adapter command | yes |
+| `invalid_multiline_token` | `host_tool_bridge` | `parent_host_session` | malformed | reject invalid adapter command | yes |
+| `invalid_missing_placeholder` | `host_tool_bridge` | `parent_host_session` | malformed | reject invalid adapter command | yes |
+| `invalid_multiple_placeholders` | `host_tool_bridge` | `parent_host_session` | malformed | reject invalid adapter command | yes |
+| `invalid_mixed_route` | `host_tool_bridge` | `child_process` | process-style/mixed | reject mixed route | yes |
+| `not_applicable` | `codex_cli_exec` (or another explicitly configured process transport) | `child_process` | not used | invoke explicit process backend | no |
+
+The matrix means a host-bridge route never silently falls back to a process
+carrier. A process carrier is admissible only when its route explicitly declares
+the child-process boundary and process transport. Conversely, a child-process
+route may not borrow a host-bridge command recipe or claim parent-host receipt
+authority.
+
 ### FR-2: Separate internal host adapters from process carriers
 
 Process execution such as `codex exec`, `claude --agent`, `opencode run`, `pi`, or `vibe` may be useful, but it is not automatically an internal host-agent bridge. If process execution is used, it must be modeled as an explicit backend/carrier with:

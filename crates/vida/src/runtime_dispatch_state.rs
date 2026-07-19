@@ -10087,75 +10087,476 @@ host_environment:
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TestDispatchFixtureMode {
+        ChildProcess,
+        InternalChildProcess,
+        CanonicalHostBridge,
+    }
+
+    fn fake_child_process_fixture() -> serde_yaml::Value {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dispatch_modes/fake_child_process.yaml");
+        serde_yaml::from_str(
+            &fs::read_to_string(&fixture_path)
+                .unwrap_or_else(|error| panic!("fake child-process fixture should load: {error}")),
+        )
+        .expect("fake child-process fixture should parse as yaml")
+    }
+
+    fn fake_fixture_os_key() -> &'static str {
+        if cfg!(windows) {
+            "windows"
+        } else {
+            "posix"
+        }
+    }
+
+    fn fake_fixture_mode_key(mode: TestDispatchFixtureMode) -> &'static str {
+        match mode {
+            TestDispatchFixtureMode::ChildProcess => "child_process",
+            TestDispatchFixtureMode::InternalChildProcess => "internal_child_process",
+            TestDispatchFixtureMode::CanonicalHostBridge => "canonical_host_bridge",
+        }
+    }
+
+    fn render_fake_fixture_template(template: &str, replacements: &[(&str, &str)]) -> String {
+        replacements
+            .iter()
+            .fold(template.to_string(), |rendered, (placeholder, value)| {
+                rendered.replace(placeholder, value)
+            })
+    }
+
+    fn fake_fixture_dispatch_command_and_args(
+        fixture: &serde_yaml::Value,
+        surface: &str,
+        fake_codex: &Path,
+        template_backend: &serde_yaml::Value,
+    ) -> (String, Vec<String>) {
+        let os_key = fake_fixture_os_key();
+        let profile = yaml_lookup(fixture, &["dispatch", os_key, surface])
+            .expect("fake dispatch fixture should declare an OS/surface profile");
+        let command = yaml_string(yaml_lookup(profile, &["command"]))
+            .or_else(|| {
+                (yaml_string(yaml_lookup(profile, &["command_source"])).as_deref()
+                    == Some("template"))
+                .then(|| yaml_string(yaml_lookup(template_backend, &["dispatch", "command"])))
+                .flatten()
+            })
+            .expect("fake dispatch fixture should resolve a command");
+        let static_args = if yaml_string(yaml_lookup(profile, &["static_args_source"])).as_deref()
+            == Some("template")
+        {
+            crate::yaml_string_list(yaml_lookup(template_backend, &["dispatch", "static_args"]))
+        } else {
+            crate::yaml_string_list(yaml_lookup(profile, &["static_args"]))
+        };
+        let fake_codex_text = fake_codex.display().to_string();
+        (
+            render_fake_fixture_template(&command, &[("{fake_codex}", &fake_codex_text)]),
+            static_args
+                .into_iter()
+                .map(|arg| {
+                    render_fake_fixture_template(&arg, &[("{fake_codex}", &fake_codex_text)])
+                })
+                .collect(),
+        )
+    }
+
+    fn fake_fixture_script(
+        operation: &str,
+        mode: TestDispatchFixtureMode,
+        replacements: &[(&str, &str)],
+    ) -> String {
+        let fixture = fake_child_process_fixture();
+        let template = yaml_string(yaml_lookup(
+            &fixture,
+            &[
+                "scripts",
+                operation,
+                fake_fixture_os_key(),
+                fake_fixture_mode_key(mode),
+            ],
+        ))
+        .unwrap_or_else(|| panic!("fake fixture should declare {operation} script"));
+        render_fake_fixture_template(&template, replacements)
+    }
+
+    fn fake_fixture_os_script(operation: &str, replacements: &[(&str, &str)]) -> String {
+        let fixture = fake_child_process_fixture();
+        let template = yaml_string(yaml_lookup(
+            &fixture,
+            &["scripts", operation, fake_fixture_os_key()],
+        ))
+        .unwrap_or_else(|| panic!("fake fixture should declare {operation} script"));
+        render_fake_fixture_template(&template, replacements)
+    }
+
+    fn canonical_dispatch_template() -> serde_yaml::Value {
+        let template_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/framework/templates/vida.config.yaml.template");
+        serde_yaml::from_str(
+            &fs::read_to_string(&template_path)
+                .unwrap_or_else(|error| panic!("canonical dispatch template should load: {error}")),
+        )
+        .expect("canonical dispatch template should parse as yaml")
+    }
+
+    fn child_process_dispatch_template_entry() -> (String, serde_yaml::Value) {
+        let template = canonical_dispatch_template();
+        let subagents = yaml_lookup(&template, &["agent_system", "subagents"])
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("canonical dispatch template should declare subagents");
+        let mut matches = subagents.iter().filter_map(|(id, entry)| {
+            let entry_boundary = yaml_string(yaml_lookup(entry, &["execution_boundary"]));
+            let transport = yaml_string(yaml_lookup(entry, &["dispatch_transport"]));
+            let receipt_supported =
+                yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+                    .and_then(serde_yaml::Value::as_bool)
+                    == Some(true);
+            (entry_boundary.as_deref() == Some("child_process")
+                && transport.as_deref() == Some("codex_cli_exec")
+                && receipt_supported)
+                .then(|| {
+                    (
+                        id.as_str()
+                            .unwrap_or_else(|| panic!("child-process backend id should be text"))
+                            .to_string(),
+                        entry.clone(),
+                    )
+                })
+        });
+        let first = matches.next().expect(
+            "canonical dispatch template should contain one eligible child-process backend",
+        );
+        assert!(
+            matches.next().is_none(),
+            "canonical dispatch template should contain one eligible child-process backend"
+        );
+        first
+    }
+
+    fn canonical_internal_backend_entry(
+        document: &serde_yaml::Value,
+    ) -> (String, serde_yaml::Value) {
+        let subagents = yaml_lookup(document, &["agent_system", "subagents"])
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("config should declare subagents");
+        let mut matches = subagents.iter().filter_map(|(id, entry)| {
+            let enabled = yaml_lookup(entry, &["enabled"])
+                .and_then(serde_yaml::Value::as_bool)
+                .unwrap_or(false);
+            let backend_class = yaml_string(yaml_lookup(entry, &["subagent_backend_class"]));
+            (enabled && backend_class.as_deref() == Some("internal")).then(|| {
+                (
+                    id.as_str()
+                        .unwrap_or_else(|| panic!("internal backend id should be text"))
+                        .to_string(),
+                    entry.clone(),
+                )
+            })
+        });
+        let first = matches
+            .next()
+            .expect("config should contain one enabled canonical internal backend");
+        assert!(
+            matches.next().is_none(),
+            "config should contain one enabled canonical internal backend"
+        );
+        first
+    }
+
+    fn selected_internal_carrier_id(
+        document: &serde_yaml::Value,
+        template_backend: &serde_yaml::Value,
+    ) -> String {
+        let carriers = yaml_lookup(document, &["host_environment", "codex", "agents"])
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("config should declare codex carrier catalog");
+        let template_roles = yaml_string_list(yaml_lookup(template_backend, &["runtime_roles"]));
+        let template_task_classes =
+            yaml_string_list(yaml_lookup(template_backend, &["task_classes"]));
+        let selected_runtime_role =
+            yaml_string(yaml_lookup(template_backend, &["default_runtime_role"]))
+                .or_else(|| template_roles.first().cloned());
+        let selected_task_class = template_task_classes.first().cloned();
+        let mut matches = carriers
+            .iter()
+            .filter_map(|(id, carrier)| {
+                let role_matches = selected_runtime_role
+                    .as_deref()
+                    .is_some_and(|runtime_role| {
+                        yaml_string(yaml_lookup(carrier, &["default_runtime_role"])).as_deref()
+                            == Some(runtime_role)
+                            || yaml_string_list(yaml_lookup(carrier, &["runtime_roles"]))
+                                .iter()
+                                .any(|role| role == runtime_role)
+                    });
+                let task_matches = selected_task_class.as_deref().is_some_and(|task_class| {
+                    yaml_string_list(yaml_lookup(carrier, &["task_classes"]))
+                        .iter()
+                        .any(|task| task == task_class)
+                });
+                (role_matches && task_matches).then(|| {
+                    id.as_str()
+                        .unwrap_or_else(|| panic!("carrier id should be text"))
+                        .to_string()
+                })
+            })
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        assert_eq!(
+            matches.len(),
+            1,
+            "config should contain one carrier matching child-process roles and task classes"
+        );
+        matches.remove(0)
+    }
+
     fn configure_fake_codex_dispatch(project_root: &Path, fake_codex: &Path) {
+        configure_fake_codex_dispatch_mode(
+            project_root,
+            fake_codex,
+            TestDispatchFixtureMode::ChildProcess,
+        );
+    }
+
+    fn configure_fake_codex_dispatch_mode(
+        project_root: &Path,
+        fake_codex: &Path,
+        mode: TestDispatchFixtureMode,
+    ) {
         let config_path = project_root.join("vida.config.yaml");
         let config = fs::read_to_string(&config_path).expect("config should exist");
         let mut document: serde_yaml::Value =
             serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let internal_backend_id = (mode == TestDispatchFixtureMode::InternalChildProcess)
+            .then(|| canonical_internal_backend_entry(&document).0);
+        if mode == TestDispatchFixtureMode::CanonicalHostBridge {
+            return;
+        }
+        let (child_backend_id, mut child_backend) = child_process_dispatch_template_entry();
+        let fixture = fake_child_process_fixture();
+        let (child_command, child_static_args) =
+            fake_fixture_dispatch_command_and_args(&fixture, "child", fake_codex, &child_backend);
+        let internal_carrier_id = (mode == TestDispatchFixtureMode::InternalChildProcess)
+            .then(|| selected_internal_carrier_id(&document, &child_backend));
         let root = document
             .as_mapping_mut()
             .expect("config root should be a yaml mapping");
-        let host_environment = root
-            .get_mut(serde_yaml::Value::String("host_environment".to_string()))
-            .and_then(serde_yaml::Value::as_mapping_mut)
-            .expect("host_environment should exist");
-        let systems = host_environment
-            .get_mut(serde_yaml::Value::String("systems".to_string()))
-            .and_then(serde_yaml::Value::as_mapping_mut)
-            .expect("host systems should exist");
-        let codex = systems
-            .get_mut(serde_yaml::Value::String("codex".to_string()))
-            .and_then(serde_yaml::Value::as_mapping_mut)
-            .expect("codex system should exist");
-        codex.insert(
-            serde_yaml::Value::String("dispatch_transport".to_string()),
-            serde_yaml::Value::String("codex_cli_exec".to_string()),
-        );
-        codex
-            .entry(serde_yaml::Value::String("dispatch".to_string()))
-            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-        let dispatch = codex
-            .get_mut(serde_yaml::Value::String("dispatch".to_string()))
-            .and_then(serde_yaml::Value::as_mapping_mut)
-            .expect("codex dispatch config should exist");
-        let original_static_args = crate::yaml_string_list(
-            dispatch.get(serde_yaml::Value::String("static_args".to_string())),
-        );
-        #[cfg(windows)]
-        let (command, mut static_args) = (
-            "pwsh".to_string(),
-            vec![
-                "-NoProfile".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                fake_codex.display().to_string(),
-            ],
-        );
-        #[cfg(not(windows))]
-        let (command, mut static_args) = (fake_codex.display().to_string(), Vec::<String>::new());
-        static_args.extend(original_static_args);
-        dispatch.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(command),
-        );
-        dispatch.insert(
-            serde_yaml::Value::String("static_args".to_string()),
-            serde_yaml::Value::Sequence(
-                static_args
-                    .into_iter()
-                    .map(serde_yaml::Value::String)
-                    .collect(),
-            ),
-        );
-        dispatch.insert(
-            serde_yaml::Value::String("receipt_backed_completion_supported".to_string()),
-            serde_yaml::Value::Bool(true),
-        );
-        dispatch.insert(
-            serde_yaml::Value::String("windows_sandbox_spawn_supported".to_string()),
-            serde_yaml::Value::Bool(true),
-        );
+        child_backend
+            .as_mapping_mut()
+            .expect("child-process backend should be a yaml mapping")
+            .insert(
+                serde_yaml::Value::String("enabled".to_string()),
+                serde_yaml::Value::Bool(true),
+            );
+        let fixture_backend_id = match mode {
+            TestDispatchFixtureMode::ChildProcess => Some(child_backend_id.clone()),
+            TestDispatchFixtureMode::InternalChildProcess => internal_backend_id.clone(),
+            TestDispatchFixtureMode::CanonicalHostBridge => None,
+        };
+        if let Some(backend_id) = fixture_backend_id {
+            let party_chat = root
+                .entry(serde_yaml::Value::String("party_chat".to_string()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+                .as_mapping_mut()
+                .expect("party_chat should be a yaml mapping");
+            let single_agent = party_chat
+                .entry(serde_yaml::Value::String("single_agent".to_string()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+                .as_mapping_mut()
+                .expect("party_chat.single_agent should be a yaml mapping");
+            single_agent.insert(
+                serde_yaml::Value::String("backend".to_string()),
+                serde_yaml::Value::String(backend_id),
+            );
+        }
+        if mode == TestDispatchFixtureMode::ChildProcess {
+            let agent_system = root
+                .entry(serde_yaml::Value::String("agent_system".to_string()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+                .as_mapping_mut()
+                .expect("agent_system should be a yaml mapping");
+            let subagents = agent_system
+                .entry(serde_yaml::Value::String("subagents".to_string()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+                .as_mapping_mut()
+                .expect("agent_system.subagents should be a yaml mapping");
+            subagents.insert(
+                serde_yaml::Value::String(child_backend_id.clone()),
+                child_backend.clone(),
+            );
+        }
+        let patched_dispatch = {
+            let host_environment = root
+                .get_mut(serde_yaml::Value::String("host_environment".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("host_environment should exist");
+            let systems = host_environment
+                .get_mut(serde_yaml::Value::String("systems".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("host systems should exist");
+            let codex = systems
+                .get_mut(serde_yaml::Value::String("codex".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("codex system should exist");
+
+            for key in ["execution_boundary", "dispatch_transport", "receipt_mode"] {
+                if let Some(value) = child_backend
+                    .as_mapping()
+                    .and_then(|entry| entry.get(serde_yaml::Value::String(key.to_string())))
+                    .cloned()
+                {
+                    codex.insert(serde_yaml::Value::String(key.to_string()), value);
+                }
+            }
+            codex.remove(serde_yaml::Value::String("host_tool_bridge".to_string()));
+            let dispatch = codex
+                .entry(serde_yaml::Value::String("dispatch".to_string()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            let dispatch = dispatch
+                .as_mapping_mut()
+                .expect("codex dispatch config should be a yaml mapping");
+            if let Some(template_dispatch) = child_backend
+                .as_mapping()
+                .and_then(|entry| entry.get(serde_yaml::Value::String("dispatch".to_string())))
+                .and_then(serde_yaml::Value::as_mapping)
+            {
+                for (key, value) in template_dispatch {
+                    dispatch.insert(key.clone(), value.clone());
+                }
+            }
+            let dispatch = codex
+                .get_mut(serde_yaml::Value::String("dispatch".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("codex dispatch config should exist");
+            let original_static_args = crate::yaml_string_list(
+                dispatch.get(serde_yaml::Value::String("static_args".to_string())),
+            );
+            let (command, mut static_args) = fake_fixture_dispatch_command_and_args(
+                &fixture,
+                "host",
+                fake_codex,
+                &child_backend,
+            );
+            static_args.extend(original_static_args);
+            dispatch.insert(
+                serde_yaml::Value::String("command".to_string()),
+                serde_yaml::Value::String(command),
+            );
+            dispatch.insert(
+                serde_yaml::Value::String("static_args".to_string()),
+                serde_yaml::Value::Sequence(
+                    static_args
+                        .into_iter()
+                        .map(serde_yaml::Value::String)
+                        .collect(),
+                ),
+            );
+            dispatch.insert(
+                serde_yaml::Value::String("receipt_backed_completion_supported".to_string()),
+                serde_yaml::Value::Bool(true),
+            );
+            dispatch.insert(
+                serde_yaml::Value::String("windows_sandbox_spawn_supported".to_string()),
+                serde_yaml::Value::Bool(true),
+            );
+            let mut patched_child_dispatch = dispatch.clone();
+            patched_child_dispatch.insert(
+                serde_yaml::Value::String("command".to_string()),
+                serde_yaml::Value::String(child_command.clone()),
+            );
+            patched_child_dispatch.insert(
+                serde_yaml::Value::String("trusted_command".to_string()),
+                serde_yaml::Value::String(child_command),
+            );
+            patched_child_dispatch.insert(
+                serde_yaml::Value::String("static_args".to_string()),
+                serde_yaml::Value::Sequence(
+                    child_static_args
+                        .into_iter()
+                        .map(serde_yaml::Value::String)
+                        .collect(),
+                ),
+            );
+            serde_yaml::Value::Mapping(patched_child_dispatch)
+        };
+        if mode == TestDispatchFixtureMode::ChildProcess {
+            child_backend
+                .as_mapping_mut()
+                .expect("child-process backend should be a yaml mapping")
+                .insert(
+                    serde_yaml::Value::String("dispatch".to_string()),
+                    patched_dispatch.clone(),
+                );
+        }
+        if let Some(internal_carrier_id) = internal_carrier_id {
+            let host_environment = root
+                .get_mut(serde_yaml::Value::String("host_environment".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("host_environment should exist");
+            let codex = host_environment
+                .get_mut(serde_yaml::Value::String("codex".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("codex carrier catalog should exist");
+            let carriers = codex
+                .get_mut(serde_yaml::Value::String("agents".to_string()))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+                .expect("codex carrier catalog should exist");
+            let carrier = carriers
+                .get_mut(serde_yaml::Value::String(internal_carrier_id))
+                .expect("selected internal carrier should remain configured")
+                .as_mapping_mut()
+                .expect("selected internal carrier should be a yaml mapping");
+            for key in ["execution_boundary", "dispatch_transport", "receipt_mode"] {
+                if let Some(value) = child_backend
+                    .as_mapping()
+                    .and_then(|entry| entry.get(serde_yaml::Value::String(key.to_string())))
+                    .cloned()
+                {
+                    carrier.insert(serde_yaml::Value::String(key.to_string()), value);
+                }
+            }
+            carrier.insert(
+                serde_yaml::Value::String("dispatch".to_string()),
+                patched_dispatch.clone(),
+            );
+        }
+        let agent_system = root
+            .entry(serde_yaml::Value::String("agent_system".to_string()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+            .as_mapping_mut()
+            .expect("agent_system should be a yaml mapping");
+        let subagents = agent_system
+            .entry(serde_yaml::Value::String("subagents".to_string()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+            .as_mapping_mut()
+            .expect("agent_system.subagents should be a yaml mapping");
+        if mode == TestDispatchFixtureMode::ChildProcess {
+            subagents.insert(serde_yaml::Value::String(child_backend_id), child_backend);
+        } else if let Some(internal_backend_id) = internal_backend_id {
+            let internal_backend = subagents
+                .get_mut(serde_yaml::Value::String(internal_backend_id))
+                .expect("canonical internal backend should remain configured")
+                .as_mapping_mut()
+                .expect("canonical internal backend should be a yaml mapping");
+            for key in ["execution_boundary", "dispatch_transport", "receipt_mode"] {
+                if let Some(value) = child_backend
+                    .as_mapping()
+                    .and_then(|entry| entry.get(serde_yaml::Value::String(key.to_string())))
+                    .cloned()
+                {
+                    internal_backend.insert(serde_yaml::Value::String(key.to_string()), value);
+                }
+            }
+            internal_backend.insert(
+                serde_yaml::Value::String("dispatch".to_string()),
+                patched_dispatch,
+            );
+        }
         fs::write(
             &config_path,
             serde_yaml::to_string(&document).expect("config should serialize as yaml"),
@@ -10163,65 +10564,42 @@ host_environment:
         .expect("config should update fake codex dispatch");
     }
 
-    fn write_fake_codex_success(path: &Path, message: &str) {
-        #[cfg(windows)]
-        let script = format!(
-            "Write-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"{message}\"}}}}'\r\n"
-        );
-        #[cfg(not(windows))]
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"{message}\"}}}}'\n"
-        );
+    fn write_fake_codex_success(path: &Path, message: &str, mode: TestDispatchFixtureMode) {
+        let script = fake_fixture_script("success", mode, &[("{message}", message)]);
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
 
     fn write_fake_codex_timeout(path: &Path) {
-        #[cfg(windows)]
-        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Sleep -Seconds 30\r\n";
-        #[cfg(not(windows))]
-        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\ntrap '' TERM\nsleep 30\n";
+        let script = fake_fixture_os_script("timeout", &[]);
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
 
-    fn write_fake_codex_delayed_success(path: &Path) {
-        write_fake_codex_delayed_success_with_seconds(path, 2);
+    fn write_fake_codex_delayed_success(path: &Path, mode: TestDispatchFixtureMode) {
+        write_fake_codex_delayed_success_with_seconds(path, 2, mode);
     }
 
-    fn write_fake_codex_delayed_success_with_seconds(path: &Path, seconds: u64) {
-        #[cfg(windows)]
-        let script = format!(
-            "Write-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nStart-Sleep -Seconds {seconds}\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\r\n"
-        );
-        #[cfg(not(windows))]
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nsleep {seconds}\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\n"
-        );
+    fn write_fake_codex_delayed_success_with_seconds(
+        path: &Path,
+        seconds: u64,
+        mode: TestDispatchFixtureMode,
+    ) {
+        let seconds_text = seconds.to_string();
+        let script = fake_fixture_script("delayed_success", mode, &[("{seconds}", &seconds_text)]);
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
 
     fn write_fake_codex_detached_timeout(path: &Path) {
-        #[cfg(windows)]
-        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Process -WindowStyle Hidden pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30'\r\nStart-Sleep -Seconds 30\r\n";
-        #[cfg(not(windows))]
-        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsetsid sh -c 'sleep 30' &\nexit 0\n";
+        let script = fake_fixture_os_script("detached_timeout", &[]);
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
 
     fn write_fake_codex_env_capture(path: &Path, env_capture: &Path) {
-        #[cfg(windows)]
-        let script = format!(
-            "Set-Content -LiteralPath '{capture}' -Value ([string]$env:HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CONFIG_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_DATA_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_STATE_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CACHE_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:TMPDIR)\r\nWrite-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\r\n",
-            capture = env_capture.display()
-        );
-        #[cfg(not(windows))]
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > \"{capture}\"\nprintf '%s\\n' \"$XDG_CONFIG_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_DATA_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_STATE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_CACHE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$TMPDIR\" >> \"{capture}\"\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\n",
-            capture = env_capture.display()
-        );
+        let capture_text = env_capture.display().to_string();
+        let script = fake_fixture_os_script("env_capture", &[("{capture}", &capture_text)]);
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
@@ -10911,95 +11289,220 @@ host_environment:
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
-        let (
-            selected_carrier_id,
-            selected_backend_id,
-            model_profile_id,
-            model_ref,
-            reasoning_effort,
-        ) = match executor_backend {
-            "opencode_cli" => (
-                "opencode_cli",
-                "opencode_cli",
-                "opencode_codex_mini_review",
-                "opencode/gpt-5.1-codex-mini",
-                "low",
-            ),
-            "internal_subagents" => (
-                "internal_subagents",
-                "internal_subagents",
-                "codex_gpt56_luna_xhigh_write",
-                "gpt-5.6-luna",
-                "xhigh",
-            ),
-            "junior" => (
-                "junior",
-                "internal_subagents",
-                "codex_gpt56_luna_high_write",
-                "gpt-5.6-luna",
-                "high",
-            ),
-            "middle" => (
-                "middle",
-                "internal_subagents",
-                "codex_gpt56_luna_xhigh_write",
-                "gpt-5.6-luna",
-                "xhigh",
-            ),
-            _ => (
-                "junior",
-                "internal_subagents",
-                "codex_gpt56_luna_xhigh_write",
-                "gpt-5.6-luna",
-                "xhigh",
-            ),
-        };
+        let config_root = env::var_os("VIDA_ROOT")
+            .map(PathBuf::from)
+            .filter(|root| root.join("vida.config.yaml").is_file())
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+        let config_path = config_root.join("vida.config.yaml");
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(&config_path).expect("test execution config should exist"),
+        )
+        .expect("test execution config should parse as yaml");
+        let host_agents = yaml_lookup(&config, &["host_environment", "codex", "agents"])
+            .and_then(serde_yaml::Value::as_mapping);
+        let subagents = yaml_lookup(&config, &["agent_system", "subagents"])
+            .and_then(serde_yaml::Value::as_mapping);
+        let host_catalog_enabled = yaml_lookup(
+            &config,
+            &["host_environment", "systems", "codex", "enabled"],
+        )
+        .and_then(serde_yaml::Value::as_bool)
+        .unwrap_or(true);
+        // Backend identity is owned by the active party-chat policy. Only enabled subagent
+        // rows may satisfy it; host catalog rows are carriers and never backend fallbacks.
+        let mut configured_subagents = Vec::<(String, serde_yaml::Value, String)>::new();
+        if let Some(entries) = subagents {
+            configured_subagents.extend(entries.iter().filter_map(|(backend_id, entry)| {
+                let enabled = yaml_lookup(entry, &["enabled"])
+                    .and_then(serde_yaml::Value::as_bool)
+                    .unwrap_or(false);
+                enabled.then(|| {
+                    (
+                        backend_id
+                            .as_str()
+                            .unwrap_or_else(|| {
+                                panic!("configured subagent backend id should be text")
+                            })
+                            .to_string(),
+                        entry.clone(),
+                        yaml_string(yaml_lookup(entry, &["subagent_backend_class"]))
+                            .unwrap_or_else(|| "internal".to_string()),
+                    )
+                })
+            }));
+        }
+        configured_subagents.sort_by(|left, right| left.0.cmp(&right.0));
+        configured_subagents.dedup_by(|left, right| left.0 == right.0);
+
+        let configured_backend_id = yaml_string(yaml_lookup(
+            &config,
+            &["party_chat", "single_agent", "backend"],
+        ))
+        .filter(|backend_id| !backend_id.trim().is_empty())
+        .unwrap_or_else(|| panic!("active party-chat backend should be configured"));
+        let selected_backend = configured_subagents
+            .iter()
+            .find(|(backend_id, _, _)| backend_id == &configured_backend_id)
+            .unwrap_or_else(|| {
+                panic!("active party-chat backend `{configured_backend_id}` is missing or disabled")
+            });
+        let selected_backend_id = selected_backend.0.clone();
+        let selected_backend_entry = &selected_backend.1;
+
+        let supports_role_and_task =
+            |entry: &serde_yaml::Value, runtime_role: Option<&str>, task_class: Option<&str>| {
+                let roles = yaml_string_list(yaml_lookup(entry, &["runtime_roles"]));
+                let tasks = yaml_string_list(yaml_lookup(entry, &["task_classes"]));
+                runtime_role.is_none_or(|role| roles.iter().any(|candidate| candidate == role))
+                    && task_class.is_none_or(|task| tasks.iter().any(|candidate| candidate == task))
+            };
+        let backend_runtime_role = yaml_string(yaml_lookup(
+            selected_backend_entry,
+            &["default_runtime_role"],
+        ))
+        .or_else(|| {
+            yaml_string_list(yaml_lookup(selected_backend_entry, &["runtime_roles"]))
+                .into_iter()
+                .next()
+        });
+        let backend_task_class =
+            yaml_string_list(yaml_lookup(selected_backend_entry, &["task_classes"]))
+                .into_iter()
+                .next();
+        let mut configured_carriers = Vec::<(String, serde_yaml::Value)>::new();
+        if host_catalog_enabled {
+            if let Some(entries) = host_agents {
+                configured_carriers.extend(entries.iter().filter_map(|(carrier_id, entry)| {
+                    Some((carrier_id.as_str()?.to_string(), entry.clone()))
+                }));
+            }
+        }
+        configured_carriers.sort_by(|left, right| left.0.cmp(&right.0));
+        configured_carriers.dedup_by(|left, right| left.0 == right.0);
+        let selected_carrier = configured_carriers
+            .iter()
+            .find(|(carrier_id, entry)| {
+                carrier_id == executor_backend
+                    && supports_role_and_task(
+                        entry,
+                        backend_runtime_role.as_deref(),
+                        backend_task_class.as_deref(),
+                    )
+            })
+            .or_else(|| {
+                configured_carriers.iter().find(|(_, entry)| {
+                    supports_role_and_task(
+                        entry,
+                        backend_runtime_role.as_deref(),
+                        backend_task_class.as_deref(),
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                panic!("no compatible configured carrier for backend `{selected_backend_id}`")
+            });
+        let selected_carrier_id = selected_carrier.0.clone();
+        let selected_carrier_entry = &selected_carrier.1;
+        let model_profile_id = yaml_string(yaml_lookup(
+            selected_carrier_entry,
+            &["default_model_profile"],
+        ))
+        .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["default_profile"])))
+        .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["model_profile"])))
+        .or_else(|| {
+            yaml_lookup(selected_carrier_entry, &["model_profiles"])
+                .and_then(serde_yaml::Value::as_mapping)
+                .and_then(|profiles| profiles.keys().next())
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::to_string)
+        });
+        let selected_profile = model_profile_id.as_deref().and_then(|profile_id| {
+            yaml_lookup(selected_carrier_entry, &["model_profiles", profile_id])
+        });
+        let model_ref = selected_profile
+            .and_then(|profile| yaml_string(yaml_lookup(profile, &["model_ref"])))
+            .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["model"])))
+            .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["default_model"])))
+            .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["models_hint"])))
+            .unwrap_or_else(|| "".to_string());
+        let reasoning_effort = selected_profile
+            .and_then(|profile| yaml_string(yaml_lookup(profile, &["reasoning_effort"])))
+            .or_else(|| {
+                yaml_string(yaml_lookup(
+                    selected_carrier_entry,
+                    &["model_reasoning_effort"],
+                ))
+            })
+            .or_else(|| yaml_string(yaml_lookup(selected_carrier_entry, &["reasoning_band"])))
+            .unwrap_or_else(|| "".to_string());
+        let selected_runtime_role = yaml_string(yaml_lookup(
+            selected_carrier_entry,
+            &["default_runtime_role"],
+        ))
+        .or_else(|| {
+            selected_profile.and_then(|profile| {
+                yaml_string_list(yaml_lookup(profile, &["runtime_roles"]))
+                    .into_iter()
+                    .next()
+            })
+        })
+        .or_else(|| {
+            yaml_string_list(yaml_lookup(selected_carrier_entry, &["runtime_roles"]))
+                .into_iter()
+                .next()
+        })
+        .unwrap_or_default();
+        let task_class = selected_profile
+            .map(|profile| yaml_string_list(yaml_lookup(profile, &["task_classes"])))
+            .into_iter()
+            .flatten()
+            .next()
+            .or_else(|| {
+                yaml_string_list(yaml_lookup(selected_carrier_entry, &["task_classes"]))
+                    .into_iter()
+                    .next()
+            })
+            .unwrap_or_default();
+        let backend_admissibility_matrix = configured_subagents
+            .iter()
+            .map(|(backend_id, entry, backend_class)| {
+                let classes = yaml_string_list(yaml_lookup(entry, &["task_classes"]));
+                let lane_admissibility = classes
+                    .into_iter()
+                    .map(|task_class| (task_class, serde_json::Value::Bool(true)))
+                    .collect::<serde_json::Map<_, _>>();
+                Some(json!({
+                    "backend_id": backend_id,
+                    "backend_class": backend_class,
+                    "lane_admissibility": lane_admissibility,
+                }))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut runtime_assignment = json!({
+            "selected_carrier_id": selected_carrier_id,
+            "selected_backend_id": selected_backend_id,
+            "selected_dispatch_backend_id": selected_backend_id,
+            "selected_runtime_role": selected_runtime_role,
+            "task_class": task_class,
+        });
+        if let Some(profile_id) = model_profile_id {
+            runtime_assignment["selected_model_profile_id"] = json!(profile_id);
+        }
+        if !model_ref.is_empty() {
+            runtime_assignment["selected_model_ref"] = json!(model_ref);
+        }
+        if !reasoning_effort.is_empty() {
+            runtime_assignment["selected_reasoning_effort"] = json!(reasoning_effort);
+        }
         json!({
-            "backend_admissibility_matrix": [
-                {
-                    "backend_id": "junior",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                },
-                {
-                    "backend_id": "middle",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                },
-                {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                },
-                {
-                    "backend_id": "opencode_cli",
-                    "backend_class": "external_cli",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                }
-            ],
+            "backend_admissibility_matrix": backend_admissibility_matrix,
             "development_flow": {
                 "implementer": {
-                    "executor_backend": executor_backend
+                    "executor_backend": selected_backend_id
                 }
             },
-            "runtime_assignment": {
-                "selected_carrier_id": selected_carrier_id,
-                "selected_backend_id": selected_backend_id,
-                "selected_dispatch_backend_id": selected_backend_id,
-                "selected_model_profile_id": model_profile_id,
-                "selected_model_ref": model_ref,
-                "selected_reasoning_effort": reasoning_effort,
-                "selected_runtime_role": "worker",
-                "task_class": "implementation"
-            }
+            "runtime_assignment": runtime_assignment
         })
     }
 
@@ -11053,9 +11556,7 @@ host_environment:
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .expect("dispatch packet fixture should have a file stem");
-        let request_id = format!(
-            "{run_id}-{dispatch_target}-{packet_stem}-host-tool-bridge"
-        );
+        let request_id = format!("{run_id}-{dispatch_target}-{packet_stem}-host-tool-bridge");
         let attempt_id = taskflow_host_bridge::normalized_host_bridge_attempt_id(
             run_id,
             Some(packet_id.as_str()),
@@ -11093,7 +11594,10 @@ host_environment:
                 "adapter_capability_id",
                 serde_json::json!(adapter.adapter_capability_id),
             ),
-            ("invocation_mode", serde_json::json!(adapter.invocation_mode)),
+            (
+                "invocation_mode",
+                serde_json::json!(adapter.invocation_mode),
+            ),
             (
                 "dispatch_transport",
                 serde_json::json!(adapter.dispatch_transport),
@@ -11105,10 +11609,7 @@ host_environment:
             ),
             ("adapter_contract_snapshot", adapter_snapshot.clone()),
             ("adapter_contract_hash", serde_json::json!(adapter_hash)),
-            (
-                "adapter_operations",
-                adapter_snapshot.clone(),
-            ),
+            ("adapter_operations", adapter_snapshot.clone()),
             (
                 "request_path",
                 serde_json::json!(request_path.display().to_string()),
@@ -12865,14 +13366,15 @@ host_environment:
                         .expect("canonical host bridge request should encode"),
                 )
                 .expect("canonical host bridge request should persist");
-                let identity = crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
-                    &state_root,
-                    harness.path(),
-                    &request_path.display().to_string(),
-                    &persisted_receipt,
-                )
-                .expect("canonical host bridge request identity should validate")
-                .expect("canonical host bridge request should use host bridge transport");
+                let identity =
+                    crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
+                        &state_root,
+                        harness.path(),
+                        &request_path.display().to_string(),
+                        &persisted_receipt,
+                    )
+                    .expect("canonical host bridge request identity should validate")
+                    .expect("canonical host bridge request should use host bridge transport");
                 runtime
                     .block_on(store.record_host_bridge_receipt_identity(&identity))
                     .expect("typed host bridge receipt identity should record");
@@ -12884,7 +13386,9 @@ host_environment:
                     runtime.block_on(run(cli(&[
                         "agent-init",
                         "--state-dir",
-                        harness_state_root(&harness).to_str().expect("state root should be UTF-8"),
+                        harness_state_root(&harness)
+                            .to_str()
+                            .expect("state root should be UTF-8"),
                         "--dispatch-packet",
                         dispatch_packet_path.as_str(),
                         "--execute-dispatch",
@@ -13111,10 +13615,14 @@ host_environment:
                 .as_str()
                 .is_some_and(|value| !value.trim().is_empty()));
         }
-        assert_eq!(result["host_tool_bridge_request"]["backend_id"], "internal_subagents");
+        assert_eq!(
+            result["host_tool_bridge_request"]["backend_id"],
+            "internal_subagents"
+        );
         assert_eq!(result["host_tool_bridge_request"]["carrier_id"], "junior");
         assert_eq!(
-            result["host_tool_bridge_request"]["adapter_contract_snapshot"]["adapter_capability_id"],
+            result["host_tool_bridge_request"]["adapter_contract_snapshot"]
+                ["adapter_capability_id"],
             "codex.multi_agent_v1"
         );
     }
@@ -13326,14 +13834,15 @@ host_environment:
                         .expect("canonical host bridge request should encode"),
                 )
                 .expect("canonical host bridge request should persist");
-                let identity = crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
-                    &state_root,
-                    harness.path(),
-                    &request_path.display().to_string(),
-                    &persisted_receipt,
-                )
-                .expect("canonical host bridge request identity should validate")
-                .expect("canonical host bridge request should use host bridge transport");
+                let identity =
+                    crate::runtime_dispatch_execution::validated_host_bridge_receipt_identity(
+                        &state_root,
+                        harness.path(),
+                        &request_path.display().to_string(),
+                        &persisted_receipt,
+                    )
+                    .expect("canonical host bridge request identity should validate")
+                    .expect("canonical host bridge request should use host bridge transport");
                 runtime
                     .block_on(store.record_host_bridge_receipt_identity(&identity))
                     .expect("typed host bridge receipt identity should record");
@@ -13345,7 +13854,9 @@ host_environment:
                     runtime.block_on(run(cli(&[
                         "agent-init",
                         "--state-dir",
-                        harness_state_root(&harness).to_str().expect("state root should be UTF-8"),
+                        harness_state_root(&harness)
+                            .to_str()
+                            .expect("state root should be UTF-8"),
                         "--dispatch-packet",
                         dispatch_packet_path.as_str(),
                         "--execute-dispatch",
@@ -13380,14 +13891,20 @@ host_environment:
                         .as_str()
                         .is_some_and(|value| !value.trim().is_empty()));
                 }
-                assert_eq!(parsed["host_tool_bridge_request"]["backend_id"], "internal_subagents");
+                assert_eq!(
+                    parsed["host_tool_bridge_request"]["backend_id"],
+                    "internal_subagents"
+                );
                 assert_eq!(parsed["host_tool_bridge_request"]["carrier_id"], "junior");
                 assert_eq!(
                     parsed["host_tool_bridge_request"]["adapter_contract_snapshot"]
                         ["adapter_capability_id"],
                     "codex.multi_agent_v1"
                 );
-                assert_eq!(parsed["backend_dispatch"]["backend_id"], "internal_subagents");
+                assert_eq!(
+                    parsed["backend_dispatch"]["backend_id"],
+                    "internal_subagents"
+                );
             },
         );
     }
@@ -13502,8 +14019,16 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        write_fake_codex_success(
+            &fake_codex,
+            "internal-dispatch-ok",
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
+        configure_fake_codex_dispatch_mode(
+            harness.path(),
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
@@ -13648,8 +14173,16 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        write_fake_codex_success(
+            &fake_codex,
+            "internal-dispatch-ok",
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
+        configure_fake_codex_dispatch_mode(
+            harness.path(),
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
@@ -13939,7 +14472,11 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_success(&fake_codex, "analysis-validation-ok");
+        write_fake_codex_success(
+            &fake_codex,
+            "analysis-validation-ok",
+            TestDispatchFixtureMode::ChildProcess,
+        );
         configure_fake_codex_dispatch(harness.path(), &fake_codex);
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
@@ -14126,7 +14663,11 @@ host_environment:
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
         write_fake_codex_timeout(&fake_codex);
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        configure_fake_codex_dispatch_mode(
+            harness.path(),
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
@@ -14596,7 +15137,11 @@ host_environment:
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
         write_fake_codex_detached_timeout(&fake_codex);
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        configure_fake_codex_dispatch_mode(
+            harness.path(),
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
@@ -14758,8 +15303,15 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_delayed_success(&fake_codex);
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        write_fake_codex_delayed_success(
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
+        configure_fake_codex_dispatch_mode(
+            harness.path(),
+            &fake_codex,
+            TestDispatchFixtureMode::InternalChildProcess,
+        );
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
@@ -14936,7 +15488,11 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_delayed_success_with_seconds(&fake_codex, 10);
+        write_fake_codex_delayed_success_with_seconds(
+            &fake_codex,
+            10,
+            TestDispatchFixtureMode::ChildProcess,
+        );
         configure_fake_codex_dispatch(harness.path(), &fake_codex);
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);

@@ -1,0 +1,122 @@
+schema_version: 1
+
+dispatch:
+  windows:
+    host:
+      command: pwsh
+      static_args:
+        - -NoProfile
+        - -ExecutionPolicy
+        - Bypass
+        - -File
+        - "{fake_codex}"
+    child:
+      command: pwsh
+      static_args:
+        - -NoProfile
+        - -ExecutionPolicy
+        - Bypass
+        - -File
+        - "{fake_codex}"
+  posix:
+    host:
+      command: "{fake_codex}"
+      static_args: []
+    child:
+      command_source: template
+      static_args_source: template
+
+scripts:
+  success:
+    windows:
+      child_process: |-
+        Write-Output '{"type":"result","is_error":false,"result":"{message}"}'
+      internal_child_process: |-
+        Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+        Write-Output '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{message}"}}'
+      canonical_host_bridge: |-
+        Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+        Write-Output '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{message}"}}'
+    posix:
+      child_process: |-
+        #!/bin/sh
+        printf '%s\n' '{"type":"result","is_error":false,"result":"{message}"}'
+      internal_child_process: |-
+        #!/bin/sh
+        printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+        printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{message}"}}'
+      canonical_host_bridge: |-
+        #!/bin/sh
+        printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+        printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{message}"}}'
+
+  timeout:
+    windows: |-
+      Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+      Start-Sleep -Seconds 30
+    posix: |-
+      #!/bin/sh
+      printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+      trap '' TERM
+      sleep 30
+
+  delayed_success:
+    windows:
+      child_process: |-
+        Start-Sleep -Seconds {seconds}
+        Write-Output '{"type":"result","is_error":false,"result":"internal-dispatch-ok"}'
+      internal_child_process: |-
+        Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+        Start-Sleep -Seconds {seconds}
+        Write-Output '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'
+      canonical_host_bridge: |-
+        Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+        Start-Sleep -Seconds {seconds}
+        Write-Output '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'
+    posix:
+      child_process: |-
+        #!/bin/sh
+        sleep {seconds}
+        printf '%s\n' '{"type":"result","is_error":false,"result":"internal-dispatch-ok"}'
+      internal_child_process: |-
+        #!/bin/sh
+        printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+        sleep {seconds}
+        printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'
+      canonical_host_bridge: |-
+        #!/bin/sh
+        printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+        sleep {seconds}
+        printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'
+
+  detached_timeout:
+    windows: |-
+      Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+      Start-Process -WindowStyle Hidden pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30'
+      Start-Sleep -Seconds 30
+    posix: |-
+      #!/bin/sh
+      printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+      setsid sh -c 'sleep 30' &
+      exit 0
+
+  env_capture:
+    windows: |-
+      Set-Content -LiteralPath '{capture}' -Value ([string]$env:HOME)
+      Add-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CONFIG_HOME)
+      Add-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_DATA_HOME)
+      Add-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_STATE_HOME)
+      Add-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CACHE_HOME)
+      Add-Content -LiteralPath '{capture}' -Value ([string]$env:TMPDIR)
+      Write-Output '{"type":"thread.started","thread_id":"test-thread"}'
+      Write-Output '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'
+    posix: |-
+      #!/bin/sh
+      printf '%s\n' "$HOME" > "{capture}"
+      printf '%s\n' "$XDG_CONFIG_HOME" >> "{capture}"
+      printf '%s\n' "$XDG_DATA_HOME" >> "{capture}"
+      printf '%s\n' "$XDG_STATE_HOME" >> "{capture}"
+      printf '%s\n' "$XDG_CACHE_HOME" >> "{capture}"
+      printf '%s\n' "$TMPDIR" >> "{capture}"
+      printf '%s\n' '{"type":"thread.started","thread_id":"test-thread"}'
+      printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"internal-dispatch-ok"}}'

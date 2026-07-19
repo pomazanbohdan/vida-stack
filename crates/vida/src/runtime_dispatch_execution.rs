@@ -105,6 +105,264 @@ fn backend_is_external_cli_bridge(
         .is_some_and(|backend_class| backend_class == "external_cli")
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InternalHostDispatchRouteMode {
+    ParentHostBridge,
+    DirectChildProcess,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InternalHostDispatchRoute {
+    mode: InternalHostDispatchRouteMode,
+    execution_boundary: String,
+    dispatch_transport: String,
+    receipt_mode: String,
+    receipt_backed_completion_supported: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct InternalHostDispatchRouteEvidence {
+    execution_boundary: Option<String>,
+    dispatch_transport: Option<String>,
+    receipt_mode: Option<String>,
+    receipt_backed_completion_supported: Option<bool>,
+}
+
+const PARENT_HOST_SESSION_BOUNDARY: &str = "parent_host_session";
+const CHILD_PROCESS_BOUNDARY: &str = "child_process";
+const HOST_TOOL_BRIDGE_TRANSPORT: &str = "host_tool_bridge";
+const CODEX_CLI_EXEC_TRANSPORT: &str = "codex_cli_exec";
+const HOST_BRIDGE_RECEIPT_MODE: &str = "host_bridge_receipt";
+const CLI_JSON_RESULT_RECEIPT_MODE: &str = "cli_json_result";
+
+fn route_string_field(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn route_bool_field(value: &serde_json::Value, field: &str) -> Option<bool> {
+    value.get(field).and_then(serde_json::Value::as_bool)
+}
+
+fn merge_route_string_field(
+    source: &str,
+    field: &str,
+    target: &mut Option<String>,
+    candidate: Option<String>,
+) -> Result<(), String> {
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+    if let Some(existing) = target.as_deref() {
+        if existing != candidate {
+            return Err(format!(
+                "internal_host_dispatch_route_config_invalid: {field} disagrees at {source} ({existing} vs {candidate})"
+            ));
+        }
+    } else {
+        *target = Some(candidate);
+    }
+    Ok(())
+}
+
+fn merge_route_bool_field(
+    source: &str,
+    field: &str,
+    target: &mut Option<bool>,
+    candidate: Option<bool>,
+) -> Result<(), String> {
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+    if let Some(existing) = *target {
+        if existing != candidate {
+            return Err(format!(
+                "internal_host_dispatch_route_config_invalid: {field} disagrees at {source} ({existing} vs {candidate})"
+            ));
+        }
+    } else {
+        *target = Some(candidate);
+    }
+    Ok(())
+}
+
+fn route_evidence_from_json_value(
+    source: &str,
+    value: &serde_json::Value,
+) -> Result<Option<InternalHostDispatchRouteEvidence>, String> {
+    let mut evidence = InternalHostDispatchRouteEvidence::default();
+    let mut saw_value = false;
+    for (label, node) in [
+        ("top_level", value),
+        ("dispatch", &value["dispatch"]),
+        ("host_tool_bridge", &value["host_tool_bridge"]),
+    ] {
+        if !node.is_object() {
+            continue;
+        }
+        let boundary = route_string_field(node, "execution_boundary");
+        let transport = route_string_field(node, "dispatch_transport");
+        let receipt_mode = route_string_field(node, "receipt_mode");
+        let receipt_backed = route_bool_field(node, "receipt_backed_completion_supported");
+        saw_value |= boundary.is_some()
+            || transport.is_some()
+            || receipt_mode.is_some()
+            || receipt_backed.is_some();
+        merge_route_string_field(
+            &format!("{source}.{label}"),
+            "execution_boundary",
+            &mut evidence.execution_boundary,
+            boundary,
+        )?;
+        merge_route_string_field(
+            &format!("{source}.{label}"),
+            "dispatch_transport",
+            &mut evidence.dispatch_transport,
+            transport,
+        )?;
+        merge_route_string_field(
+            &format!("{source}.{label}"),
+            "receipt_mode",
+            &mut evidence.receipt_mode,
+            receipt_mode,
+        )?;
+        merge_route_bool_field(
+            &format!("{source}.{label}"),
+            "receipt_backed_completion_supported",
+            &mut evidence.receipt_backed_completion_supported,
+            receipt_backed,
+        )?;
+    }
+    Ok(saw_value.then_some(evidence))
+}
+
+fn route_evidence_from_yaml_value(
+    source: &str,
+    value: Option<&serde_yaml::Value>,
+) -> Result<Option<InternalHostDispatchRouteEvidence>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = serde_json::to_value(value).map_err(|error| {
+        format!("internal_host_dispatch_route_config_invalid: {source} cannot serialize: {error}")
+    })?;
+    route_evidence_from_json_value(source, &value)
+}
+
+fn merge_route_evidence(
+    source: &str,
+    target: &mut InternalHostDispatchRouteEvidence,
+    candidate: Option<InternalHostDispatchRouteEvidence>,
+) -> Result<(), String> {
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+    merge_route_string_field(
+        source,
+        "execution_boundary",
+        &mut target.execution_boundary,
+        candidate.execution_boundary,
+    )?;
+    merge_route_string_field(
+        source,
+        "dispatch_transport",
+        &mut target.dispatch_transport,
+        candidate.dispatch_transport,
+    )?;
+    merge_route_string_field(
+        source,
+        "receipt_mode",
+        &mut target.receipt_mode,
+        candidate.receipt_mode,
+    )?;
+    merge_route_bool_field(
+        source,
+        "receipt_backed_completion_supported",
+        &mut target.receipt_backed_completion_supported,
+        candidate.receipt_backed_completion_supported,
+    )?;
+    Ok(())
+}
+
+fn effective_internal_host_dispatch_route(
+    overlay: Option<&serde_yaml::Value>,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    backend_id: &str,
+    carrier: &serde_json::Value,
+) -> Result<InternalHostDispatchRoute, String> {
+    let mut evidence = InternalHostDispatchRouteEvidence::default();
+    merge_route_evidence(
+        "selected_system",
+        &mut evidence,
+        route_evidence_from_yaml_value("selected_system", selected_cli_entry)?,
+    )?;
+    merge_route_evidence(
+        "selected_backend",
+        &mut evidence,
+        route_evidence_from_yaml_value(
+            "selected_backend",
+            overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, backend_id)),
+        )?,
+    )?;
+    merge_route_evidence(
+        "selected_carrier",
+        &mut evidence,
+        route_evidence_from_json_value("selected_carrier", carrier)?,
+    )?;
+
+    let missing_fields = [
+        ("execution_boundary", evidence.execution_boundary.is_none()),
+        ("dispatch_transport", evidence.dispatch_transport.is_none()),
+        ("receipt_mode", evidence.receipt_mode.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect::<Vec<_>>();
+    if !missing_fields.is_empty() {
+        return Err(format!(
+            "internal_host_dispatch_route_config_invalid: selected backend `{backend_id}` missing explicit route evidence (missing_fields={}; sources=selected_system,selected_backend,selected_carrier)",
+            missing_fields.join(",")
+        ));
+    }
+
+    let execution_boundary = evidence
+        .execution_boundary
+        .expect("route evidence checked above");
+    let dispatch_transport = evidence
+        .dispatch_transport
+        .expect("route evidence checked above");
+    let receipt_mode = evidence.receipt_mode.expect("route evidence checked above");
+    let direct_tuple = execution_boundary == CHILD_PROCESS_BOUNDARY
+        && dispatch_transport == CODEX_CLI_EXEC_TRANSPORT
+        && receipt_mode == CLI_JSON_RESULT_RECEIPT_MODE
+        && evidence.receipt_backed_completion_supported == Some(true);
+    let parent_tuple = execution_boundary == PARENT_HOST_SESSION_BOUNDARY
+        && dispatch_transport == HOST_TOOL_BRIDGE_TRANSPORT
+        && receipt_mode == HOST_BRIDGE_RECEIPT_MODE
+        && evidence.receipt_backed_completion_supported != Some(false);
+    let mode = if direct_tuple {
+        InternalHostDispatchRouteMode::DirectChildProcess
+    } else if parent_tuple {
+        InternalHostDispatchRouteMode::ParentHostBridge
+    } else {
+        return Err(format!(
+            "internal_host_dispatch_route_config_invalid: selected backend `{backend_id}` has an incomplete or mixed route tuple (execution_boundary={execution_boundary}, dispatch_transport={dispatch_transport}, receipt_mode={receipt_mode}, receipt_backed_completion_supported={:?})",
+            evidence.receipt_backed_completion_supported,
+        ));
+    };
+    Ok(InternalHostDispatchRoute {
+        mode,
+        execution_boundary,
+        dispatch_transport,
+        receipt_mode,
+        receipt_backed_completion_supported: evidence.receipt_backed_completion_supported,
+    })
+}
+
 fn host_bridge_registry_missing_for_internal_backend(
     role_selection: &RuntimeConsumptionLaneSelection,
     overlay: Option<&serde_yaml::Value>,
@@ -2328,6 +2586,91 @@ fn configured_host_tool_bridge_string(
         .or_else(|| system_entry.and_then(|entry| crate::yaml_string(yaml_lookup(entry, &[key]))))
 }
 
+fn configured_host_bridge_adapter_argv(
+    system_entry: Option<&serde_yaml::Value>,
+    request_path: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(adapter_command) =
+        system_entry.and_then(|entry| yaml_lookup(entry, &["host_tool_bridge", "adapter_command"]))
+    else {
+        return Ok(None);
+    };
+    let executable = crate::yaml_string(yaml_lookup(adapter_command, &["executable"]))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "host_bridge_adapter_command_config_invalid: `executable` must be non-empty".to_string()
+        })?;
+    let mut argv = vec![executable];
+    argv.extend(crate::yaml_string_list(yaml_lookup(
+        adapter_command,
+        &["subcommands"],
+    )));
+    argv.extend(crate::yaml_string_list(yaml_lookup(
+        adapter_command,
+        &["args"],
+    )));
+    if argv.iter().any(|value| {
+        value.is_empty() || value.contains('\0') || value.contains('\r') || value.contains('\n')
+    }) {
+        return Err(
+            "host_bridge_adapter_command_config_invalid: command tokens must be non-empty and single-line"
+                .to_string(),
+        );
+    }
+    let mut placeholder = None;
+    for value in &argv {
+        let mut search_from = 0;
+        while let Some(start_offset) = value[search_from..].find("{{") {
+            let start = search_from + start_offset;
+            let Some(end_offset) = value[start + 2..].find("}}") else {
+                return Err(
+                    "host_bridge_adapter_command_config_invalid: command recipe contains an unterminated placeholder"
+                        .to_string(),
+                );
+            };
+            let end = start + 2 + end_offset + 2;
+            if value[start + 2..end - 2].trim().is_empty() {
+                return Err(
+                    "host_bridge_adapter_command_config_invalid: command recipe contains an empty placeholder"
+                        .to_string(),
+                );
+            }
+            if placeholder.replace(value[start..end].to_string()).is_some() {
+                return Err(
+                    "host_bridge_adapter_command_config_invalid: command recipe must contain exactly one request placeholder"
+                        .to_string(),
+                );
+            }
+            search_from = end;
+        }
+    }
+    let Some(placeholder) = placeholder else {
+        return Err(
+            "host_bridge_adapter_command_config_invalid: command recipe must contain one request placeholder"
+                .to_string(),
+        );
+    };
+    let request_path = request_path.trim();
+    if request_path.is_empty()
+        || request_path.contains('\0')
+        || request_path.contains('\r')
+        || request_path.contains('\n')
+    {
+        return Err(
+            "host_bridge_adapter_command_config_invalid: request path must be non-empty and single-line"
+                .to_string(),
+        );
+    }
+    Ok(Some(serde_json::Value::Array(
+        argv.into_iter()
+            .map(|value| {
+                serde_json::Value::String(value.replace(placeholder.as_str(), request_path))
+            })
+            .collect(),
+    )))
+}
+
 fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
     std::fs::read_to_string(dispatch_packet_path)
         .ok()
@@ -4333,24 +4676,37 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     };
 
     let carrier_id = configured_host_carrier_id(&carrier)?;
-    let execution_boundary = configured_host_execution_boundary(selected_cli_entry.as_ref());
-    let dispatch_transport = configured_host_dispatch_transport(selected_cli_entry.as_ref());
-    let receipt_mode = configured_host_receipt_mode(selected_cli_entry.as_ref());
+    let route = effective_internal_host_dispatch_route(
+        Some(&overlay),
+        selected_cli_entry.as_ref(),
+        backend_id,
+        &carrier,
+    )?;
+    let InternalHostDispatchRoute {
+        mode: route_mode,
+        execution_boundary,
+        dispatch_transport,
+        receipt_mode,
+        ..
+    } = route;
     let host_bridge_registry_present = selected_cli_entry
         .as_ref()
         .and_then(|entry| yaml_lookup(entry, &["host_tool_bridge"]))
         .is_some();
-    if host_bridge_registry_missing_for_internal_backend(
-        role_selection,
-        Some(&overlay),
-        backend_id,
-        selected_cli_entry.as_ref(),
-    ) {
+    if route_mode == InternalHostDispatchRouteMode::ParentHostBridge
+        && host_bridge_registry_missing_for_internal_backend(
+            role_selection,
+            Some(&overlay),
+            backend_id,
+            selected_cli_entry.as_ref(),
+        )
+    {
         return Err(format!(
             "host_bridge_adapter_registry_missing: backend `{backend_id}` requires a configured host adapter registry"
         ));
     }
-    if host_bridge_registry_present {
+    if route_mode == InternalHostDispatchRouteMode::ParentHostBridge && host_bridge_registry_present
+    {
         let activation_view = bounded_activation_view(
             state_root,
             project_root,
@@ -4383,15 +4739,10 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|request_path| {
-                serde_json::json!([
-                    "vida",
-                    "agent",
-                    "host-bridge",
-                    "--request",
-                    request_path,
-                    "--json"
-                ])
-            });
+                configured_host_bridge_adapter_argv(selected_cli_entry.as_ref(), request_path)
+            })
+            .transpose()?
+            .flatten();
         if let Some(result) = ingest_completed_host_bridge_result(
             state_root,
             &bridge_request,
@@ -4439,9 +4790,9 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         body.insert(
             "blocker_reason".to_string(),
-            serde_json::json!(
-                "internal_subagents require a configured parent host-agent bridge; vida.exe cannot call parent host adapter tools directly"
-            ),
+            serde_json::json!(format!(
+                "backend `{backend_id}` requires a configured parent host-agent bridge; the VIDA process cannot call parent host adapter tools directly"
+            )),
         );
         body.insert(
             "host_tool_bridge_request".to_string(),
@@ -4454,7 +4805,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             "next_actions".to_string(),
             serde_json::json!([
                 "A configured parent host-agent adapter must read host_tool_bridge_request.request_path or host_bridge_adapter_argv, invoke the configured adapter capability without shell command interpolation, then submit a receipt-backed result through the host-bridge completion surface.",
-                "Do not fall back to a child-process agent command for internal_subagents; use an explicit process carrier only when route policy selects that backend."
+                format!("Do not fall back to a child-process agent command for `{backend_id}`; use an explicit process carrier only when route policy selects that backend.")
             ]),
         );
         if let Some(dispatch) = body
@@ -5544,6 +5895,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 
 #[cfg(test)]
 mod tests {
+    use super::configured_host_bridge_adapter_argv;
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
@@ -5555,8 +5907,8 @@ mod tests {
         configured_internal_host_dispatch_no_output_timeout_seconds,
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
-        dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        execute_internal_agent_lane_dispatch,
+        dispatch_packet_prompt, effective_internal_host_dispatch_route,
+        execute_external_agent_lane_dispatch, execute_internal_agent_lane_dispatch,
         existing_host_bridge_request_needs_pending_contract_refresh,
         external_provider_output_confirms_execution,
         external_provider_output_confirms_execution_for_mode,
@@ -5569,8 +5921,9 @@ mod tests {
         parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
-        CommandTimeoutWrapper,
+        CommandTimeoutWrapper, InternalHostDispatchRouteMode,
     };
+    use crate::yaml_lookup;
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::{Path, PathBuf};
     #[cfg(any(unix, windows))]
@@ -6054,7 +6407,7 @@ dispatch:
   model_flag: -m
   reasoning_effort_flag: -c
   reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
-  prompt_mode: positional
+    prompt_mode: positional
 "#,
         )
         .expect("system entry should parse");
@@ -6183,6 +6536,196 @@ host_tool_bridge:
             "internal_subagents",
             Some(&configured),
         ));
+    }
+
+    fn canonical_route_backend_id() -> String {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida.config.yaml");
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            &std::fs::read_to_string(&config_path)
+                .expect("canonical VIDA config should be readable"),
+        )
+        .expect("canonical VIDA config should parse");
+        config["agent_system"]["subagents"]
+            .as_mapping()
+            .and_then(|registry| {
+                registry.iter().find_map(|(backend_id, entry)| {
+                    let backend_id = backend_id.as_str()?.trim();
+                    let has_route_fields =
+                        ["execution_boundary", "dispatch_transport", "receipt_mode"]
+                            .iter()
+                            .all(|field| {
+                                entry
+                                    .get(*field)
+                                    .and_then(serde_yaml::Value::as_str)
+                                    .is_some()
+                            });
+                    (entry["enabled"].as_bool() == Some(true)
+                        && !backend_id.is_empty()
+                        && has_route_fields)
+                        .then(|| backend_id.to_string())
+                })
+            })
+            .expect("canonical registry should expose a configured route backend id")
+    }
+
+    #[test]
+    fn effective_internal_host_dispatch_route_keeps_canonical_parent_bridge_mode() {
+        let backend_id = canonical_route_backend_id();
+        let system = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_boundary: parent_host_session
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+host_tool_bridge:
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+dispatch:
+  receipt_backed_completion_supported: true
+"#,
+        )
+        .expect("system route should parse");
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+agent_system:
+  subagents:
+    {backend_id}:
+      enabled: true
+      subagent_backend_class: internal
+      execution_boundary: parent_host_session
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      dispatch:
+        receipt_backed_completion_supported: true
+"#,
+        ))
+        .expect("backend route should parse");
+        let carrier = serde_json::json!({
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "dispatch": {"receipt_backed_completion_supported": true}
+        });
+
+        let route = effective_internal_host_dispatch_route(
+            Some(&overlay),
+            Some(&system),
+            &backend_id,
+            &carrier,
+        )
+        .expect("canonical parent route should be admissible");
+        assert_eq!(route.mode, InternalHostDispatchRouteMode::ParentHostBridge);
+        assert_eq!(route.execution_boundary, "parent_host_session");
+        assert_eq!(route.dispatch_transport, "host_tool_bridge");
+        assert_eq!(route.receipt_mode, "host_bridge_receipt");
+    }
+
+    #[test]
+    fn effective_internal_host_dispatch_route_selects_direct_child_process_mode() {
+        let backend_id = canonical_route_backend_id();
+        let system = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_boundary: child_process
+dispatch_transport: codex_cli_exec
+receipt_mode: cli_json_result
+dispatch:
+  receipt_backed_completion_supported: true
+"#,
+        )
+        .expect("system route should parse");
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+agent_system:
+  subagents:
+    {backend_id}:
+      enabled: true
+      subagent_backend_class: internal
+      execution_boundary: child_process
+      dispatch_transport: codex_cli_exec
+      receipt_mode: cli_json_result
+      dispatch:
+        receipt_backed_completion_supported: true
+"#,
+        ))
+        .expect("backend route should parse");
+        let carrier = serde_json::json!({
+            "execution_boundary": "child_process",
+            "dispatch_transport": "codex_cli_exec",
+            "receipt_mode": "cli_json_result",
+            "dispatch": {"receipt_backed_completion_supported": true}
+        });
+
+        let route = effective_internal_host_dispatch_route(
+            Some(&overlay),
+            Some(&system),
+            &backend_id,
+            &carrier,
+        )
+        .expect("direct child route should be admissible");
+        assert_eq!(
+            route.mode,
+            InternalHostDispatchRouteMode::DirectChildProcess
+        );
+        assert_eq!(route.execution_boundary, "child_process");
+        assert_eq!(route.dispatch_transport, "codex_cli_exec");
+        assert_eq!(route.receipt_mode, "cli_json_result");
+        assert_eq!(route.receipt_backed_completion_supported, Some(true));
+    }
+
+    #[test]
+    fn effective_internal_host_dispatch_route_blocks_mixed_source_tuple() {
+        let backend_id = canonical_route_backend_id();
+        let system = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_boundary: child_process
+dispatch_transport: codex_cli_exec
+receipt_mode: cli_json_result
+dispatch:
+  receipt_backed_completion_supported: true
+"#,
+        )
+        .expect("system route should parse");
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+agent_system:
+  subagents:
+    {backend_id}:
+      enabled: true
+      subagent_backend_class: internal
+      execution_boundary: parent_host_session
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      dispatch:
+        receipt_backed_completion_supported: true
+"#,
+        ))
+        .expect("backend route should parse");
+        let carrier = serde_json::json!({
+            "execution_boundary": "child_process",
+            "dispatch_transport": "codex_cli_exec",
+            "receipt_mode": "cli_json_result",
+            "dispatch": {"receipt_backed_completion_supported": true}
+        });
+
+        let error = effective_internal_host_dispatch_route(
+            Some(&overlay),
+            Some(&system),
+            &backend_id,
+            &carrier,
+        )
+        .expect_err("mixed system/backend route must fail closed");
+        assert!(error.starts_with("internal_host_dispatch_route_config_invalid:"));
+        assert!(error.contains("execution_boundary"));
+    }
+
+    #[test]
+    fn effective_internal_host_dispatch_route_rejects_missing_explicit_route_evidence() {
+        let backend_id = canonical_route_backend_id();
+        let error =
+            effective_internal_host_dispatch_route(None, None, &backend_id, &serde_json::json!({}))
+                .expect_err("missing route evidence must fail closed");
+        assert!(error.starts_with("internal_host_dispatch_route_config_invalid:"));
+        assert!(error.contains("missing_fields=execution_boundary,dispatch_transport,receipt_mode"));
+        assert!(error.contains("sources=selected_system,selected_backend,selected_carrier"));
     }
 
     #[test]
@@ -7243,6 +7786,7 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      execution_boundary: parent_host_session
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
       host_tool_bridge:
@@ -7266,6 +7810,7 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
+      execution_boundary: parent_host_session
       default_model_profile: internal_fast
       model_profiles:
         internal_fast:
@@ -7955,8 +8500,7 @@ agent_system:
             .to_string(),
         )
         .expect("write dispatch packet");
-        std::fs::write(
-            project_root.join("vida.config.yaml"),
+        let mut config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:
   cli_system: codex
@@ -7998,6 +8542,30 @@ agent_system:
           runtime_roles: [business_analyst]
           task_classes: [analysis]
 "#,
+        )
+        .expect("overlay should parse");
+        let canonical_config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida.config.yaml");
+        let canonical_config = serde_yaml::from_str::<serde_yaml::Value>(
+            &std::fs::read_to_string(&canonical_config_path)
+                .expect("canonical VIDA config should be readable"),
+        )
+        .expect("canonical VIDA config should parse");
+        let canonical_system = canonical_config["host_environment"]["systems"]["codex"].clone();
+        let adapter_command =
+            yaml_lookup(&canonical_system, &["host_tool_bridge", "adapter_command"])
+                .cloned()
+                .expect("canonical adapter command should be configured");
+        config["host_environment"]["systems"]["codex"]["host_tool_bridge"]
+            .as_mapping_mut()
+            .expect("fixture host bridge should be a mapping")
+            .insert(
+                serde_yaml::Value::String("adapter_command".to_string()),
+                adapter_command,
+            );
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            serde_yaml::to_string(&config).expect("overlay should serialize"),
         )
         .expect("write overlay");
         let mut role_selection = internal_codex_fallback_role_selection(serde_json::json!({
@@ -8107,36 +8675,23 @@ agent_system:
             result["backend_dispatch"]["host_bridge_adapter_command"],
             serde_json::Value::Null
         );
+        let request_path = result["host_tool_bridge_request"]["request_path"]
+            .as_str()
+            .expect("request path should render");
+        let expected_adapter_argv =
+            configured_host_bridge_adapter_argv(Some(&canonical_system), request_path)
+                .expect("canonical adapter command should validate")
+                .expect("canonical adapter command should render");
         let adapter_argv = result["host_bridge_adapter_argv"]
             .as_array()
             .expect("adapter argv should render");
-        assert_eq!(adapter_argv[0], "vida");
-        assert_eq!(adapter_argv[1], "agent");
-        assert_eq!(adapter_argv[2], "host-bridge");
-        assert_eq!(adapter_argv[3], "--request");
-        assert_eq!(
-            adapter_argv[4]
-                .as_str()
-                .expect("request path arg should render"),
-            result["host_tool_bridge_request"]["request_path"]
-                .as_str()
-                .expect("request path should render")
-        );
-        assert_eq!(adapter_argv[5], "--json");
+        assert_eq!(result["host_bridge_adapter_argv"], expected_adapter_argv);
         assert_eq!(
             result["backend_dispatch"]["host_bridge_adapter_argv"]
                 .as_array()
                 .expect("backend adapter argv should render"),
             adapter_argv
         );
-        assert!(result["next_actions"]
-            .as_array()
-            .expect("next actions should render")
-            .iter()
-            .all(|action| !action
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("vida agent host-bridge")));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -8170,6 +8725,7 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      execution_boundary: parent_host_session
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
       host_tool_bridge:
@@ -8193,6 +8749,7 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
+      execution_boundary: parent_host_session
       default_model_profile: internal_fast
       model_profiles:
         internal_fast:
@@ -9781,6 +10338,32 @@ host_tool_bridge:
 "#,
         )
         .expect("configured host bridge fixture should parse")
+    }
+
+    #[test]
+    fn configured_host_bridge_adapter_argv_uses_canonical_config_recipe() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida.config.yaml");
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            &std::fs::read_to_string(&config_path)
+                .expect("canonical VIDA config should be readable"),
+        )
+        .expect("canonical VIDA config should parse");
+        let system_id = config["host_environment"]["cli_system"]
+            .as_str()
+            .expect("canonical config should select a host system");
+        let system = config["host_environment"]["systems"][system_id].clone();
+        let request_path = ".vida/data/state/host-tool-bridge/requests/canonical.json";
+        let argv = configured_host_bridge_adapter_argv(Some(&system), request_path)
+            .expect("canonical adapter command should validate")
+            .expect("canonical adapter command should be configured");
+        let command = yaml_lookup(&system, &["host_tool_bridge", "adapter_command"])
+            .expect("canonical adapter command should remain in config");
+        assert!(yaml_lookup(command, &["executable"]).is_some());
+        assert!(argv
+            .as_array()
+            .expect("adapter argv should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some(request_path)));
     }
 
     fn internal_codex_fallback_receipt(

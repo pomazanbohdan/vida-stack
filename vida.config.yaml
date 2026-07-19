@@ -262,6 +262,13 @@ host_environment:
         adapter_required: true
         no_adapter_policy: fail_closed_emit_request
         process_carrier_requires_explicit_backend: true
+        adapter_command:
+          executable: vida-host-bridge-adapter
+          subcommands:
+            - dispatch
+          args:
+            - --request
+            - "{{request_path}}"
         request_dir: .vida/data/state/host-tool-bridge/requests
         result_dir: .vida/data/state/host-tool-bridge/results
         receipt_dir: .vida/data/state/host-tool-bridge/receipts
