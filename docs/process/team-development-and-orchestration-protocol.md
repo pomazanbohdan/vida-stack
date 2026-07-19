@@ -84,7 +84,7 @@ Runtime-first execution rule:
 3. Lanes run sequentially unless TaskFlow execution semantics, dispatch preview, owned paths, and conflict domain all report parallel-safe admission.
 4. Host-tool subagents are adapter carriers for runtime packets. Their result is not complete until the parent orchestrator submits or records a runtime receipt through the host-bridge/lane surface.
 5. If runtime cannot execute the configured chain, the orchestrator records the failing command, `blocker_codes`, artifact paths, and active task/run identity before entering bounded Defective Runtime Emulation Mode.
-6. Defective Runtime Emulation Mode must preserve the same configured evidence chain manually: analyst/spec evidence, test-author proof, implementation, coach/review, independent verification, TaskFlow note, PR protocol, commit/push, and any required release/system-binary update.
+6. Defective Runtime Emulation Mode must preserve every included configured lane, evidence requirement, proof gate, approval pause, command mapping, and terminal condition; it must not substitute a conventional lane sequence.
 7. Manual emulation never converts into permission to skip the runtime defect. The blocking runtime issue must be created or updated, prioritized, and linked to the current task before unrelated implementation continues.
 
 Parallel pack execution rule:
@@ -97,6 +97,18 @@ Parallel pack execution rule:
 6. Pack closeout requires structured proof evidence on each task before `vida task close`. Close reason text is not proof authority.
 7. After all task closes, run a post-pack runtime reconciliation gate: `vida task reconcile-closed-runs --limit 25 --json`, then `vida orchestrator-init --json`. A remaining `closed_task_active_run_projection_mismatch` is a runtime blocker or follow-up, not a clean close.
 8. If the broad package/workspace gate fails after focused proof is green, classify the failures as `inside_pack`, `adjacent_regression`, or `outside_pack_residual` before closeout. Close only the tasks whose acceptance and focused proof are satisfied, and record the residual count and boundary in structured proof evidence.
+
+## TeamFlow Configuration Authority
+
+1. The exhaustive option and capability/admissibility catalog is `docs/framework/templates/vida.config.yaml.template -> dev_team.authority_catalog`.
+2. The machine contract is `vida/config/schemas/team-flow-authority.schema.json`; project `vida.config.yaml -> dev_team.authority_selection` may select only catalog-declared options.
+3. The selected flow, explicit edges, approval policy, rework/resume targets, terminal declarations, role/profile authority, and command refs are config/registry facts. Runtime and process prose must not reconstruct them from ids, order, or conventions.
+4. The compiled bundle binds roles, skills, profiles, flows, packs, commands, and dispatch aliases before producing deterministic component and aggregate authority identities.
+5. Each resolved lane must preserve the complete typed projection required by the schema. Missing, malformed, conflicting, or unresolved authority yields a typed blocker; legacy fallback lane shapes are not executable.
+6. Team role/profile authority is distinct from the runtime-selected model profile. A carrier/model change does not rewrite flow authority.
+7. Terminal closure requires a config-declared terminal edge. Approval pending, approval rejection, and rework request are distinct non-success outcomes.
+8. Duplicate or shadowing aliases and conflicting explicit edges fail closed. Source order never decides authority.
+9. Other docs may explain this process but must not copy the option catalog and become a second source.
 
 ## Canonical Work Unit
 
@@ -555,17 +567,9 @@ Escalation is lawful only when:
 
 ## Default Lane Sequence
 
-For write-producing packets, the default sequence is:
+For write-producing packets, the lane sequence is the selected configured flow's explicit ordered projection. Conditional lanes are evaluated through the configured inclusion rule and remain visible with their inclusion result. The process protocol does not define a fallback role sequence.
 
-1. orchestrator shaping
-2. analyst
-3. test_author/autotester when test-first proof is required
-4. coach_test_gate when a new failing test is part of the packet
-5. implementer
-6. coach_implementation_gate
-7. duplication_reviewer
-8. verifier/prover
-9. orchestrator synthesis
+The orchestrator shapes the packet before the first included lane and synthesizes results after the configured terminal/admission conditions are satisfied. Those orchestration responsibilities do not add implicit TeamFlow edges.
 
 Explorer-to-writer rule:
 
@@ -753,10 +757,10 @@ After bootstrap, development agents must know immediately:
 artifact_path: process/team-development-and-orchestration-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-07-19'
 schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-06-11T03:15:00+03:00
+updated_at: 2026-07-19T00:00:00+03:00
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

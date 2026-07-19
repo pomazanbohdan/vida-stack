@@ -1,1 +1,2 @@
 {"revision":"2026-06-01","status":"created","summary":"Created configurable development-flow catalog schema covering default flow selection, work-item bindings, ordered role steps, command templates, lifecycle hooks, proof gates, host-agent adapter projection, and future approval gates."}
+{"revision":"2026-07-19","status":"updated","summary":"Made the master template and schema the option authority, required complete typed fail-closed lane projections, separated team/profile authority from selected model profile, and added deterministic packs/commands-aware identities."}

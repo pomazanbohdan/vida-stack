@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vida.local/schemas/team-flow-authority.schema.json",
+  "title": "VIDA TeamFlow authority selection and resolved projection",
+  "type": "object",
+  "anyOf": [
+    { "$ref": "#/$defs/authoritySelection" },
+    { "$ref": "#/$defs/authorityHeader" },
+    { "$ref": "#/$defs/resolvedAuthority" }
+  ],
+  "$defs": {
+    "authoritySelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "config_id",
+        "team_profile_id",
+        "default_flow_id",
+        "projection_mode",
+        "registry_identity_algorithm",
+        "terminal_source",
+        "edge_source",
+        "command_resolution_mode",
+        "approval_enforcement_mode",
+        "alias_conflict_policy"
+      ],
+      "properties": {
+        "schema_version": { "const": "team-flow-authority.v1" },
+        "config_id": { "type": "string", "minLength": 1 },
+        "team_profile_id": { "type": "string", "minLength": 1 },
+        "default_flow_id": { "type": "string", "minLength": 1 },
+        "projection_mode": { "enum": ["typed_fail_closed"] },
+        "registry_identity_algorithm": { "enum": ["canonical_json_blake3_v1"] },
+        "terminal_source": { "enum": ["config_only"] },
+        "edge_source": { "enum": ["explicit_config_only"] },
+        "command_resolution_mode": { "enum": ["registry_ref_only"] },
+        "approval_enforcement_mode": { "enum": ["required"] },
+        "alias_conflict_policy": { "enum": ["reject"] }
+      }
+    },
+    "authorityIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content_blake3"],
+      "properties": {
+        "id": { "type": "string", "minLength": 66 },
+        "content_blake3": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "profileAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_role_id", "runtime_role", "task_class", "source_path"],
+      "properties": {
+        "team_role_id": { "type": "string", "minLength": 1 },
+        "runtime_role": { "type": "string", "minLength": 1 },
+        "task_class": { "type": "string", "minLength": 1 },
+        "source_path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "selectedModelProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "selection_source"],
+      "properties": {
+        "profile_id": { "type": "string", "minLength": 1 },
+        "selection_source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "commandMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "required": ["command_id", "surface"],
+      "properties": {
+        "command_id": { "type": "string", "minLength": 1 },
+        "surface": { "type": "string", "minLength": 1 },
+        "args": { "type": ["string", "array"], "items": { "type": "string" } },
+        "description": { "type": "string" }
+      }
+    },
+    "proofGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_outputs"],
+      "properties": {
+        "required_outputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "runtimeAssignment": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "lane_id",
+        "dispatch_target",
+        "dispatch_alias",
+        "runtime_role",
+        "task_class",
+        "packet_template_kind",
+        "closure_class",
+        "stage",
+        "completion_blocker",
+        "inclusion_rule",
+        "included",
+        "required",
+        "next_node",
+        "evidence_requirements",
+        "proof_gates",
+        "command_ref",
+        "command_mapping",
+        "rework",
+        "terminal",
+        "profile_authority",
+        "selected_model_profile",
+        "requires_user_approval",
+        "approval_policy",
+        "lifecycle_hook_templates",
+        "resume_transitions",
+        "policy_diagnostics",
+        "activation",
+        "runtime_assignment",
+        "carrier_runtime_assignment"
+      ],
+      "properties": {
+        "node_id": { "type": "string", "minLength": 1 },
+        "lane_id": { "type": "string", "minLength": 1 },
+        "dispatch_target": { "type": "string", "minLength": 1 },
+        "dispatch_alias": { "type": "string" },
+        "runtime_role": { "type": "string", "minLength": 1 },
+        "task_class": { "type": "string", "minLength": 1 },
+        "packet_template_kind": { "type": "string", "minLength": 1 },
+        "closure_class": { "type": "string", "minLength": 1 },
+        "stage": { "type": "string", "minLength": 1 },
+        "completion_blocker": { "type": "string", "minLength": 1 },
+        "inclusion_rule": {
+          "enum": [
+            "always",
+            "never",
+            "optional",
+            "when_proof_required",
+            "when_review_triggered",
+            "when_architecture_triggered",
+            "when_rework_required"
+          ]
+        },
+        "included": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "next_node": { "type": ["string", "null"] },
+        "evidence_requirements": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "proof_gates": { "$ref": "#/$defs/proofGates" },
+        "command_ref": { "type": ["string", "null"] },
+        "command_mapping": { "oneOf": [{ "$ref": "#/$defs/commandMapping" }, { "type": "null" }] },
+        "rework": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targets"],
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        },
+        "terminal": { "type": "boolean" },
+        "profile_authority": { "$ref": "#/$defs/profileAuthority" },
+        "selected_model_profile": { "$ref": "#/$defs/selectedModelProfile" },
+        "requires_user_approval": { "type": "boolean" },
+        "approval_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "minLength": 1 },
+            "prompt_template": { "type": "string", "minLength": 1 },
+            "allowed_decisions": {
+              "type": "array",
+              "items": { "enum": ["approved", "rework"] },
+              "uniqueItems": true
+            }
+          }
+        },
+        "lifecycle_hook_templates": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "resume_transitions": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "policy_diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "fallback_used", "fallback_fields"],
+          "properties": {
+            "source": { "const": "team_flow_authority.selected_config" },
+            "fallback_used": { "const": false },
+            "fallback_fields": { "type": "array", "maxItems": 0 }
+          }
+        },
+        "activation": { "$ref": "#/$defs/runtimeAssignment" },
+        "runtime_assignment": { "$ref": "#/$defs/runtimeAssignment" },
+        "carrier_runtime_assignment": { "$ref": "#/$defs/runtimeAssignment" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "required": { "const": true } }, "required": ["required"] },
+          "then": { "properties": { "evidence_requirements": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "terminal": { "const": true } }, "required": ["terminal"] },
+          "then": { "properties": { "next_node": { "type": "null" } } },
+          "else": { "properties": { "next_node": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "if": { "properties": { "command_ref": { "type": "string" } }, "required": ["command_ref"] },
+          "then": { "properties": { "command_mapping": { "$ref": "#/$defs/commandMapping" } } }
+        },
+        {
+          "if": {
+            "properties": { "requires_user_approval": { "const": true } },
+            "required": ["requires_user_approval"]
+          },
+          "then": {
+            "properties": {
+              "approval_policy": {
+                "required": ["mode", "prompt_template", "allowed_decisions"],
+                "properties": {
+                  "allowed_decisions": { "minItems": 1, "contains": { "const": "approved" } }
+                }
+              },
+              "resume_transitions": {
+                "minProperties": 1,
+                "required": ["approved"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorityHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "authority_id",
+        "content_blake3",
+        "config",
+        "registries"
+      ],
+      "properties": {
+        "schema_version": { "const": "team-flow-authority.v1" },
+        "authority_id": { "type": "string", "minLength": 66 },
+        "content_blake3": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "config": { "$ref": "#/$defs/authorityIdentity" },
+        "registries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "roles",
+            "skills",
+            "profiles",
+            "flows",
+            "packs",
+            "commands",
+            "dispatch_aliases"
+          ],
+          "properties": {
+            "roles": { "$ref": "#/$defs/authorityIdentity" },
+            "skills": { "$ref": "#/$defs/authorityIdentity" },
+            "profiles": { "$ref": "#/$defs/authorityIdentity" },
+            "flows": { "$ref": "#/$defs/authorityIdentity" },
+            "packs": { "$ref": "#/$defs/authorityIdentity" },
+            "commands": { "$ref": "#/$defs/authorityIdentity" },
+            "dispatch_aliases": { "$ref": "#/$defs/authorityIdentity" }
+          }
+        },
+        "selected_config": { "type": "object", "additionalProperties": true },
+        "source_of_truth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["options", "selection", "schema"],
+          "properties": {
+            "options": { "type": "string", "minLength": 1 },
+            "selection": { "type": "string", "minLength": 1 },
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        },
+        "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } }
+      }
+    },
+    "resolvedAuthority": {
+      "allOf": [
+        { "$ref": "#/$defs/authorityHeader" },
+        {
+          "type": "object",
+          "required": ["lanes"],
+          "properties": {
+            "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } }
+          }
+        }
+      ]
+    }
+  }
+}

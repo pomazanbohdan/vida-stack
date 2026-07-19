@@ -587,6 +587,18 @@ dev_team:
     require_handoff_contracts: true
     require_ordered_closure_flow: true
     fail_closed_on_validation_error: true
+  authority_selection:
+    schema_version: team-flow-authority.v1
+    config_id: vida-stack
+    team_profile_id: vida-stack-development
+    default_flow_id: adaptive-task-flow
+    projection_mode: typed_fail_closed
+    registry_identity_algorithm: canonical_json_blake3_v1
+    terminal_source: config_only
+    edge_source: explicit_config_only
+    command_resolution_mode: registry_ref_only
+    approval_enforcement_mode: required
+    alias_conflict_policy: reject
   roles:
     specifier:
       runtime_role: business_analyst
@@ -597,7 +609,6 @@ dev_team:
       closure_class: law
       stage: design_gate
       completion_blocker: pending_specification_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -622,7 +633,6 @@ dev_team:
       closure_class: law
       stage: design_gate
       completion_blocker: pending_specification_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -647,7 +657,6 @@ dev_team:
       closure_class: refactor
       stage: execution
       completion_blocker: pending_execution_preparation_evidence
-      inclusion_rule: always
       default_carrier: architect
       cost_policy:
         budget_units: 16
@@ -670,7 +679,6 @@ dev_team:
       closure_class: implementation
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: junior
       cost_policy:
         budget_units: 1
@@ -694,7 +702,6 @@ dev_team:
       closure_class: implementation
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -717,7 +724,6 @@ dev_team:
       closure_class: refactor
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -740,7 +746,6 @@ dev_team:
       closure_class: implementation
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -765,7 +770,6 @@ dev_team:
       closure_class: implementation
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -788,7 +792,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_review_clean_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -812,7 +815,6 @@ dev_team:
       closure_class: implementation
       stage: execution
       completion_blocker: pending_implementation_evidence
-      inclusion_rule: always
       default_carrier: junior
       cost_policy:
         budget_units: 1
@@ -835,7 +837,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_review_clean_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -859,7 +860,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_review_clean_evidence
-      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -883,7 +883,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_review_clean_evidence
-      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -916,7 +915,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_verification_evidence
-      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -938,7 +936,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_verification_evidence
-      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -959,7 +956,6 @@ dev_team:
       closure_class: proof
       stage: execution
       completion_blocker: pending_verification_evidence
-      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -1007,50 +1003,61 @@ dev_team:
         cleanup_after_merge: true
         release_install: final_coherent_pack_or_epic_only
       steps:
-        - step_id: adaptive-implementation
-          role_id: coder
-          runtime_role: worker
+        - role_id: coder
           task_class: implementation
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: always
+          required: true
           rework_transitions:
             rework: coder
           proof_gates:
             required_outputs: [changed_files, verification_notes, explicit_blockers]
-        - step_id: adaptive-focused-proof
-          role_id: tester
-          runtime_role: verifier
+          next_node: tester
+        - role_id: tester
           task_class: verification
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_proof_required
+          included: true
+          required: true
           rework_transitions:
             rework: coder
           proof_gates:
             required_outputs: [verification_evidence, failing_or_passing_checks]
-        - step_id: adaptive-conditional-review
-          role_id: coach_validator
-          runtime_role: coach
+          next_node: coach_validator
+        - role_id: coach_validator
           task_class: review
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_review_triggered
+          included: false
+          required: true
           rework_transitions:
             rework: coder
           proof_gates:
             required_outputs: [root_cause_validation, false_green_risk_review, rework_or_approve_decision]
-        - step_id: adaptive-architecture-escalation
-          role_id: architect
-          runtime_role: solution_architect
+          next_node: architect
+        - role_id: architect
           task_class: architecture
           command_ref: agent-init-solution-architect
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_architecture_triggered
+          included: false
+          required: true
           rework_transitions:
             rework: coder
           proof_gates:
             required_outputs: [implementation_plan, architecture_decisions, explicit_blockers]
+          next_node: release_closure
+        - role_id: release_closure
+          task_class: release_readiness
+          inclusion_rule: always
+          required: true
+          command_ref: agent-init-prover
+          proof_gates:
+            required_outputs: [release_or_hold_decision, closure_receipt]
+          terminal: true
     quick-two-pack-flow:
       enabled: true
       description: Configured two-worker development flow for coder implementation followed by cleaner verification and cleanup.
@@ -1082,19 +1089,23 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: coder
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
+          next_node: cleaner
         - role_id: cleaner
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, cleanup_summary, verification_notes]
+          terminal: true
     debug_fast:
       enabled: true
       description: Short diagnostic flow for read-heavy debug or route validation where implementation is not yet authorized.
@@ -1109,10 +1120,10 @@ dev_team:
         host_agent_bridge_contract: required
         process_carrier_requires_explicit_backend: true
       steps:
-        - step_id: debug-analysis
-          role_id: analyst
-          runtime_role: business_analyst
+        - role_id: analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates:
             - command_timing_summary
@@ -1122,6 +1133,7 @@ dev_team:
               - explicit_blockers
           adapter_projection:
             host_agent_bridge_contract: required
+          terminal: true
     defect_repair_verified:
       enabled: true
       description: Defect-oriented verified flow with analysis, failing-test authoring, implementation, coach, verifier, and proof closure.
@@ -1137,40 +1149,50 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [bounded_problem_statement, acceptance_contract]
+          next_node: test_author
         - role_id: test_author
-          runtime_role: worker
           task_class: test_authoring
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [failing_regression_test, proof_command]
+          next_node: developer
         - role_id: developer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
+          next_node: coach_implementation_gate
         - role_id: coach_implementation_gate
-          runtime_role: coach
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+          terminal: true
     pr_processing_team:
       enabled: true
       description: Dedicated pull-request processing team that inventories PRs, integrates or closes the change, performs consolidated source/CI/duplication proof, then records final disposition.
@@ -1187,38 +1209,42 @@ dev_team:
         host_agent_bridge_contract: required
         process_carrier_requires_explicit_backend: true
       steps:
-        - step_id: pr-intake
-          role_id: analyst
-          runtime_role: business_analyst
+        - role_id: analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [pr_inventory, changed_scope_map, ci_review_snapshot, mergeability_matrix, recommended_disposition, owned_read_scope]
-        - step_id: pr-integrate-or-close
-          role_id: developer
-          runtime_role: worker
+          next_node: developer
+        - role_id: developer
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files_or_close_plan, conflict_resolution_notes, verification_notes]
-        - step_id: pr-review-and-proof
-          role_id: tester
-          runtime_role: verifier
+          next_node: tester
+        - role_id: tester
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [source_fidelity_review, duplication_review_report, post_integration_verification_evidence, failing_or_passing_checks, residual_risks]
-        - step_id: pr-final-disposition
-          role_id: prover
-          runtime_role: prover
+          next_node: prover
+        - role_id: prover
           task_class: release_readiness
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [final_pr_disposition, proof_summary, follow_up_actions]
+          terminal: true
     pr_repair_verified:
       enabled: true
       description: Legacy pull-request repair flow retained for compatibility. New pull_request and pr_repair work routes through pr_processing_team.
@@ -1234,46 +1260,51 @@ dev_team:
         host_agent_bridge_contract: required
         process_carrier_requires_explicit_backend: true
       steps:
-        - step_id: pr-triage
-          role_id: analyst
-          runtime_role: business_analyst
+        - role_id: analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [pr_inventory, mergeability_matrix, recommended_disposition]
-        - step_id: pr-ci-review
-          role_id: tester
-          runtime_role: verifier
+          next_node: tester
+        - role_id: tester
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [ci_status_summary, review_comment_risk_map]
-        - step_id: pr-repair-or-integrate
-          role_id: developer
-          runtime_role: worker
+          next_node: developer
+        - role_id: developer
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files_or_close_plan, verification_notes]
-        - step_id: pr-coach
-          role_id: coach_implementation_gate
-          runtime_role: coach
+          next_node: coach_implementation_gate
+        - role_id: coach_implementation_gate
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [merge_or_close_decision, rework_or_approve_decision]
-        - step_id: pr-proof
-          role_id: prover
-          runtime_role: prover
+          next_node: prover
+        - role_id: prover
           task_class: release_readiness
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [final_pr_disposition, proof_summary]
+          terminal: true
     runtime_defect_remediation:
       enabled: true
       description: "Runtime-defect remediation flow aligned to the canonical spec-four-pack roles: specification, coding, structural cleanup, and architecture review."
@@ -1289,33 +1320,41 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: specifier
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [runtime_surface_matrix, blocker_contract]
+          next_node: coder
         - role_id: coder
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, runtime_recovery_evidence]
+          next_node: refactorer
         - role_id: refactorer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [structural_cleanup_summary, duplicate_risk_reduction, verification_notes]
+          next_node: architect
         - role_id: architect
-          runtime_role: solution_architect
           task_class: architecture
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-solution-architect
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [architecture_decisions, implementation_plan, explicit_blockers]
+          terminal: true
     architecture_design:
       enabled: true
       description: Architecture design flow with xhigh execution preparation before implementation, user approval gate, and verifier/prover closure.
@@ -1333,8 +1372,9 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary, approval_wait, approval_complete]
           requires_user_approval: true
@@ -1342,22 +1382,29 @@ dev_team:
             mode: user_review_required
             prompt_template: review_architecture_problem_statement_before_execution_preparation
             allowed_decisions: [approved, rework]
+          resume_transitions:
+            approved: architect
           proof_gates:
             required_outputs: [architecture_problem_statement, accepted_constraints]
+          next_node: architect
         - role_id: architect
-          runtime_role: solution_architect
           task_class: execution_preparation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-solution-architect
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_plan, owned_write_scope]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [architecture_review_evidence]
+          terminal: true
     release_readiness_gate:
       enabled: true
       description: Standalone release-readiness flow for proof consolidation, CI/install evidence, risk review, and release-or-hold decision.
@@ -1373,19 +1420,23 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [ci_install_test_summary, residual_risks]
+          next_node: prover
         - role_id: prover
-          runtime_role: prover
           task_class: release_readiness
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [release_or_hold_decision, closure_receipt]
+          terminal: true
     service_tui_orchestration:
       enabled: true
       description: Service/TUI orchestration flow for local service, activation wizard, and operator console slices after stabilization approval.
@@ -1401,26 +1452,32 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [service_tui_scope, fixture_contract]
+          next_node: developer
         - role_id: developer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, ui_or_service_smoke]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [fixture_snapshot_or_smoke_evidence]
+          terminal: true
     hook_enabled_internal_agent_development:
       enabled: true
       description: Internal-agent development flow that requires host-tool bridge projection, hook telemetry, implementation proof, coach review, and independent verifier closure.
@@ -1436,33 +1493,41 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [host_bridge_contract, agent_runtime_boundary]
+          next_node: developer
         - role_id: developer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, host_bridge_receipt_evidence]
+          next_node: coach_implementation_gate
         - role_id: coach_implementation_gate
-          runtime_role: coach
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+          terminal: true
     task_delivery_verified:
       enabled: true
       description: Standard bounded task flow that keeps generic task delivery shorter than release-style default_delivery while preserving scope analysis, implementation conformance review, and independent verification. Defect, runtime_defect, architecture, PR, and release_readiness work keep their specialized heavier flows.
@@ -1479,33 +1544,41 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           proof_gates:
             required_outputs: [bounded_problem_statement, acceptance_contract, owned_write_scope]
           lifecycle_hook_templates: [command_timing_summary]
+          next_node: developer
         - role_id: developer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
+          next_node: coach_implementation_gate
         - role_id: coach_implementation_gate
-          runtime_role: coach
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+          terminal: true
     default_delivery:
       enabled: true
       description: System analyst produces the detailed task brief, test_author writes the test-first regression when required, coach_test_gate gates test quality, developer implements on the cheapest eligible write lane, coach_implementation_gate gates implementation conformance, then duplication_reviewer, tester, prover, and release_closure complete the independent closure path.
@@ -1522,8 +1595,9 @@ dev_team:
         process_carrier_requires_explicit_backend: true
       steps:
         - role_id: analyst
-          runtime_role: business_analyst
           task_class: specification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-business-analyst
           proof_gates:
             required_outputs: [detailed_task_brief, acceptance_contract, owned_write_scope]
@@ -1537,62 +1611,79 @@ dev_team:
             approved: test_author
           rework_transitions:
             rework: analyst
+          next_node: test_author
         - role_id: test_author
-          runtime_role: worker
           task_class: test_authoring
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [failing_regression_test, proof_command]
+          next_node: coach_test_gate
         - role_id: coach_test_gate
-          runtime_role: coach
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [test_quality_review, approve_or_rework_decision]
+          next_node: developer
         - role_id: developer
-          runtime_role: worker
           task_class: implementation
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
+          next_node: coach_implementation_gate
         - role_id: coach_implementation_gate
-          runtime_role: coach
           task_class: coach
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
+          next_node: duplication_reviewer
         - role_id: duplication_reviewer
-          runtime_role: verifier
           task_class: review
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [duplication_review_report]
+          next_node: tester
         - role_id: tester
-          runtime_role: verifier
           task_class: verification
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+          next_node: prover
         - role_id: prover
-          runtime_role: prover
           task_class: quality_gate
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [closure_readiness_decision, proof_summary]
+          next_node: release_closure
         - role_id: release_closure
-          runtime_role: prover
           task_class: release_readiness
+          inclusion_rule: always
+          required: true
           command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [release_or_hold_decision, closure_receipt]
+          terminal: true
 
 autonomous_execution:
   next_task_boundary_analysis: true

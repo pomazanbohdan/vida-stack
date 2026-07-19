@@ -308,212 +308,377 @@ fn request_requires_execution_preparation(
         && (validation_gate || !architecture_signals.is_empty() || !write_signals.is_empty())
 }
 
-fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
-    let pending_specification_evidence = crate::blocker_code_str(
-        crate::release1_contracts::BlockerCode::PendingSpecificationEvidence,
-    );
-    let pending_execution_preparation_evidence = crate::blocker_code_str(
-        crate::release1_contracts::BlockerCode::PendingExecutionPreparationEvidence,
-    );
-    let pending_implementation_evidence = crate::blocker_code_str(
-        crate::release1_contracts::BlockerCode::PendingImplementationEvidence,
-    );
-    let pending_review_clean_evidence =
-        crate::blocker_code_str(crate::release1_contracts::BlockerCode::PendingReviewCleanEvidence);
-    let pending_verification_evidence = crate::blocker_code_str(
-        crate::release1_contracts::BlockerCode::PendingVerificationEvidence,
-    );
-    vec![
-        serde_json::json!({
-            "lane_id": "specification",
-            "dispatch_target": "specification",
-            "dispatch_alias": "development_specification",
-            "task_class": "specification",
-            "packet_template_kind": "delivery_task_packet",
-            "closure_class": "law",
-            "stage": "design_gate",
-            "inclusion_rule": "when_design_gate",
-            "completion_blocker": pending_specification_evidence,
-        }),
-        serde_json::json!({
-            "lane_id": "execution_preparation",
-            "dispatch_target": "execution_preparation",
-            "dispatch_alias": "development_execution_preparation",
-            "task_class": "execution_preparation",
-            "packet_template_kind": "escalation_packet",
-            "closure_class": "refactor",
-            "stage": "execution",
-            "inclusion_rule": "when_execution_preparation_required",
-            "completion_blocker": pending_execution_preparation_evidence,
-        }),
-        serde_json::json!({
-            "lane_id": "implementation",
-            "dispatch_target": "implementer",
-            "dispatch_alias": "development_implementer",
-            "task_class": "implementation",
-            "packet_template_kind": "delivery_task_packet",
-            "closure_class": "implementation",
-            "stage": "execution",
-            "inclusion_rule": "always",
-            "completion_blocker": pending_implementation_evidence,
-        }),
-        serde_json::json!({
-            "lane_id": "coach",
-            "dispatch_target": "coach",
-            "dispatch_alias": "development_coach",
-            "task_class": "coach",
-            "packet_template_kind": "coach_review_packet",
-            "closure_class": "proof",
-            "stage": "execution",
-            "inclusion_rule": "when_flow_requires_coach",
-            "completion_blocker": pending_review_clean_evidence,
-        }),
-        serde_json::json!({
-            "lane_id": "verification",
-            "dispatch_target": "verification",
-            "dispatch_alias": "development_verifier",
-            "task_class": "verification",
-            "packet_template_kind": "verifier_proof_packet",
-            "closure_class": "proof",
-            "stage": "execution",
-            "inclusion_rule": "when_flow_requires_verification",
-            "completion_blocker": pending_verification_evidence,
-        }),
+#[derive(Clone, Debug, serde::Serialize)]
+struct TeamFlowProfileAuthority {
+    team_role_id: String,
+    runtime_role: String,
+    task_class: String,
+    source_path: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct TeamFlowReworkProjection {
+    targets: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ConfiguredDevelopmentLane {
+    node_id: String,
+    lane_id: String,
+    dispatch_target: String,
+    dispatch_alias: String,
+    runtime_role: String,
+    task_class: String,
+    packet_template_kind: String,
+    closure_class: String,
+    stage: String,
+    completion_blocker: String,
+    inclusion_rule: String,
+    included: bool,
+    required: bool,
+    next_node: Option<String>,
+    evidence_requirements: Vec<String>,
+    proof_gates: serde_json::Value,
+    command_ref: Option<String>,
+    command_mapping: Option<serde_json::Value>,
+    rework: TeamFlowReworkProjection,
+    terminal: bool,
+    profile_authority: TeamFlowProfileAuthority,
+    requires_user_approval: bool,
+    approval_policy: serde_json::Value,
+    lifecycle_hook_templates: serde_json::Value,
+    resume_transitions: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct ConfiguredDevelopmentFlow {
+    flow_id: String,
+    lanes: Vec<ConfiguredDevelopmentLane>,
+}
+
+fn configured_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn exact_string_source(
+    step: &serde_json::Value,
+    role: &serde_json::Value,
+    key: &'static str,
+    node_id: &str,
+) -> Result<String, String> {
+    match (configured_string(step, key), configured_string(role, key)) {
+        (Some(_), Some(_)) => Err(format!(
+            "team_flow_authority_conflicting_sources:{node_id}:{key}"
+        )),
+        (Some(value), None) | (None, Some(value)) => Ok(value),
+        (None, None) => Err(format!("team_flow_authority_missing_field:{node_id}:{key}")),
+    }
+}
+
+fn exact_string_alias(
+    value: &serde_json::Value,
+    keys: &[&'static str],
+    field: &'static str,
+    scope: &str,
+) -> Result<Option<String>, String> {
+    let values = keys
+        .iter()
+        .filter_map(|key| configured_string(value, key))
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(value.clone())),
+        _ => Err(format!(
+            "team_flow_authority_conflicting_aliases:{scope}:{field}"
+        )),
+    }
+}
+
+fn exact_bool_alias(
+    step: &serde_json::Value,
+    role: &serde_json::Value,
+    keys: &[&'static str],
+    field: &'static str,
+    node_id: &str,
+) -> Result<Option<bool>, String> {
+    let mut values = Vec::new();
+    for source in [step, role] {
+        for key in keys {
+            if let Some(value) = source.get(key) {
+                let value = value
+                    .as_bool()
+                    .ok_or_else(|| format!("team_flow_authority_invalid_type:{node_id}:{field}"))?;
+                values.push(value);
+            }
+        }
+    }
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(*value)),
+        _ => Err(format!(
+            "team_flow_authority_conflicting_aliases:{node_id}:{field}"
+        )),
+    }
+}
+
+fn configured_steps(flow: &serde_json::Value) -> Result<&[serde_json::Value], String> {
+    match (flow.get("steps"), flow.get("ordered_steps")) {
+        (Some(_), Some(_)) => Err("team_flow_authority_conflicting_steps_aliases".to_string()),
+        (Some(steps), None) | (None, Some(steps)) => steps
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(|| "team_flow_authority_invalid_steps_type".to_string()),
+        (None, None) => Err("team_flow_authority_missing_steps".to_string()),
+    }
+}
+
+fn configured_rework_targets(
+    step: &serde_json::Value,
+    node_id: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = step.get("rework_transitions") else {
+        return Ok(Vec::new());
+    };
+    let values = match value {
+        serde_json::Value::String(value) => vec![value.as_str()],
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("team_flow_authority_invalid_rework:{node_id}"))?,
+        serde_json::Value::Object(values) => values
+            .values()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("team_flow_authority_invalid_rework:{node_id}"))?,
+        _ => return Err(format!("team_flow_authority_invalid_rework:{node_id}")),
+    };
+    Ok(values
+        .into_iter()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn configured_evidence_requirements(
+    step: &serde_json::Value,
+    node_id: &str,
+) -> Result<Vec<String>, String> {
+    let candidates = [
+        step.get("evidence_requirements"),
+        step.get("required_evidence"),
+        step.get("required_outputs"),
+        step.get("proof_gates")
+            .and_then(|proof| proof.get("required_outputs")),
     ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if candidates.len() != 1 {
+        return Err(format!(
+            "team_flow_authority_evidence_source_count:{node_id}:{}",
+            candidates.len()
+        ));
+    }
+    candidates[0]
+        .as_array()
+        .ok_or_else(|| format!("team_flow_authority_invalid_evidence:{node_id}"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("team_flow_authority_invalid_evidence:{node_id}"))
+        })
+        .collect()
 }
 
 fn resolved_development_flow_templates(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
-) -> Vec<serde_json::Value> {
-    let configured_templates = configured_dev_team_flow_templates(compiled_bundle, selection);
-    if !configured_templates.is_empty() {
-        return configured_templates;
-    }
-    let flow_id = compiled_bundle["default_flow_set"]
-        .as_str()
-        .unwrap_or_default();
-    if let Some(flow) = compiled_bundle["all_project_flow_catalog"]
-        .get(flow_id)
-        .or_else(|| compiled_bundle["project_flow_catalog"].get(flow_id))
-    {
-        if flow["flow_class"].as_str() == Some("development") {
-            let templates = flow["lane_templates"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            if !templates.is_empty() {
-                return templates;
-            }
-        }
-    }
-    legacy_development_flow_templates()
+) -> Result<ConfiguredDevelopmentFlow, Vec<String>> {
+    configured_dev_team_flow_templates(compiled_bundle, selection).map_err(|error| vec![error])
 }
 
 fn configured_dev_team_flow_templates(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
-) -> Vec<serde_json::Value> {
-    let sequence = selection
+) -> Result<ConfiguredDevelopmentFlow, String> {
+    let config = &compiled_bundle["team_flow_authority"]["selected_config"];
+    let flow_id = selection
         .matched_terms
         .iter()
         .find_map(|term| term.strip_prefix("dev_team_flow_id:"))
-        .map(|flow_id| {
-            crate::dev_team_sequence_contract::dev_team_sequence_for_flow_id(
-                &compiled_bundle["dev_team_readiness"],
-                flow_id,
-            )
-        })
-        .filter(|sequence| !sequence.is_empty())
-        .unwrap_or_else(|| crate::dev_team_sequence_contract::dev_team_sequence(compiled_bundle));
-    if sequence.is_empty() {
-        return Vec::new();
+        .map(str::to_string)
+        .or_else(|| configured_string(config, "default_flow_id"))
+        .ok_or_else(|| "team_flow_authority_missing_flow_id".to_string())?;
+    let flow = config["flows"]
+        .get(&flow_id)
+        .ok_or_else(|| format!("team_flow_authority_unknown_flow:{flow_id}"))?;
+    let steps = configured_steps(flow)?;
+    if steps.is_empty() {
+        return Err(format!("team_flow_authority_empty_flow:{flow_id}"));
     }
-    sequence
-        .into_iter()
-        .filter(|step| step.requires_task)
-        .map(|step| {
-            let role_label = step.role_label;
-            let runtime_role = step.runtime_role;
-            let task_class = step.task_class;
-            let mut fallback_fields = Vec::new();
-            let packet_template_kind = dev_team_policy_field_or_fallback(
-                step.packet_template_kind.as_deref(),
-                packet_template_kind_for_dev_team_task_class(&task_class),
-                "packet_template_kind",
-                &mut fallback_fields,
-            );
-            let closure_class = dev_team_policy_field_or_fallback(
-                step.closure_class.as_deref(),
-                closure_class_for_dev_team_task_class(&task_class),
-                "closure_class",
-                &mut fallback_fields,
-            );
-            let stage = dev_team_policy_field_or_fallback(
-                step.stage.as_deref(),
-                stage_for_dev_team_task_class(&task_class),
-                "stage",
-                &mut fallback_fields,
-            );
-            let fallback_completion_blocker =
-                completion_blocker_for_dev_team_task_class(&task_class);
-            let completion_blocker = dev_team_policy_field_or_fallback(
-                step.completion_blocker.as_deref(),
-                &fallback_completion_blocker,
-                "completion_blocker",
-                &mut fallback_fields,
-            );
-            let inclusion_rule = dev_team_policy_field_or_fallback(
-                step.inclusion_rule.as_deref(),
-                "always",
-                "inclusion_rule",
-                &mut fallback_fields,
-            );
-            let fallback_used = !fallback_fields.is_empty();
-            serde_json::json!({
-                "lane_id": role_label.clone(),
-                "dispatch_target": role_label,
-                "dispatch_alias": "",
-                "task_class": task_class.clone(),
-                "runtime_role": runtime_role,
-                "packet_template_kind": packet_template_kind,
-                "closure_class": closure_class,
-                "stage": stage,
-                "inclusion_rule": inclusion_rule,
-                "completion_blocker": completion_blocker,
-                "policy_diagnostics": {
-                    "source": "dev_team_readiness",
-                    "fallback_used": fallback_used,
-                    "fallback_fields": fallback_fields,
-                    "fallback_reason": if fallback_used {
-                        serde_json::Value::String(
-                            "missing_configured_dev_team_policy_fields".to_string(),
-                        )
-                    } else {
-                        serde_json::Value::Null
-                    },
-                },
-                "requires_user_approval": step.requires_user_approval,
-                "approval_policy": step.approval_policy,
-                "lifecycle_hook_templates": step.lifecycle_hook_templates,
-                "resume_transitions": step.resume_transitions,
-                "rework_transitions": step.rework_transitions,
+    let roles = config["roles"]
+        .as_object()
+        .ok_or_else(|| "team_flow_authority_missing_role_registry".to_string())?;
+    let command_catalog = compiled_bundle["command_catalog"]
+        .as_object()
+        .ok_or_else(|| "team_flow_authority_missing_command_registry".to_string())?;
+    let mut lanes = Vec::with_capacity(steps.len());
+    for step in steps {
+        let node_id = exact_string_alias(
+            step,
+            &["node_id", "role_id", "step_id"],
+            "node_id",
+            &flow_id,
+        )?
+        .ok_or_else(|| format!("team_flow_authority_missing_node_id:{flow_id}"))?;
+        let role = roles
+            .get(&node_id)
+            .ok_or_else(|| format!("team_flow_authority_unknown_role:{node_id}"))?;
+        let runtime_role = exact_string_source(step, role, "runtime_role", &node_id)?;
+        let task_class = exact_string_source(step, role, "task_class", &node_id)?;
+        let inclusion_rule = exact_string_source(step, role, "inclusion_rule", &node_id)?;
+        let included = exact_bool_alias(
+            step,
+            role,
+            &["included", "lane_template_included"],
+            "included",
+            &node_id,
+        )?
+        .or_else(|| match inclusion_rule.as_str() {
+            "always" => Some(true),
+            "never" => Some(false),
+            _ => None,
+        })
+        .ok_or_else(|| format!("team_flow_authority_missing_included:{node_id}"))?;
+        let required = exact_bool_alias(step, role, &["required"], "required", &node_id)?
+            .ok_or_else(|| format!("team_flow_authority_missing_required:{node_id}"))?;
+        let terminal = exact_bool_alias(
+            step,
+            role,
+            &["terminal", "terminal_closure", "closes_workflow"],
+            "terminal",
+            &node_id,
+        )?
+        .unwrap_or(false);
+        let next_node = exact_string_alias(step, &["next_node", "next"], "next_node", &node_id)?;
+        if terminal == next_node.is_some() {
+            return Err(format!(
+                "team_flow_authority_invalid_terminal_edge:{node_id}"
+            ));
+        }
+        let evidence_requirements = configured_evidence_requirements(step, &node_id)?;
+        if required && evidence_requirements.is_empty() {
+            return Err(format!("team_flow_authority_missing_evidence:{node_id}"));
+        }
+        let command_ref = exact_string_alias(
+            step,
+            &["command_ref", "command_mapping_ref"],
+            "command_ref",
+            &node_id,
+        )?;
+        let command_mapping = command_ref
+            .as_ref()
+            .map(|command_ref| {
+                command_catalog.get(command_ref).cloned().ok_or_else(|| {
+                    format!("team_flow_authority_unknown_command:{node_id}:{command_ref}")
+                })
             })
-        })
-        .collect()
-}
-
-fn dev_team_policy_field_or_fallback(
-    configured: Option<&str>,
-    fallback: &str,
-    field: &'static str,
-    fallback_fields: &mut Vec<&'static str>,
-) -> String {
-    if let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) {
-        return configured.to_string();
+            .transpose()?;
+        let rework_targets = configured_rework_targets(step, &node_id)?;
+        let requires_user_approval = exact_bool_alias(
+            step,
+            role,
+            &["requires_user_approval"],
+            "requires_user_approval",
+            &node_id,
+        )?
+        .unwrap_or(false);
+        lanes.push(ConfiguredDevelopmentLane {
+            node_id: node_id.clone(),
+            lane_id: node_id.clone(),
+            dispatch_target: node_id.clone(),
+            dispatch_alias: configured_string(step, "dispatch_alias").unwrap_or_default(),
+            runtime_role: runtime_role.clone(),
+            task_class: task_class.clone(),
+            packet_template_kind: exact_string_source(
+                step,
+                role,
+                "packet_template_kind",
+                &node_id,
+            )?,
+            closure_class: exact_string_source(step, role, "closure_class", &node_id)?,
+            stage: exact_string_source(step, role, "stage", &node_id)?,
+            completion_blocker: exact_string_source(step, role, "completion_blocker", &node_id)?,
+            inclusion_rule,
+            included,
+            required,
+            next_node,
+            evidence_requirements,
+            proof_gates: step
+                .get("proof_gates")
+                .cloned()
+                .ok_or_else(|| format!("team_flow_authority_missing_proof_gates:{node_id}"))?,
+            command_ref,
+            command_mapping,
+            rework: TeamFlowReworkProjection {
+                targets: rework_targets,
+            },
+            terminal,
+            profile_authority: TeamFlowProfileAuthority {
+                team_role_id: node_id.clone(),
+                runtime_role,
+                task_class,
+                source_path: format!("vida.config.yaml#dev_team.roles.{node_id}"),
+            },
+            requires_user_approval,
+            approval_policy: step
+                .get("approval_policy")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            lifecycle_hook_templates: step
+                .get("lifecycle_hook_templates")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            resume_transitions: step
+                .get("resume_transitions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        });
     }
-    fallback_fields.push(field);
-    fallback.to_string()
+    let node_ids = lanes
+        .iter()
+        .map(|lane| lane.node_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for lane in &lanes {
+        if let Some(target) = lane.next_node.as_deref() {
+            if !node_ids.contains(target) {
+                return Err(format!(
+                    "team_flow_authority_unknown_next_node:{}:{target}",
+                    lane.node_id
+                ));
+            }
+        }
+        for target in &lane.rework.targets {
+            if !node_ids.contains(target.as_str()) {
+                return Err(format!(
+                    "team_flow_authority_unknown_rework_target:{}:{target}",
+                    lane.node_id
+                ));
+            }
+        }
+    }
+    Ok(ConfiguredDevelopmentFlow { flow_id, lanes })
 }
 
 pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
@@ -523,42 +688,6 @@ pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> 
         "architecture" | "execution_preparation" => "escalation_packet",
         _ => "delivery_task_packet",
     }
-}
-
-fn closure_class_for_dev_team_task_class(task_class: &str) -> &'static str {
-    match task_class {
-        "coach" | "review" | "validation" | "verification" | "quality_gate"
-        | "release_readiness" => "proof",
-        "architecture" | "execution_preparation" => "refactor",
-        "specification" | "planning" => "law",
-        _ => "implementation",
-    }
-}
-
-fn stage_for_dev_team_task_class(task_class: &str) -> &'static str {
-    match task_class {
-        "specification" | "planning" => "design_gate",
-        _ => "execution",
-    }
-}
-
-fn completion_blocker_for_dev_team_task_class(task_class: &str) -> String {
-    let blocker = match task_class {
-        "specification" | "planning" => {
-            crate::release1_contracts::BlockerCode::PendingSpecificationEvidence
-        }
-        "architecture" | "execution_preparation" => {
-            crate::release1_contracts::BlockerCode::PendingExecutionPreparationEvidence
-        }
-        "coach" | "review" | "validation" => {
-            crate::release1_contracts::BlockerCode::PendingReviewCleanEvidence
-        }
-        "verification" | "quality_gate" | "release_readiness" => {
-            crate::release1_contracts::BlockerCode::PendingVerificationEvidence
-        }
-        _ => crate::release1_contracts::BlockerCode::PendingImplementationEvidence,
-    };
-    crate::blocker_code_str(blocker).to_string()
 }
 
 fn copy_non_empty_route_value(
@@ -624,23 +753,6 @@ fn apply_implementation_analysis_route_overrides(
     );
 }
 
-fn lane_template_included(
-    lane_template: &serde_json::Value,
-    requires_design_gate: bool,
-    requires_execution_preparation: bool,
-) -> bool {
-    match lane_template["inclusion_rule"].as_str().unwrap_or("always") {
-        "when_design_gate" => requires_design_gate,
-        "when_execution_preparation_required" => requires_execution_preparation,
-        "when_flow_requires_coach" => true,
-        "when_flow_requires_verification" => true,
-        "when_proof_required" => false,
-        "when_review_triggered" => false,
-        "when_architecture_triggered" => false,
-        _ => true,
-    }
-}
-
 fn dev_team_lane_activation(
     compiled_bundle: &serde_json::Value,
     dispatch_alias: &str,
@@ -666,57 +778,99 @@ fn dev_team_lane_activation(
 fn build_resolved_development_dispatch_contract(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
-    requires_design_gate: bool,
+    _requires_design_gate: bool,
 ) -> serde_json::Value {
-    let flow_id = compiled_bundle["default_flow_set"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
     let requires_execution_preparation =
         request_requires_execution_preparation(compiled_bundle, selection);
-    let resolved_lanes = resolved_development_flow_templates(compiled_bundle, selection)
+    let configured_flow = match resolved_development_flow_templates(compiled_bundle, selection) {
+        Ok(flow) => flow,
+        Err(blocker_codes) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": blocker_codes,
+                "selected_flow_set": serde_json::Value::Null,
+                "team_flow_authority_id": compiled_bundle["team_flow_authority"]["authority_id"],
+                "execution_preparation_required": requires_execution_preparation,
+                "resolved_lanes": [],
+                "lane_sequence": [],
+                "execution_lane_sequence": [],
+                "lane_catalog": {},
+            });
+        }
+    };
+    let flow_id = configured_flow.flow_id;
+    let mut authority_blockers = Vec::new();
+    let resolved_lanes = configured_flow
+        .lanes
         .into_iter()
-        .filter(|lane| {
-            lane_template_included(lane, requires_design_gate, requires_execution_preparation)
-        })
-        .map(|lane_template| {
-            let preferred_dispatch_alias = lane_template["dispatch_alias"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let task_class = lane_template["task_class"]
-                .as_str()
-                .unwrap_or("implementation");
+        .map(|lane| {
             let dispatch_alias = crate::resolve_dispatch_alias_id(
                 compiled_bundle,
-                &preferred_dispatch_alias,
-                task_class,
+                &lane.dispatch_alias,
+                &lane.task_class,
             )
             .unwrap_or_default();
             let activation = dev_team_lane_activation(
                 compiled_bundle,
                 &dispatch_alias,
-                lane_template["lane_id"].as_str().unwrap_or_default(),
-                task_class,
-                lane_template["runtime_role"].as_str().unwrap_or_default(),
+                &lane.lane_id,
+                &lane.task_class,
+                &lane.runtime_role,
             );
             let runtime_role = activation["activation_runtime_role"]
                 .as_str()
                 .filter(|value| !value.trim().is_empty())
-                .or_else(|| lane_template["runtime_role"].as_str())
-                .unwrap_or_default();
+                .unwrap_or(&lane.runtime_role);
+            let selected_model_profile_id = activation["selected_model_profile_id"]
+                .as_str()
+                .or_else(|| activation["model_profile_id"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            let selected_model_profile_source = activation["selected_model_profile_source"]
+                .as_str()
+                .unwrap_or("runtime_assignment")
+                .to_string();
+            if selected_model_profile_id.is_empty() {
+                authority_blockers.push(format!(
+                    "team_flow_authority_missing_selected_model_profile:{}",
+                    lane.node_id
+                ));
+            }
             serde_json::json!({
-                "lane_id": lane_template["lane_id"],
-                "dispatch_target": lane_template["dispatch_target"],
+                "node_id": lane.node_id,
+                "lane_id": lane.lane_id,
+                "dispatch_target": lane.dispatch_target,
                 "dispatch_alias": dispatch_alias,
-                "task_class": task_class,
+                "task_class": lane.task_class,
                 "runtime_role": runtime_role,
-                "packet_template_kind": lane_template["packet_template_kind"],
-                "closure_class": lane_template["closure_class"],
-                "stage": lane_template["stage"],
-                "inclusion_rule": lane_template["inclusion_rule"],
-                "completion_blocker": lane_template["completion_blocker"],
-                "policy_diagnostics": lane_template["policy_diagnostics"],
+                "packet_template_kind": lane.packet_template_kind,
+                "closure_class": lane.closure_class,
+                "stage": lane.stage,
+                "inclusion_rule": lane.inclusion_rule,
+                "included": lane.included,
+                "required": lane.required,
+                "next_node": lane.next_node,
+                "completion_blocker": lane.completion_blocker,
+                "evidence_requirements": lane.evidence_requirements,
+                "proof_gates": lane.proof_gates,
+                "command_ref": lane.command_ref,
+                "command_mapping": lane.command_mapping,
+                "rework": lane.rework,
+                "terminal": lane.terminal,
+                "profile_authority": lane.profile_authority,
+                "selected_model_profile": {
+                    "profile_id": selected_model_profile_id,
+                    "selection_source": selected_model_profile_source,
+                },
+                "requires_user_approval": lane.requires_user_approval,
+                "approval_policy": lane.approval_policy,
+                "lifecycle_hook_templates": lane.lifecycle_hook_templates,
+                "resume_transitions": lane.resume_transitions,
+                "policy_diagnostics": {
+                    "source": "team_flow_authority.selected_config",
+                    "fallback_used": false,
+                    "fallback_fields": [],
+                },
                 "activation": activation.clone(),
                 "runtime_assignment": activation.clone(),
                 "carrier_runtime_assignment": activation,
@@ -725,10 +879,12 @@ fn build_resolved_development_dispatch_contract(
         .collect::<Vec<_>>();
     let lane_sequence = resolved_lanes
         .iter()
+        .filter(|lane| lane["included"].as_bool() == Some(true))
         .filter_map(|lane| lane["dispatch_target"].as_str().map(str::to_string))
         .collect::<Vec<_>>();
     let execution_lane_sequence = resolved_lanes
         .iter()
+        .filter(|lane| lane["included"].as_bool() == Some(true))
         .filter(|lane| lane["stage"].as_str() != Some("design_gate"))
         .filter_map(|lane| lane["dispatch_target"].as_str().map(str::to_string))
         .collect::<Vec<_>>();
@@ -741,7 +897,10 @@ fn build_resolved_development_dispatch_contract(
             acc
         });
     serde_json::json!({
+        "status": if authority_blockers.is_empty() { "ready" } else { "blocked" },
+        "blocker_codes": authority_blockers,
         "selected_flow_set": flow_id,
+        "team_flow_authority_id": compiled_bundle["team_flow_authority"]["authority_id"],
         "execution_preparation_required": requires_execution_preparation,
         "root_session_must_remain_orchestrator": true,
         "packet_family_required": [
@@ -1208,11 +1367,88 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
 mod tests {
     use super::{
         apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
-        build_resolved_development_dispatch_contract, build_runtime_orchestration_contract,
+        build_resolved_development_dispatch_contract, configured_dev_team_flow_templates,
         supported_autonomous_execution_settings,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
+
+    fn strict_team_flow_bundle() -> serde_json::Value {
+        json!({
+            "team_flow_authority": {
+                "authority_id": "team-flow-authority:test",
+                "selected_config": {
+                    "default_flow_id": "strict_flow",
+                    "roles": {
+                        "worker_node": {
+                            "runtime_role": "worker",
+                            "packet_template_kind": "delivery_task_packet",
+                            "closure_class": "implementation",
+                            "stage": "execution",
+                            "completion_blocker": "pending_worker_evidence"
+                        },
+                        "proof_node": {
+                            "runtime_role": "verifier",
+                            "packet_template_kind": "verifier_proof_packet",
+                            "closure_class": "proof",
+                            "stage": "execution",
+                            "completion_blocker": "pending_proof_evidence"
+                        }
+                    },
+                    "flows": {
+                        "strict_flow": {
+                            "steps": [
+                                {
+                                    "role_id": "worker_node",
+                                    "task_class": "implementation",
+                                    "inclusion_rule": "always",
+                                    "required": true,
+                                    "next_node": "proof_node",
+                                    "command_ref": "worker_command",
+                                    "rework_transitions": {"rework": "worker_node"},
+                                    "proof_gates": {"required_outputs": ["changed_files"]}
+                                },
+                                {
+                                    "role_id": "proof_node",
+                                    "task_class": "verification",
+                                    "inclusion_rule": "when_proof_required",
+                                    "included": false,
+                                    "required": true,
+                                    "terminal": true,
+                                    "command_ref": "proof_command",
+                                    "proof_gates": {"required_outputs": ["proof_summary"]}
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "command_catalog": {
+                "worker_command": {"command_id": "worker_command", "surface": "vida agent-init"},
+                "proof_command": {"command_id": "proof_command", "surface": "vida agent-init"}
+            }
+        })
+    }
+
+    fn strict_team_flow_selection(bundle: &serde_json::Value) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "strict flow".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec!["dev_team_flow_id:strict_flow".to_string()],
+            compiled_bundle: bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        }
+    }
 
     #[test]
     fn design_first_bootstrap_canonicalizes_moved_project_activator_test_proof_target() {
@@ -1293,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_contract_uses_configured_dev_team_flow_lane_sequence() {
+    fn dispatch_contract_blocks_readiness_only_legacy_shape() {
         let bundle = json!({
             "dev_team_readiness": {
                 "roles": [
@@ -1353,73 +1589,15 @@ mod tests {
 
         let contract = build_resolved_development_dispatch_contract(&bundle, &selection, true);
 
-        assert_eq!(
-            contract["lane_sequence"],
-            json!(["analyst", "developer", "reviewer"])
-        );
-        assert_eq!(
-            contract["execution_lane_sequence"],
-            json!(["developer", "reviewer"])
-        );
-        let orchestration_contract = build_runtime_orchestration_contract(true, true, &contract);
-        assert!(
-            orchestration_contract["active_cycle"]
-                .as_array()
-                .expect("active cycle should be an array")
-                .iter()
-                .any(|step| step == "delegate_implementer_lane")
-        );
-        assert!(
-            orchestration_contract["replanning"]["checkpoints"]
-                .as_array()
-                .expect("replanning checkpoints should be an array")
-                .iter()
-                .any(|step| step == "after_implementation_evidence")
-        );
-        assert_eq!(
-            contract["lane_catalog"]["developer"]["runtime_role"],
-            "worker"
-        );
-        assert_eq!(
-            contract["lane_catalog"]["developer"]["completion_blocker"],
-            "configured_implementation_blocker"
-        );
-        assert_eq!(
-            contract["lane_catalog"]["developer"]["policy_diagnostics"]["fallback_used"],
-            false
-        );
-        assert_eq!(contract["lane_catalog"]["reviewer"]["task_class"], "review");
-        assert_eq!(
-            contract["lane_catalog"]["reviewer"]["packet_template_kind"],
-            "verifier_proof_packet"
-        );
-        assert_eq!(
-            contract["lane_catalog"]["reviewer"]["completion_blocker"],
-            "configured_review_blocker"
-        );
-        assert_eq!(
-            contract["lane_catalog"]["reviewer"]["inclusion_rule"],
-            "when_flow_requires_verification"
-        );
-        assert_eq!(
-            contract["lane_catalog"]["reviewer"]["policy_diagnostics"]["fallback_used"],
-            false
-        );
-        assert_eq!(
-            contract["lane_catalog"]["analyst"]["policy_diagnostics"]["fallback_used"],
-            true
-        );
-        assert!(
-            contract["lane_catalog"]["analyst"]["policy_diagnostics"]["fallback_fields"]
-                .as_array()
-                .expect("fallback fields should be reported")
-                .contains(&json!("packet_template_kind")),
-            "missing configured policy fields must be reported explicitly"
-        );
+        assert_eq!(contract["status"], "blocked");
+        assert_eq!(contract["lane_sequence"], json!([]));
+        assert!(contract["blocker_codes"][0]
+            .as_str()
+            .is_some_and(|code| code.contains("missing_flow_id")));
     }
 
     #[test]
-    fn adaptive_triggered_lanes_are_excluded_until_required() {
+    fn dispatch_contract_does_not_execute_partial_conditional_readiness_shape() {
         let bundle = json!({
             "dev_team_readiness": {
                 "roles": [
@@ -1465,15 +1643,12 @@ mod tests {
 
         let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
 
-        assert_eq!(contract["lane_sequence"], json!(["coder"]));
-        assert_eq!(contract["execution_lane_sequence"], json!(["coder"]));
-        assert!(contract["lane_catalog"]["tester"].is_null());
-        assert!(contract["lane_catalog"]["coach_validator"].is_null());
-        assert!(contract["lane_catalog"]["architect"].is_null());
+        assert_eq!(contract["status"], "blocked");
+        assert_eq!(contract["resolved_lanes"], json!([]));
     }
 
     #[test]
-    fn aliasless_configured_autotester_lane_gets_lane_local_runtime_assignment() {
+    fn dispatch_contract_does_not_infer_authority_from_carrier_runtime() {
         let bundle = json!({
             "agent_system": {
                 "routing": {
@@ -1555,25 +1730,12 @@ mod tests {
         };
 
         let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
-        let autotester = &contract["lane_catalog"]["autotester"];
-
-        assert_eq!(autotester["runtime_role"], "worker");
-        assert_eq!(autotester["task_class"], "implementation_medium");
-        assert_eq!(autotester["activation"]["enabled"], true);
-        assert_eq!(
-            autotester["activation"]["activation_runtime_role"],
-            "worker"
-        );
-        assert_eq!(autotester["activation"]["selected_carrier_id"], "middle");
-        assert_eq!(autotester["runtime_assignment"], autotester["activation"]);
-        assert_eq!(
-            autotester["carrier_runtime_assignment"],
-            autotester["activation"]
-        );
+        assert_eq!(contract["status"], "blocked");
+        assert_eq!(contract["lane_catalog"], json!({}));
     }
 
     #[test]
-    fn dispatch_contract_keeps_legacy_flow_when_dev_team_readiness_is_absent() {
+    fn dispatch_contract_fails_closed_when_team_flow_authority_is_absent() {
         let bundle = json!({});
         let selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -1595,10 +1757,159 @@ mod tests {
 
         let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
 
+        assert_eq!(contract["status"], "blocked");
+        assert_eq!(contract["lane_sequence"], json!([]));
+    }
+
+    #[test]
+    fn strict_team_flow_projection_preserves_typed_authority_fields() {
+        let bundle = strict_team_flow_bundle();
+        let selection = strict_team_flow_selection(&bundle);
+
+        let flow = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect("strict configured flow should resolve");
+
+        assert_eq!(flow.flow_id, "strict_flow");
+        assert_eq!(flow.lanes.len(), 2);
+        let worker = &flow.lanes[0];
+        assert!(worker.included);
+        assert!(worker.required);
+        assert_eq!(worker.next_node.as_deref(), Some("proof_node"));
+        assert_eq!(worker.evidence_requirements, vec!["changed_files"]);
+        assert_eq!(worker.command_ref.as_deref(), Some("worker_command"));
         assert_eq!(
-            contract["lane_sequence"],
-            json!(["implementer", "coach", "verification"])
+            worker.command_mapping.as_ref().unwrap()["command_id"],
+            "worker_command"
         );
+        assert_eq!(worker.rework.targets, vec!["worker_node"]);
+        assert!(!worker.terminal);
+        assert_eq!(worker.profile_authority.team_role_id, "worker_node");
+        assert!(
+            !flow.lanes[1].included,
+            "conditional result must be explicit"
+        );
+        assert!(flow.lanes[1].terminal);
+    }
+
+    #[test]
+    fn resolved_lane_fields_match_the_closed_authority_schema() {
+        let bundle = strict_team_flow_bundle();
+        let selection = strict_team_flow_selection(&bundle);
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let schema: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                repository_root.join("vida/config/schemas/team-flow-authority.schema.json"),
+            )
+            .expect("TeamFlow schema should be readable"),
+        )
+        .expect("TeamFlow schema should parse");
+        let lane_schema = &schema["$defs"]["lane"];
+        assert_eq!(lane_schema["additionalProperties"], false);
+        let schema_fields = lane_schema["properties"]
+            .as_object()
+            .expect("lane schema properties must be an object")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let required_fields = lane_schema["required"]
+            .as_array()
+            .expect("lane schema required fields must be an array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("lane required fields must be strings")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(schema_fields, required_fields);
+        for lane in contract["resolved_lanes"]
+            .as_array()
+            .expect("resolved lanes must be an array")
+        {
+            let emitted_fields = lane
+                .as_object()
+                .expect("resolved lane must be an object")
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(emitted_fields, schema_fields);
+        }
+    }
+
+    #[test]
+    fn strict_team_flow_projection_rejects_missing_conditional_result() {
+        let mut bundle = strict_team_flow_bundle();
+        bundle["team_flow_authority"]["selected_config"]["flows"]["strict_flow"]["steps"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("included");
+        let selection = strict_team_flow_selection(&bundle);
+
+        let error = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect_err("conditional inclusion without included must fail");
+
+        assert!(error.contains("missing_included:proof_node"));
+    }
+
+    #[test]
+    fn strict_team_flow_projection_rejects_implicit_terminal() {
+        let mut bundle = strict_team_flow_bundle();
+        bundle["team_flow_authority"]["selected_config"]["flows"]["strict_flow"]["steps"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal");
+        let selection = strict_team_flow_selection(&bundle);
+
+        let error = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect_err("missing terminal declaration must fail");
+
+        assert!(error.contains("invalid_terminal_edge:proof_node"));
+    }
+
+    #[test]
+    fn strict_team_flow_projection_rejects_unknown_rework_target() {
+        let mut bundle = strict_team_flow_bundle();
+        bundle["team_flow_authority"]["selected_config"]["flows"]["strict_flow"]["steps"][0]
+            ["rework_transitions"] = json!({"rework": "missing_node"});
+        let selection = strict_team_flow_selection(&bundle);
+
+        let error = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect_err("unknown rework target must fail");
+
+        assert!(error.contains("unknown_rework_target:worker_node:missing_node"));
+    }
+
+    #[test]
+    fn strict_team_flow_projection_rejects_missing_evidence_contract() {
+        let mut bundle = strict_team_flow_bundle();
+        bundle["team_flow_authority"]["selected_config"]["flows"]["strict_flow"]["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("proof_gates");
+        let selection = strict_team_flow_selection(&bundle);
+
+        let error = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect_err("required lane without evidence must fail");
+
+        assert!(error.contains("evidence_source_count:worker_node:0"));
+    }
+
+    #[test]
+    fn strict_team_flow_projection_rejects_node_alias_conflict() {
+        let mut bundle = strict_team_flow_bundle();
+        bundle["team_flow_authority"]["selected_config"]["flows"]["strict_flow"]["steps"][0]
+            ["step_id"] = json!("duplicate_worker_id");
+        let selection = strict_team_flow_selection(&bundle);
+
+        let error = configured_dev_team_flow_templates(&bundle, &selection)
+            .expect_err("multiple node aliases must fail");
+
+        assert!(error.contains("conflicting_aliases:strict_flow:node_id"));
     }
 
     #[test]

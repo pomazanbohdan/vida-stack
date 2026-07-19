@@ -2,212 +2,124 @@
 
 Status: active product contract
 
-Use this contract as the bounded schema contract for configurable development flows. The flow catalog must make role order, command templates, lifecycle hooks, proof gates, rework/resume transitions, approval pauses, and host-agent adapter projection data-driven rather than hardcoded in CLI/runtime code.
-
 ## Summary
 
-- Contract: add a configurable development-flow catalog schema.
-- Owner layer: mixed.
-- Runtime surface: `vida.config.yaml | agent_extensions.flows | taskflow consume | agent dispatch-next | agent-init`.
-- Status: active product contract.
+TeamFlow options are declared once in the master `vida.config.yaml` template, selected by project config, validated by the TeamFlow authority schema, and projected as complete typed lanes. Runtime code consumes the projection and must not reconstruct missing authority.
 
-## Core Rule
+## Canonical Sources
 
-VIDA owns flow law, task binding, packets, receipts, and closure. Host tools only provide an adapter capability selected by config. A flow step may request a host-agent adapter projection, but it must not name one vendor as runtime law.
+The authority order is:
 
-## Configuration Shape
+1. `docs/framework/templates/vida.config.yaml.template -> dev_team.authority_catalog` is the exhaustive human-readable option and capability/admissibility catalog.
+2. `vida/config/schemas/team-flow-authority.schema.json` is the machine validation contract for selections and resolved projections.
+3. Project `vida.config.yaml -> dev_team.authority_selection` chooses declared options and `dev_team.roles` / `dev_team.flows` provide project instances.
+4. Agent-extension registries provide referenced roles, profiles, flows, packs, commands, and dispatch aliases.
+5. The compiled bundle is a deterministic derived projection, never a second authoring surface.
 
-`dev_team` may define:
+Other ADRs and process docs explain use and ownership only. They must not enumerate an independent option catalog.
 
-```yaml
-dev_team:
-  default_flow_id: default_delivery
-  work_item_flow_bindings:
-    epic: default_delivery
-    defect: defect_repair_verified
-    runtime_defect: runtime_defect_remediation
-    pull_request: pr_repair_verified
-    pr_repair: pr_repair_verified
-    architecture: architecture_design
-    release_readiness: release_readiness_gate
-    service_tui: service_tui_orchestration
-    internal_agent_development: hook_enabled_internal_agent_development
-    task: default_delivery
-    debug: debug_fast
-  flows:
-    default_delivery:
-      enabled: true
-      flow_class: development
-      work_item_bindings: [epic, task]
-      sequential: true
-      allow_parallel_handoffs: false
-      lifecycle_hook_templates: [command_timing_summary]
-      adapter_projection:
-        host_agent_bridge_contract: required
-        process_carrier_requires_explicit_backend: true
-      steps:
-        - role_id: analyst
-          runtime_role: business_analyst
-          task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
-          lifecycle_hook_templates: [command_timing_summary]
-          proof_gates:
-            required_outputs: [detailed_task_brief, acceptance_contract]
-          requires_user_approval: false
-```
+## Configuration Rules
 
-Legacy `steps: [developer, coach]` remains valid. Runtime projection must normalize both forms into:
+Project config may:
 
-```json
-{
-  "default_flow_id": "default_delivery",
-  "sequence": ["analyst", "developer"],
-  "flows": [
-    {
-      "flow_id": "default_delivery",
-      "default": true,
-      "work_item_bindings": ["epic", "task"],
-      "ordered_steps": [
-        {
-          "step_id": "default_delivery-0",
-          "order": 0,
-          "role_id": "analyst",
-          "runtime_role": "business_analyst",
-          "task_class": "specification",
-          "command_template": {},
-          "lifecycle_hook_templates": [],
-          "proof_gates": {},
-          "resume_transitions": {},
-          "rework_transitions": {},
-          "adapter_projection": {},
-          "requires_user_approval": false,
-          "approval_policy": {}
-        }
-      ]
-    }
-  ]
-}
-```
+- select an option defined by the master catalog;
+- define or override a project role or flow instance using schema-supported fields;
+- bind a work-item classification to a configured flow;
+- reference a command, profile, pack, or alias declared in its configured registry.
 
-## Flow Selection
+Project config must not:
 
-Selection order:
+- introduce an undeclared projection mode or transition policy;
+- treat a selected model profile as the team role/profile authority;
+- encode terminal behavior only through a conventional id or sequence position;
+- rely on a command string when a registry `command_ref` is required;
+- resolve duplicate or shadowing aliases by order.
 
-1. Explicit task/epic binding when present.
-2. `dev_team.work_item_flow_bindings.<issue_type>`.
-3. `dev_team.default_flow_id`.
-4. First enabled flow.
+Unknown selections, missing refs, malformed conditions, ambiguous aliases, and incomplete terminal/rework/approval definitions are validation blockers.
 
-No runtime code may hardcode `default_delivery` as a semantic default. That id is a config value only.
+## Deterministic Authority Identity
 
-## Work Item Taxonomy Registry
+The compiled bundle binds every authority-affecting registry before hashing: roles, skills, profiles, flows, packs, commands, and dispatch aliases. It also hashes the selected `dev_team` config.
 
-Flow binding keys are owned by the provider-neutral work item taxonomy registry in `state_store_task_models.rs`. The registry is additive over the persisted task-store `issue_type: String` field, so existing task records remain compatible while runtime code gains one owner contract for classification.
+Canonicalization rules:
 
-The registry separates four vocabularies:
+- object keys are sorted recursively;
+- registry rows are sorted by the registry's declared id key;
+- ordered arrays such as flow steps and proof gates preserve order;
+- identities use canonical JSON plus the algorithm selected by config;
+- the aggregate TeamFlow identity covers the config identity and all component registry identities.
 
-1. Persisted work item type: the task-store `issue_type` value, normalized to a canonical taxonomy id.
-2. Flow selection binding: the key used by `dev_team.work_item_flow_bindings` and flow `work_item_bindings`.
-3. Runtime task class: selection and model-routing classes such as `implementation`, `test_authoring`, `verification`, and `architecture`.
-4. Execution granularity: planning labels such as `delivery_task` and `execution_block`; these are not persisted work item types.
+A changed pack or command must change its component identity and the aggregate identity. Mapping-key or registry-row reordering alone must not.
 
-Phase 1 registry fields:
+## Resolved Lane Contract
 
-```json
-{
-  "schema_version": 1,
-  "canonical_issue_type": "runtime_defect",
-  "aliases": [],
-  "category": "defect",
-  "parent_required": true,
-  "flow_bindable": true,
-  "default_flow_binding": "runtime_defect_remediation",
-  "source_tiers": ["runtime_status", "downstream_runtime_report"]
-}
-```
+Every resolved lane is typed and includes all schema-required fields. In addition to its lane id and routing metadata, it carries:
 
-Unknown work item types are fail-closed for parent validation and must not silently become root-capable. New source systems may add aliases in later slices, but the canonical registry id remains provider-neutral and must not encode Jira, Linear, GitHub, or host-tool-specific names unless the work item class itself is a generic source tier. Compatibility aliases such as `bug` and `spike` may remain as aliases only; they must not become separate flow-driving provider-specific canonical ids.
+- `included`: evaluated conditional-admission result;
+- `required`: whether the selected flow requires completion of the lane;
+- `evidence_requirements`: concrete outputs required for completion;
+- `proof_gates`: configured proof contract;
+- `command_ref`: registry id or null when the declared capability allows no command;
+- `command_mapping`: the resolved registry row or null under the same schema condition;
+- `rework`: typed rework kind and explicit target;
+- `terminal`: typed terminal kind plus proof that it was config-declared;
+- `profile_authority`: configured team role, runtime role, task class, and source path;
+- `selected_model_profile`: runtime-selected model profile id and selection source.
 
-## Standard Flow Presets
+`profile_authority` and `selected_model_profile` are intentionally distinct. Carrier/model selection can change without changing the team role or flow authority.
 
-The root project config and generated template must keep the same standard flow presets unless a project explicitly opts out through a later accepted override contract:
+No untyped legacy fallback projection is executable. A compatibility parser may emit a typed blocker describing the missing field.
 
-| Work item | Flow id | Required role semantics |
-| --- | --- | --- |
-| `epic`, `task` | `default_delivery` | analyst, test author when required, developer, coach, verifier, prover, release closure |
-| `defect` | `defect_repair_verified` | analyst, test author, developer, coach, verifier |
-| `runtime_defect` | `runtime_defect_remediation` | specifier, coder, refactorer, solution architect |
-| `pull_request`, `pr_repair` | `pr_repair_verified` | PR triage analyst, CI/review verifier, repair/integration developer, coach, proof/disposition prover |
-| `architecture` | `architecture_design` | analyst with user approval pause, execution-preparation worker, verifier |
-| `release_readiness` | `release_readiness_gate` | verifier, prover |
-| `service_tui` | `service_tui_orchestration` | analyst, developer, verifier |
-| `internal_agent_development` | `hook_enabled_internal_agent_development` | analyst, developer, coach, verifier |
+## Transition, Approval, Rework, and Terminal Rules
 
-Every standard flow preset must be data-driven:
+Transitions come from explicit configured edges. Sequence order can help display the plan but does not independently authorize an edge.
 
-- It must be reachable through `dev_team.work_item_flow_bindings`.
-- It must define ordered `steps`.
-- Write-producing or review-producing steps must use a configured `command_template.surface`, normally `vida agent-init`.
-- Flow-level `adapter_projection.host_agent_bridge_contract` must remain explicit.
-- Process carriers must remain explicit through `process_carrier_requires_explicit_backend: true`.
-- Hook references must resolve to `docs/product/spec/hook-templates.yaml`.
+Approval-enabled steps pause before their outgoing edge. The authority owner records the configured approval outcome; pending and rework outcomes are not successful completion.
 
-The PR preset is the canonical route for open pull-request handling. It may close stale/invalid PRs, merge valid PRs, or return a repair task, but only after triage, CI/review evidence, coach review, and final proof/disposition are represented in the flow evidence.
+Rework and resume transitions name explicit configured targets. Missing targets, targets outside the selected flow, or conflicting edge declarations block projection or transition.
 
-## Host-Agent Adapter Projection
+Terminal closure is lawful only from a step declared terminal in the selected config. Runtime code must not infer terminal state from a role id, name, last array position, missing command, or missing successor.
 
-Flow and step-level `adapter_projection` may require the generic host-agent bridge contract. Valid adapters are configured under `host_environment.host_agent_bridge_contract` and can include Codex host tools, Codex CLI process agents, Claude Code subagents, Pi plugin sub-agents, Vibe Kanban agents, OpenCode subagents, or custom adapters.
+## Command and Alias Resolution
 
-Process execution remains a child-process carrier and must be selected explicitly. Parent-session internal agents remain host bridge adapters and must produce result/receipt artifacts before closure.
+`command_ref` resolves through the configured command registry. A required lane with an unresolved command fails closed unless the capability/admissibility matrix explicitly permits a commandless lane.
 
-## User Approval Gates
+Aliases are identifiers, not fallback command text. Duplicate ids, competing targets, or a project alias that shadows another effective alias are conflicts and must be rejected. Source order is never a conflict-resolution policy.
 
-Phase 1 schema allows `requires_user_approval` and `approval_policy` on any ordered step. Runtime execution must treat these fields as a pause contract only after a later approval-gate implementation slice wires approval state, edit/rework loops, and resume commands.
+## Conditional Inclusion and Evidence
 
-The default delivery and architecture design presets use this field to model a user-editable analysis/specification document before downstream implementation roles continue. Approval hooks are diagnostic records until the approval-state implementation is accepted.
+The master catalog owns the supported inclusion rules. Runtime evaluates only the selected configured rule. An unknown or malformed condition is blocked rather than treated as included or skipped.
 
-## Lifecycle Hooks
+If a lane is both included and required, its evidence list must be non-empty and its proof gates must be structurally valid. A skipped conditional lane remains visible in the plan with `included: false`; it is not silently removed from authority evidence.
 
-`lifecycle_hook_templates` are diagnostic hooks attached to flows or steps. Hooks must not change command semantics unless a future spec explicitly permits behavior-changing hooks. `command_timing_summary` is diagnostic-only and feeds operator self-diagnostics.
+## Work-Item Flow Selection
 
-## Compatibility
+Flow selection is data-driven. Explicit work-item binding wins over configured project bindings, and the configured project default is the final ordinary source. If no enabled configured flow resolves, selection fails closed. Runtime code must not embed a semantic default flow id.
 
-- Existing `dev_team.roles` remains authoritative for role contracts.
-- Existing legacy flow `steps` arrays continue to project into `ordered_steps`.
-- Existing `agent_extensions.flow_sets[].lane_templates` remain valid and may carry the same generic fields.
-- Unsupported or unknown role ids remain fail-closed validation blockers.
+Work-item binding vocabulary remains provider-neutral and separate from runtime task class and execution granularity. Unknown work-item types do not become root-capable or flow-bindable through fallback inference.
+
+## Host Adapter Boundary
+
+Flow steps may require a generic host-agent bridge capability. Host adapter choice is config/runtime capability data, not TeamFlow transition law. The adapter must return receipt evidence bound to the same aggregate TeamFlow authority identity before closure.
+
+## Compatibility and Migration
+
+Existing configs remain readable only when they can be normalized without inventing authority. Any legacy shorthand that omits an explicit edge, approval result, terminal declaration, rework target, evidence requirement, or command mapping returns a typed migration blocker.
+
+Migration order follows the TeamFlow authority ADR: establish template/schema/identity, migrate the TaskFlow owner, adapt consumers, remove fallbacks, then enable closure proof.
 
 ## Proof Targets
 
-```powershell
-cargo test -p vida development_flow_catalog -- --nocapture --test-threads=1
-cargo test -p vida lifecycle_hook_contract -- --nocapture --test-threads=1
-cargo test -p vida dev_team_sequence_uses_configured_flow_ordered_step_overrides -- --nocapture --test-threads=1
-cargo test -p vida project_routing_shape_defines_configurable_pr_and_specialized_flow_presets -- --nocapture --test-threads=1
-vida taskflow consume agent-system --json
-vida docflow check --root . docs/product/spec/development-flow-catalog-schema-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history
-```
-
-## External Reference Notes
-
-These sources are reference patterns only, not VIDA runtime law:
-
-- OpenAI Codex CLI: process and host-tool boundaries.
-- Claude Code subagents: named subagent configuration and delegated context.
-- Pi sub-agent package/docs: plugin-based sub-agent affordance.
-- Vibe Kanban docs: multi-agent/profile orchestration surface.
-- OpenCode agents docs: configured primary/subagent behavior and permission boundaries.
+Proof must include template/schema parity and cases for missing, malformed, conditional, approval, terminal, rework/resume, evidence, command, alias-conflict, and registry-identity behavior. Static hardcode checks must cover routing, dispatch, resume, state, and status consumers. Executable test commands are recorded by the active implementation packet after all shared owner types are stable.
 
 -----
 artifact_path: product/spec/development-flow-catalog-schema-contract
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-06-01'
+artifact_revision: '2026-07-19'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/development-flow-catalog-schema-contract.md
 created_at: '2026-06-01T00:00:00+03:00'
-updated_at: '2026-06-01T00:00:00+03:00'
+updated_at: '2026-07-19T00:00:00+03:00'
 changelog_ref: development-flow-catalog-schema-contract.changelog.jsonl

@@ -1,125 +1,115 @@
-# Architecture Decision: Team-Flow State-Machine Ownership Boundary
+# Architecture Decision: TeamFlow State-Machine Authority Boundary
 
 ## ID
+
 `ADR-team-flow-state-machine-owner-20260701`
 
 ## Status
-PROPOSED — requires implementation before closure.
+
+ACCEPTED — migration is fail-closed until every consumer uses the shared authority.
 
 ## Date
-2026-07-01
+
+2026-07-19
 
 ## Context
 
-The VIDA runtime contains hardcoded literals for team-flow continuation logic scattered across multiple crates:
+TeamFlow behavior was previously reconstructed from runtime literals, partial dispatch projections, legacy lane templates, and independently interpreted role sequences. That distributed authority allowed the configured flow, the persisted TaskFlow state, and the operator projection to disagree about the next edge, approval pause, rework target, terminal state, command, or evidence gate.
 
-- `runtime_dispatch*` — downstream packet generation, lane completion verdicts
-- `taskflow_routing*` — dispatch contract lane sequence extraction
-- `taskflow_consume_resume*` — resume target computation
-- `taskflow_packet*` — packet shaping and handoff
-- `state_store*` — persisted state projections
-
-These literals include:
-- `allowed_next_node` values (e.g., `"developer"`, `"developer_rework"`, `"tester"`, `"closure"`)
-- `lane_sequence` arrays (e.g., `["analyst", "designer", "autotester"]`)
-- `execution_lane_sequence` arrays (e.g., `["implementer", "coach", "verification"]`)
-
-Each crate independently interprets these literals, leading to:
-1. Duplicate logic for the same state-machine transitions
-2. Inconsistent handling when new roles/lane sequences are added
-3. No single source of truth for what constitutes a lawful next-node transition
-4. Hard-to-maintain test fixtures that encode specific literal values
+The runtime also lacked deterministic identities covering the selected `dev_team` config and every registry that can affect dispatch. A receipt could therefore name a flow while omitting the exact packs or commands used to compile it.
 
 ## Decision
 
-**One canonical state-machine owner task must replace all scattered hardcoded literals with a config-backed shared boundary.**
+TeamFlow uses one authority chain:
 
-### Shared Boundary Design
+1. The master template at `docs/framework/templates/vida.config.yaml.template -> dev_team.authority_catalog` enumerates the supported options and capability/admissibility matrix.
+2. `vida/config/schemas/team-flow-authority.schema.json` defines the machine-valid authority selection and resolved lane projection.
+3. Project `vida.config.yaml -> dev_team.authority_selection` selects only options declared by the master catalog and supplies project flow/role definitions.
+4. The compiled agent-extension bundle resolves registry-backed commands and emits deterministic config/registry identities.
+5. The TaskFlow authority owner validates explicit edges, approvals, rework/resume, and config-declared terminal transitions.
+6. Runtime dispatch and status surfaces consume that authority; they do not infer or redefine it.
 
-1. **Config-backed lane sequence resolution:**
-   - All `lane_sequence` and `execution_lane_sequence` lookups must resolve from `vida.config.yaml -> dev_team.flows.<flow_id>.steps[]` rather than parsing JSON dispatch contracts directly.
-   - The shared boundary function: `resolve_execution_lane_sequence(flow_config, current_role) -> Vec<String>`
+The template and schema are co-versioned canonical surfaces. This ADR explains their ownership boundary and must not repeat their option lists.
 
-2. **Allowed-next-node validation:**
-   - All `allowed_next_node` checks must use a single authority function: `validate_allowed_next_node(current_role, requested_next_node, execution_plan) -> Verdict`
-   - This function reads from the same config-backed lane sequence source.
+## Ownership Boundary
 
-3. **Role-to-lane mapping:**
-   - Runtime roles (`worker`, `business_analyst`, `coach`, `verifier`, `prover`, `solution_architect`) map to concrete lane IDs through a single registry in `vida.config.yaml -> dev_team.roles.<role_id>.runtime_role`.
-   - No crate may hardcode its own role-to-lane mapping.
+### TaskFlow authority owner
 
-4. **State-machine transitions:**
-   - The state machine for team-flow continuation (analyst → test_author → developer → coach → verifier → prover) is defined once in `vida.config.yaml -> dev_team.flows.task_delivery_verified.steps[]`.
-   - All crates that need to know "what comes next" must query this canonical definition.
+The shared TaskFlow authority owns transition validation and state changes. It must:
 
-### Implementation Scope
+- validate the requested next node against an explicit configured edge;
+- distinguish approval pending, approval accepted, rework requested, and rejection outcomes;
+- accept terminal closure only when the selected config explicitly marks it terminal;
+- reject ambiguous aliases and conflicting edge definitions;
+- persist one transition outcome before downstream projection proceeds.
 
-**Files to refactor:**
-- `crates/vida/src/runtime_dispatch_downstream_packets.rs`
-- `crates/vida/src/runtime_dispatch_lane_completion.rs`
-- `crates/vida/src/runtime_dispatch_execution.rs`
-- `crates/vida/src/runtime_dispatch_result_evidence.rs`
-- `crates/vida/src/runtime_dispatch_status.rs`
-- `crates/vida/src/runtime_dispatch_state.rs`
-- `crates/vida/src/taskflow_routing.rs`
-- `crates/vida/src/taskflow_consume_resume.rs`
-- `crates/vida/src/taskflow_packet*` (if exists)
-- `crates/vida/src/state_store*.rs`
+No consumer may infer terminal state from a literal lane id, position, role name, or an empty next-node value.
 
-**New shared module:**
-- `crates/vida/src/team_flow_state_machine.rs` — canonical state-machine owner with:
-  - `resolve_next_lane(current_role, execution_plan) -> Option<String>`
-  - `validate_transition(current_role, requested_next_node) -> Verdict`
-  - `get_execution_sequence(flow_config) -> Vec<String>`
+### Projection/config owner
 
-### Non-Goals
+The compiled bundle and development-flow projection are read-only derived surfaces. They must:
 
-1. This ADR does not change the dev_team flow definitions in `vida.config.yaml`.
-2. This ADR does not modify the packet template schema.
-3. This ADR does not change the agent dispatch protocol or host-bridge contract.
+- bind roles, skills, profiles, flows, packs, commands, and dispatch aliases before computing authority identity;
+- canonicalize mapping keys and registry row order before hashing;
+- expose separate team/profile authority and selected model-profile fields;
+- resolve `command_ref` through the command registry;
+- emit complete typed lane fields for inclusion, requirement, evidence, proof, command mapping, rework, and terminal state;
+- return a typed blocker when required or malformed authority data is encountered.
 
-### Consequences
+They must not synthesize legacy lane shapes or silently substitute default roles, models, reasoning settings, team profiles, commands, approval results, edges, or terminal nodes.
 
-**Positive:**
-- Single source of truth for team-flow state-machine transitions
-- Easier to add new roles/lane sequences (one config change)
-- Reduced test duplication
-- Clear ownership for state-machine behavior
+### Runtime consumers
 
-**Negative:**
-- Requires refactoring ~10 files across multiple crates
-- Tests that encode specific literal values must be updated
-- Temporary risk of regression during migration
+Routing, resume, dispatch, status, and receipt consumers may use provider-neutral routing/status enums. They must not embed concrete agent, model, reasoning, runtime-role, team-profile, command, next-node, or terminal literals as authority.
 
-### Migration Plan
+## Identity Contract
 
-1. Create `team_flow_state_machine.rs` with the shared boundary functions.
-2. Update `taskflow_routing.rs` to use the new shared boundary for lane sequence resolution.
-3. Update `runtime_dispatch*` files to use the new shared boundary for allowed_next_node validation.
-4. Update `taskflow_consume_resume.rs` to use the new shared boundary for resume target computation.
-5. Update all test fixtures to use config-backed values instead of hardcoded literals.
-6. Run full test suite and smoke tests.
+Each registry and the selected `dev_team` config receives a content identity over canonical JSON. The aggregate TeamFlow authority identity covers the config identity and all registry identities, including packs and commands. Ordered arrays remain ordered because step order is semantic; registry rows are sorted by their declared identifier before hashing because registry source order is not semantic.
 
-### Verification
+Receipts and projections may carry the aggregate identity and component identities. A mismatch is a stale-authority blocker, not a compatibility fallback.
 
-1. `cargo test --all` passes with no regressions.
-2. `vida taskflow run-graph dispatch-init <task-id> --json` returns correct lane sequences from config.
-3. `vida agent-init --dispatch-packet ... --execute-dispatch` follows the new state-machine boundaries.
-4. DocFlow proofcheck passes for all affected process docs.
+## Migration
 
-### Related Tasks
+1. Materialize the catalog, schema, project selection, registry identities, and complete typed projection.
+2. Move transition validation to the shared TaskFlow authority owner.
+3. Adapt each routing, dispatch, resume, state, and status consumer to the shared authority.
+4. Remove legacy synthesized lane templates and hardcoded transition/terminal fallbacks.
+5. Add malformed, missing, conditional, approval, terminal, rework, evidence, alias-conflict, and identity-drift proof.
+6. Enable closure only after all consumers pass the same authority identity through their receipts.
 
-- TaskFlow task: `runtime-arch-team-flow-state-machine-owner-20260701`
-- Parent epic: `runtime-team-flow-activity-meeting-dx-20260701`
+During migration, missing or inconsistent authority blocks execution. Compatibility code may parse an old input only to return a typed migration blocker; it may not create an executable fallback shape.
+
+## Consequences
+
+- Config changes can alter TeamFlow without code changes when they remain within the declared catalog/schema.
+- Project config stays concise: it selects and overrides declared options rather than documenting the option universe.
+- Adding a new option requires a template/schema revision before a project can select it.
+- Deterministic identities make config/registry drift observable in receipts and tests.
+- Runtime consumers become simpler because transition semantics remain in one owner.
+
+## Verification
+
+Static and executable proof must cover:
+
+- master-template and project-selection schema validity;
+- complete lane projection fields;
+- missing and malformed authority failure;
+- conditional inclusion and required evidence;
+- explicit approval outcomes;
+- config-only terminal admission;
+- explicit rework/resume targets;
+- duplicate or shadowing alias rejection;
+- packs/commands participation in deterministic authority identity;
+- absence of concrete authority literals in runtime consumers.
 
 -----
 artifact_path: product/spec/adr-team-flow-state-machine-owner
 artifact_type: architecture_decision
 artifact_version: '1'
-artifact_revision: '2026-07-01'
+artifact_revision: '2026-07-19'
 schema_version: '1'
-status: proposed
+status: accepted
 source_path: docs/product/spec/adr-team-flow-state-machine-owner.md
 created_at: '2026-07-01T00:00:00+03:00'
-updated_at: '2026-07-02T04:18:00+03:00'
+updated_at: '2026-07-19T00:00:00+03:00'
 changelog_ref: adr-team-flow-state-machine-owner.changelog.jsonl
