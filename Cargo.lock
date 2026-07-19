@@ -7186,6 +7186,7 @@ dependencies = [
 name = "taskflow-authority"
 version = "0.9.7"
 dependencies = [
+ "blake3",
  "cedar-policy",
  "proptest",
  "serde",

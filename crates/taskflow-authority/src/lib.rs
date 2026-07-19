@@ -16,6 +16,7 @@ pub mod scheduler_claim;
 pub mod stale_guard;
 pub mod task_attempts;
 pub mod task_transition;
+pub mod team_flow_transition;
 pub mod terminal_closure;
 
 pub use errors::TaskflowAuthorityError;
@@ -43,9 +44,10 @@ mod tests {
             crate::domain_conformance::MODULE,
             crate::task_attempts::MODULE,
             crate::task_transition::MODULE,
+            crate::team_flow_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 18);
+        assert_eq!(modules.len(), 19);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"claims"));
         assert!(modules.contains(&"terminal_closure"));
@@ -64,5 +66,6 @@ mod tests {
         assert!(modules.contains(&"domain_conformance"));
         assert!(modules.contains(&"task_attempts"));
         assert!(modules.contains(&"task_transition"));
+        assert!(modules.contains(&"team_flow_transition"));
     }
 }
