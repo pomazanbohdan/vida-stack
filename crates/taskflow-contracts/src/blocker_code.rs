@@ -27,6 +27,7 @@ pub enum BlockerCode {
     AuthoritativeStateStoreLocked,
     AuthoritativeStateStoreOpenFailed,
     HostBridgeDispatchReceiptMissing,
+    HostBridgeDispatchReceiptReadFailed,
     HostBridgeDispatchReceiptInactive,
     HostBridgeDispatchReceiptMismatch,
     ImplementationArtifactsMissing,
@@ -82,6 +83,7 @@ impl BlockerCode {
             Self::AuthoritativeStateStoreLocked => "authoritative_state_store_locked",
             Self::AuthoritativeStateStoreOpenFailed => "authoritative_state_store_open_failed",
             Self::HostBridgeDispatchReceiptMissing => "host_bridge_dispatch_receipt_missing",
+            Self::HostBridgeDispatchReceiptReadFailed => "host_bridge_dispatch_receipt_read_failed",
             Self::HostBridgeDispatchReceiptInactive => "host_bridge_dispatch_receipt_inactive",
             Self::HostBridgeDispatchReceiptMismatch => "host_bridge_dispatch_receipt_mismatch",
             Self::ImplementationArtifactsMissing => "implementation_artifacts_missing",
@@ -163,6 +165,7 @@ impl BlockerCode {
             Self::AuthoritativeStateStoreLocked,
             Self::AuthoritativeStateStoreOpenFailed,
             Self::HostBridgeDispatchReceiptMissing,
+            Self::HostBridgeDispatchReceiptReadFailed,
             Self::HostBridgeDispatchReceiptInactive,
             Self::HostBridgeDispatchReceiptMismatch,
             Self::ImplementationArtifactsMissing,
@@ -346,6 +349,24 @@ mod tests {
                 "carrier_policy_reselection_required".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn host_bridge_receipt_read_failure_has_distinct_canonical_code() {
+        let code = BlockerCode::HostBridgeDispatchReceiptReadFailed;
+        assert_eq!(code.as_str(), "host_bridge_dispatch_receipt_read_failed");
+        assert_eq!(canonical_blocker_code_str(code.as_str()), Some(code.as_str()));
+        assert_eq!(BlockerCode::try_from(code.as_str()), Ok(code));
+        assert_ne!(
+            code.as_str(),
+            BlockerCode::HostBridgeDispatchReceiptMissing.as_str()
+        );
+        assert_ne!(
+            code.as_str(),
+            BlockerCode::HostBridgeDispatchReceiptMismatch.as_str()
+        );
+        let payload = serde_json::to_value(code).expect("blocker code should serialize");
+        assert_eq!(payload, serde_json::json!("host_bridge_dispatch_receipt_read_failed"));
     }
 
     #[test]

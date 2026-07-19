@@ -63,6 +63,56 @@ struct HostBridgeProvenanceResult {
     receipt_backed_retry_completion: bool,
 }
 
+#[derive(Debug)]
+enum HostBridgeReceiptLookupError {
+    Read(crate::state_store::StateStoreError),
+    Contract(crate::state_store::StateStoreError),
+}
+
+impl HostBridgeReceiptLookupError {
+    fn from_state_store_error(error: crate::state_store::StateStoreError) -> Self {
+        if matches!(
+            error,
+            crate::state_store::StateStoreError::InvalidTaskRecord { .. }
+        ) {
+            Self::Contract(error)
+        } else {
+            Self::Read(error)
+        }
+    }
+
+    fn blocker_code(&self) -> taskflow_contracts::BlockerCode {
+        match self {
+            Self::Read(_) => taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptReadFailed,
+            Self::Contract(_) => taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMismatch,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum HostBridgeRetryProbeError {
+    Open(crate::state_store::StateStoreError),
+    ReceiptLookup(HostBridgeReceiptLookupError),
+}
+
+fn host_bridge_retry_probe_error_result(
+    blockers: Vec<String>,
+    error: HostBridgeRetryProbeError,
+) -> HostBridgeProvenanceResult {
+    let mut result = HostBridgeProvenanceResult::from_blockers(blockers);
+    match error {
+        HostBridgeRetryProbeError::Open(error) => {
+            result.set_state_access(error.open_error_diagnostic());
+        }
+        HostBridgeRetryProbeError::ReceiptLookup(error) => {
+            result.push_blocker(blocker_code_value(error.blocker_code()));
+        }
+    }
+    result.blockers.sort();
+    result.blockers.dedup();
+    result
+}
+
 impl HostBridgeProvenanceResult {
     fn from_blockers(blockers: Vec<String>) -> Self {
         Self {
@@ -98,6 +148,23 @@ impl HostBridgeProvenanceResult {
 
 fn blocker_code_value(code: taskflow_contracts::BlockerCode) -> String {
     code.as_str().to_string()
+}
+
+fn host_bridge_receipt_query_blocker_code(
+    receipt_present: bool,
+    known_primary_receipt_mismatch: bool,
+    error: Option<&HostBridgeReceiptLookupError>,
+) -> Option<taskflow_contracts::BlockerCode> {
+    if let Some(error) = error {
+        return Some(error.blocker_code());
+    }
+    if receipt_present {
+        return None;
+    }
+    if known_primary_receipt_mismatch {
+        return Some(taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMismatch);
+    }
+    Some(taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing)
 }
 
 fn host_bridge_state_lock_diagnostic(
@@ -740,11 +807,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         .await
         {
             Ok(retryable) => retryable,
-            Err(error) => {
-                let mut result = HostBridgeProvenanceResult::from_blockers(blockers);
-                result.set_state_access(error.open_error_diagnostic());
-                return result;
-            }
+            Err(error) => return host_bridge_retry_probe_error_result(blockers, error),
         };
     if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
         let retryable_completion = retry_completion_override
@@ -818,12 +881,13 @@ async fn host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
     state_root: &Path,
     request: &serde_json::Value,
     canonical_packet_path: Option<&Path>,
-) -> Result<bool, crate::state_store::StateStoreError> {
+) -> Result<bool, HostBridgeRetryProbeError> {
     let store = StateStore::open_existing_read_only_with_strict_timeout(
         state_root.to_path_buf(),
         HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT,
     )
-    .await?;
+    .await
+    .map_err(HostBridgeRetryProbeError::Open)?;
     let receipt_result = host_bridge_dispatch_receipt_for_request(
         &store,
         state_root,
@@ -832,7 +896,7 @@ async fn host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
     )
     .await;
     store.close().await;
-    let receipt = receipt_result?;
+    let receipt = receipt_result.map_err(HostBridgeRetryProbeError::ReceiptLookup)?;
     let Some(receipt) = receipt else {
         return Ok(false);
     };
@@ -850,7 +914,7 @@ async fn host_bridge_dispatch_receipt_for_request(
     state_root: &Path,
     request: &serde_json::Value,
     canonical_packet_path: Option<&Path>,
-) -> Result<Option<state_store::RunGraphDispatchReceipt>, crate::state_store::StateStoreError> {
+) -> Result<Option<state_store::RunGraphDispatchReceipt>, HostBridgeReceiptLookupError> {
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return Ok(None);
     };
@@ -861,11 +925,15 @@ async fn host_bridge_dispatch_receipt_for_request(
         host_bridge_request_uses_legacy_attempt_identity(request, canonical_packet_path);
     let selector_path = host_bridge_packet_selector_path(canonical_packet_path);
     let selected = if legacy_attempt_identity {
-        store.run_graph_dispatch_receipt(run_id).await?
+        store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .map_err(HostBridgeReceiptLookupError::from_state_store_error)?
     } else {
         store
             .run_graph_dispatch_receipt_for_packet(run_id, &selector_path)
-            .await?
+            .await
+            .map_err(HostBridgeReceiptLookupError::from_state_store_error)?
     };
     let Some(selected) = selected else {
         return Ok(None);
@@ -1085,38 +1153,40 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     .await
     {
         Ok(Some(receipt)) => receipt,
-        Err(_) => {
+        Err(error) => {
+            let blocker_code = host_bridge_receipt_query_blocker_code(false, false, Some(&error))
+                .expect("receipt lookup errors must map to a blocker");
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
-                blockers.push(blocker_code_value(
-                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
-                ));
+                blockers.push(blocker_code_value(blocker_code));
             }
             return;
         }
         Ok(None) => {
-            if canonical_packet_path.is_some()
+            let known_primary_receipt_mismatch = canonical_packet_path.is_some()
                 && store
                     .run_graph_dispatch_receipt(run_id)
                     .await
                     .ok()
                     .flatten()
-                    .is_some()
-            {
-                blockers.push(blocker_code_value(
-                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMismatch,
-                ));
+                    .is_some();
+            let blocker_code = host_bridge_receipt_query_blocker_code(
+                false,
+                known_primary_receipt_mismatch,
+                None,
+            )
+            .expect("missing receipt lookup must map to a blocker");
+            if known_primary_receipt_mismatch {
+                blockers.push(blocker_code_value(blocker_code));
                 return;
             }
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
-                blockers.push(blocker_code_value(
-                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
-                ));
+                blockers.push(blocker_code_value(blocker_code));
             }
             return;
         }
@@ -7958,6 +8028,7 @@ mod tests {
         apply_configured_lane_runtime_assignment, apply_continuation_dispatch_gate_to_preview,
         build_agent_dispatch_next_preview,
         build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt,
+        blocker_code_value,
         canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
@@ -7970,6 +8041,9 @@ mod tests {
         host_bridge_observability_project_root,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
+        host_bridge_receipt_query_blocker_code, host_bridge_retry_probe_error_result,
+        HostBridgeReceiptLookupError,
+        HostBridgeRetryProbeError,
         infer_host_bridge_state_root_from_request_path, lane_work_context,
         materialize_configured_agent_dispatch_lane, read_canonical_host_bridge_json_artifact,
         read_host_bridge_request, release1_pass_status,
@@ -12936,6 +13010,185 @@ mod tests {
         assert_eq!(payload["host_bridge"]["state_access"], payload["state_access"]);
         let state_access_text = payload["state_access"].to_string();
         assert!(!state_access_text.contains(&state_root.display().to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_append_receipt_query_blocker_matrix_is_typed_without_state_access() {
+        let assert_case = |label: &str,
+                           error: Option<HostBridgeReceiptLookupError>,
+                           known_primary_receipt_mismatch: bool,
+                           expected_blocker: &str| {
+            let blocker = host_bridge_receipt_query_blocker_code(
+                false,
+                known_primary_receipt_mismatch,
+                error.as_ref(),
+            )
+            .map(blocker_code_value);
+            let mut result = HostBridgeProvenanceResult::from_blockers(Vec::new());
+            if let Some(blocker) = blocker {
+                result.push_blocker(blocker);
+            }
+            assert_eq!(result.blockers, vec![expected_blocker], "case={label}");
+            assert!(result.state_access.is_none(), "case={label}");
+        };
+
+        assert_case(
+            "read_failed",
+            Some(HostBridgeReceiptLookupError::Read(
+                crate::state_store::StateStoreError::MissingTask {
+                    task_id: "append-read".to_string(),
+                },
+            )),
+            false,
+            "host_bridge_dispatch_receipt_read_failed",
+        );
+        assert_case(
+            "contract_mismatch",
+            Some(HostBridgeReceiptLookupError::Contract(
+                crate::state_store::StateStoreError::InvalidTaskRecord {
+                    reason: "append contract".to_string(),
+                },
+            )),
+            false,
+            "host_bridge_dispatch_receipt_mismatch",
+        );
+        assert_case(
+            "missing_none",
+            None,
+            false,
+            "host_bridge_dispatch_receipt_missing",
+        );
+        assert_case(
+            "known_primary_mismatch",
+            None,
+            true,
+            "host_bridge_dispatch_receipt_mismatch",
+        );
+        assert!(host_bridge_receipt_query_blocker_code(true, false, None).is_none());
+    }
+
+    #[test]
+    fn host_bridge_retry_probe_error_boundary_preserves_open_vs_receipt_variant_matrix() {
+        let cases = [
+            (
+                "open",
+                HostBridgeRetryProbeError::Open(
+                    crate::state_store::StateStoreError::MissingMetadata,
+                ),
+                "authoritative_state_store_open_failed",
+                true,
+            ),
+            (
+                "receipt_read",
+                HostBridgeRetryProbeError::ReceiptLookup(HostBridgeReceiptLookupError::Read(
+                    crate::state_store::StateStoreError::MissingTask {
+                        task_id: "run-read".to_string(),
+                    },
+                )),
+                "host_bridge_dispatch_receipt_read_failed",
+                false,
+            ),
+            (
+                "receipt_contract",
+                HostBridgeRetryProbeError::ReceiptLookup(HostBridgeReceiptLookupError::Contract(
+                    crate::state_store::StateStoreError::InvalidTaskRecord {
+                        reason: "receipt contract invalid".to_string(),
+                    },
+                )),
+                "host_bridge_dispatch_receipt_mismatch",
+                false,
+            ),
+        ];
+
+        for (variant, error, expected_blocker, expects_state_access) in cases {
+            let result = host_bridge_retry_probe_error_result(Vec::new(), error);
+            assert_eq!(result.blockers, vec![expected_blocker], "variant={variant}");
+            assert_eq!(
+                result.state_access.is_some(),
+                expects_state_access,
+                "variant={variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_bridge_retry_probe_receipt_contract_error_emits_public_json_without_state_access() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retry-probe-receipt-contract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path = state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        let request = host_bridge_strict_current_request(serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-retry-probe-contract",
+            "run_id": "run-retry-probe-contract",
+            "task_id": "task-retry-probe-contract",
+            "attempt_id": "attempt-retry-probe-contract",
+            "packet_id": "packet-retry-probe-contract",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        }));
+        let provenance = host_bridge_retry_probe_error_result(
+            Vec::new(),
+            HostBridgeRetryProbeError::ReceiptLookup(HostBridgeReceiptLookupError::Contract(
+                crate::state_store::StateStoreError::InvalidTaskRecord {
+                    reason: "receipt contract invalid".to_string(),
+                },
+            )),
+        );
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            provenance,
+            Some(&state_root),
+        );
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["host_bridge_dispatch_receipt_mismatch"])
+        );
+        assert!(payload.get("state_access").is_none());
+        let payload_text = payload.to_string();
+        assert!(!payload_text.contains("receipt contract invalid"));
+        assert!(!payload_text.contains(&state_root.display().to_string()));
+
+        let read_payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            host_bridge_retry_probe_error_result(
+                Vec::new(),
+                HostBridgeRetryProbeError::ReceiptLookup(HostBridgeReceiptLookupError::Read(
+                    crate::state_store::StateStoreError::MissingTask {
+                        task_id: "run-retry-probe-read".to_string(),
+                    },
+                )),
+            ),
+            Some(&state_root),
+        );
+        assert_eq!(
+            read_payload["blocker_codes"],
+            serde_json::json!(["host_bridge_dispatch_receipt_read_failed"])
+        );
+        assert!(read_payload.get("state_access").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

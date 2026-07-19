@@ -3551,6 +3551,128 @@ fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_pare
 }
 
 #[test]
+fn host_bridge_public_cli_receipt_contract_failure_maps_to_mismatch_without_state_access() {
+    let fixture = create_host_bridge_lane_fixture(
+        "host-bridge-public-invalid-receipt",
+        "crates/vida/src/lib.rs",
+    );
+    let mut request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.request_path)
+            .expect("invalid receipt request should be readable"),
+    )
+    .expect("invalid receipt request should parse");
+    let request_object = request
+        .as_object_mut()
+        .expect("invalid receipt request should be an object");
+    request_object.insert(
+        "attempt_id".to_string(),
+        serde_json::json!("host-bridge-public-invalid-receipt-attempt"),
+    );
+    request_object.insert(
+        "packet_id".to_string(),
+        serde_json::json!("host-bridge-public-invalid-receipt-packet"),
+    );
+    request_object.insert("receipt_mode".to_string(), serde_json::json!("host_bridge_receipt"));
+    request_object.insert("adapter_kind".to_string(), serde_json::json!("codex_host_tools"));
+    request_object.insert(
+        "adapter_capability_id".to_string(),
+        serde_json::json!("codex.multi_agent_v1"),
+    );
+    request_object.insert(
+        "invocation_mode".to_string(),
+        serde_json::json!("parent_host_tool_api"),
+    );
+    let registry = serde_json::json!({
+        "adapter_kind": "codex_host_tools",
+        "adapter_capability_id": "codex.multi_agent_v1",
+        "invocation_mode": "parent_host_tool_api",
+        "dispatch_transport": "host_tool_bridge",
+        "receipt_mode": "host_bridge_receipt",
+        "operations": {
+            "spawn": "multi_agent_v1.spawn_agent",
+            "wait": "multi_agent_v1.wait_agent",
+            "dispose": "multi_agent_v1.close_agent"
+        },
+        "dispose_policy": "configured"
+    });
+    request = effective_host_bridge_request_with_registry(&request, &registry)
+        .expect("invalid receipt request should materialize strict adapter fields");
+    let adapter_contract_snapshot = request
+        .get("adapter_operations")
+        .cloned()
+        .expect("strict request should carry adapter operations");
+    let adapter_contract_hash = blake3::hash(
+        &serde_json::to_vec(&adapter_contract_snapshot)
+            .expect("adapter contract snapshot should serialize"),
+    )
+    .to_hex()
+    .to_string();
+    let request_object = request
+        .as_object_mut()
+        .expect("strict invalid receipt request should be an object");
+    request_object.insert(
+        "adapter_contract_snapshot".to_string(),
+        adapter_contract_snapshot,
+    );
+    request_object.insert(
+        "adapter_contract_hash".to_string(),
+        serde_json::json!(adapter_contract_hash),
+    );
+    request_object.insert(
+        "adapter_contract_source".to_string(),
+        serde_json::json!("configured_registry"),
+    );
+    std::fs::write(
+        &fixture.request_path,
+        serde_json::to_vec_pretty(&request).expect("strict invalid receipt request should serialize"),
+    )
+    .expect("strict invalid receipt request should be written");
+    persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+        &fixture.state_dir,
+        &fixture.run_id,
+        "implementer",
+        "implementer",
+        "developer",
+        "",
+        "lane_open",
+        "host_tool_bridge_adapter_required",
+        "implementer_blocked",
+        "false",
+        "blocked",
+    );
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &fixture.request_path,
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("host bridge invalid receipt JSON should run");
+    assert_failure(&output, "host bridge invalid receipt contract");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("host bridge invalid receipt JSON should parse");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_mismatch"),
+        "invalid receipt contract should map to typed mismatch blocker: {payload}"
+    );
+    assert!(payload.get("state_access").is_none());
+    assert!(payload.get("error").is_none());
+    let payload_text = payload.to_string();
+    assert!(!payload_text.contains("receipt contract invalid"));
+}
+
+#[test]
 fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
     let fixture = create_host_bridge_lane_fixture(
         "host-bridge-verification-summary",
