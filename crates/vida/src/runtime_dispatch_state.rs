@@ -29741,7 +29741,7 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         "after dispatch execution",
     )
     .await?;
-    let mut host_bridge_identity_recorded = false;
+    let mut host_bridge_identity = None;
     if receipt.dispatch_status == "bridge_request_pending" {
         let request_path = execution_result
             .get("host_tool_bridge_request")
@@ -29767,24 +29767,15 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             "host_bridge_receipt_identity_transport_mismatch: pending bridge request is not host_tool_bridge"
                 .to_string()
         })?;
-        store
-            .record_host_bridge_receipt_identity(&identity)
+        host_bridge_identity = Some(identity.clone());
+        if let Err(error) = store
+            .record_host_bridge_receipt_binding(&identity, receipt)
             .await
-            .map_err(|error| {
-                format!("Failed to persist validated host bridge receipt identity: {error}")
-            })?;
-        host_bridge_identity_recorded = true;
-        if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
-            let _ = store
-                .clear_host_bridge_receipt_identity(&receipt.run_id)
-                .await;
+        {
             let error = format!(
-                "Failed to persist host bridge pending dispatch receipt before projection refresh: {error}"
+                "Failed to persist host bridge identity and pending dispatch receipt atomically before projection refresh: {error}"
             );
             if run_graph_mutation_not_owned_error(&error) {
-                let _ = store
-                    .clear_host_bridge_receipt_identity(&receipt.run_id)
-                    .await;
                 eprintln!(
                     "Deferred host bridge pending receipt persistence for current session: {error}"
                 );
@@ -29856,12 +29847,14 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             }
         }
     }
-    if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
-        if host_bridge_identity_recorded {
-            let _ = store
-                .clear_host_bridge_receipt_identity(&receipt.run_id)
-                .await;
-        }
+    let persist_result = if let Some(identity) = host_bridge_identity.as_ref() {
+        store
+            .record_host_bridge_receipt_binding(identity, receipt)
+            .await
+    } else {
+        store.record_run_graph_dispatch_receipt(receipt).await
+    };
+    if let Err(error) = persist_result {
         return Err(format!("Failed to persist dispatch receipt after execution: {error}"));
     }
     Ok(())

@@ -1212,7 +1212,7 @@ mod tests {
             .contains("host_bridge_receipt_identity_ambiguous_compact_binding"));
 
         store
-            .clear_host_bridge_receipt_identity(&identity.run_id)
+            .clear_host_bridge_receipt_identity(&identity)
             .await
             .expect("identity clear should succeed");
         assert!(store
@@ -1225,6 +1225,19 @@ mod tests {
             .await
             .expect("cleared identity lookup should succeed")
             .is_none());
+        assert!(store
+            .host_bridge_receipt_identity_for_compact(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+            )
+            .await
+            .expect("remaining compact identity lookup should succeed")
+            .is_some());
+        store
+            .clear_host_bridge_receipt_identity(&duplicate)
+            .await
+            .expect("duplicate identity clear should succeed");
         assert!(store
             .host_bridge_receipt_identity_for_compact(
                 &identity.run_id,

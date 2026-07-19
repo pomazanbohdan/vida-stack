@@ -2679,23 +2679,34 @@ impl StateStore {
             .map(|context| context.task_id))
     }
 
-    async fn record_run_graph_owner_evidence(
+    async fn prepare_run_graph_owner_evidence(
         &self,
         run_id: &str,
         artifact_kind: &str,
-    ) -> Result<(), StateStoreError> {
+    ) -> Result<RunGraphOwnerEvidenceRecord, StateStoreError> {
         let evidence = self.current_runtime_owner_evidence()?;
         Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
         self.ensure_current_session_mutation_claim_for_run(run_id)
             .await?;
         let artifact_id = Self::run_graph_owner_evidence_record_id(run_id, artifact_kind);
-        let record = RunGraphOwnerEvidenceRecord {
+        Ok(RunGraphOwnerEvidenceRecord {
             run_id: run_id.to_string(),
             artifact_kind: artifact_kind.to_string(),
             artifact_id: artifact_id.clone(),
             runtime_owner_evidence: evidence,
             recorded_at: unix_timestamp().to_string(),
-        };
+        })
+    }
+
+    async fn record_run_graph_owner_evidence(
+        &self,
+        run_id: &str,
+        artifact_kind: &str,
+    ) -> Result<(), StateStoreError> {
+        let record = self
+            .prepare_run_graph_owner_evidence(run_id, artifact_kind)
+            .await?;
+        let artifact_id = record.artifact_id.clone();
         let _: Option<RunGraphOwnerEvidenceRecord> = self
             .db
             .upsert(("run_graph_owner_evidence", artifact_id.as_str()))
@@ -2907,10 +2918,23 @@ impl StateStore {
         &self,
         identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
     ) -> Result<(), StateStoreError> {
+        let row = Self::host_bridge_receipt_identity_row(identity)?;
+        let _: Option<HostBridgeReceiptIdentityStored> = self
+            .db
+            .upsert(("host_bridge_receipt_identity", identity.identity_key().as_str()))
+            .content(row)
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
+    fn host_bridge_receipt_identity_row(
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
+    ) -> Result<HostBridgeReceiptIdentityStored, StateStoreError> {
         identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord {
             reason,
         })?;
-        let row = HostBridgeReceiptIdentityStored {
+        Ok(HostBridgeReceiptIdentityStored {
             schema_version: identity.schema_version.clone(),
             request_id: identity.request_id.clone(),
             run_id: identity.run_id.clone(),
@@ -2934,12 +2958,136 @@ impl StateStore {
             result_path: identity.result_path.clone(),
             receipt_path: identity.receipt_path.clone(),
             recorded_at: identity.recorded_at.clone(),
-        };
-        let _: Option<HostBridgeReceiptIdentityStored> = self
-            .db
-            .upsert(("host_bridge_receipt_identity", identity.identity_key().as_str()))
-            .content(row)
+        })
+    }
+
+    pub async fn record_host_bridge_receipt_binding(
+        &self,
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<(), StateStoreError> {
+        self.record_host_bridge_receipt_binding_inner(identity, receipt, false)
+            .await
+    }
+
+    #[cfg(test)]
+    async fn record_host_bridge_receipt_binding_with_forced_rollback(
+        &self,
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<(), StateStoreError> {
+        self.record_host_bridge_receipt_binding_inner(identity, receipt, true)
+            .await
+    }
+
+    async fn record_host_bridge_receipt_binding_inner(
+        &self,
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
+        receipt: &RunGraphDispatchReceipt,
+        force_failure_after_binding_write: bool,
+    ) -> Result<(), StateStoreError> {
+        let identity_row = Self::host_bridge_receipt_identity_row(identity)?;
+        if receipt.run_id != identity.run_id || receipt.dispatch_target != identity.dispatch_target {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "host_bridge_receipt_binding_identity_mismatch:run_or_target".to_string(),
+            });
+        }
+        let compact_value = serde_json::to_value(receipt).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!("host_bridge_receipt_binding_compact_serialize_failed:{error}"),
+            }
+        })?;
+        let blockers = identity.compact_receipt_blockers(&compact_value);
+        if !blockers.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: blockers.join(","),
+            });
+        }
+        let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
+        let compact = normalize_legacy_downstream_preview_drift(compact);
+        let (compact, _) = normalize_repairable_in_flight_receipt_lane_status_drift(compact);
+        Self::ensure_run_graph_dispatch_receipt_summary_consistency(&compact)?;
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&compact)?;
+
+        let identity_key = identity.identity_key();
+        let owner_record = self
+            .prepare_run_graph_owner_evidence(&compact.run_id, "dispatch_receipt")
             .await?;
+        let owner_record_id = owner_record.artifact_id.clone();
+        let compact_run_id = compact.run_id.clone();
+        let response = self
+            .db
+            .query(
+                "BEGIN TRANSACTION; \
+                 LET $existing_identity = SELECT VALUE { schema_version: schema_version, request_id: request_id, run_id: run_id, task_id: task_id, attempt_id: attempt_id, packet_id: packet_id, dispatch_target: dispatch_target, packet_path: packet_path, backend_id: backend_id, carrier_id: carrier_id, adapter_kind: adapter_kind, adapter_capability_id: adapter_capability_id, invocation_mode: invocation_mode, dispatch_transport: dispatch_transport, receipt_mode: receipt_mode, adapter_contract_source: adapter_contract_source, adapter_contract_snapshot: adapter_contract_snapshot, adapter_contract_hash: adapter_contract_hash, adapter_operations: adapter_operations, request_path: request_path, result_path: result_path, receipt_path: receipt_path, recorded_at: recorded_at } FROM type::record('host_bridge_receipt_identity', $identity_key); \
+                 IF array::len($existing_identity) > 0 AND $existing_identity[0] != $identity { \
+                   THROW 'host_bridge_receipt_binding_conflict:identity_key=' + $identity_key; \
+                 }; \
+                 LET $existing_receipt = SELECT VALUE { run_id: run_id, dispatch_target: dispatch_target, dispatch_status: dispatch_status, lane_status: lane_status, supersedes_receipt_id: supersedes_receipt_id, exception_path_receipt_id: exception_path_receipt_id, dispatch_kind: dispatch_kind, dispatch_surface: dispatch_surface, dispatch_command: dispatch_command, dispatch_packet_path: dispatch_packet_path, dispatch_result_path: dispatch_result_path, blocker_code: blocker_code, downstream_dispatch_target: downstream_dispatch_target, downstream_dispatch_command: downstream_dispatch_command, downstream_dispatch_note: downstream_dispatch_note, downstream_dispatch_ready: downstream_dispatch_ready, downstream_dispatch_blockers: downstream_dispatch_blockers, downstream_dispatch_packet_path: downstream_dispatch_packet_path, downstream_dispatch_status: downstream_dispatch_status, downstream_dispatch_result_path: downstream_dispatch_result_path, downstream_dispatch_trace_path: downstream_dispatch_trace_path, downstream_dispatch_executed_count: downstream_dispatch_executed_count, downstream_dispatch_active_target: downstream_dispatch_active_target, downstream_dispatch_last_target: downstream_dispatch_last_target, activation_agent_type: activation_agent_type, activation_runtime_role: activation_runtime_role, selected_backend: selected_backend, recorded_at: recorded_at } FROM type::record('run_graph_dispatch_receipt', $run_id); \
+                 IF array::len($existing_receipt) > 0 AND array::len($existing_identity) = 0 { \
+                   THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
+                 }; \
+                 UPSERT type::record('host_bridge_receipt_identity', $identity_key) CONTENT $identity; \
+                 UPSERT type::record('run_graph_dispatch_receipt', $run_id) CONTENT $receipt; \
+                 UPSERT type::record('run_graph_owner_evidence', $owner_record_id) CONTENT $owner_record; \
+                 IF $force_failure_after_binding_write { \
+                   THROW 'host_bridge_receipt_binding_test_atomic_rollback'; \
+                 }; \
+                 COMMIT TRANSACTION;",
+            )
+            .bind(("identity_key", identity_key.clone()))
+            .bind(("identity", identity_row))
+            .bind(("run_id", compact.run_id.clone()))
+            .bind(("receipt", compact))
+            .bind(("owner_record_id", owner_record_id))
+            .bind(("owner_record", owner_record))
+            .bind((
+                "force_failure_after_binding_write",
+                force_failure_after_binding_write,
+            ))
+            .await?;
+        if let Err(error) = response.check() {
+            if let Some(existing) = self
+                .host_bridge_receipt_identity(
+                    &identity.run_id,
+                    &identity.dispatch_target,
+                    &identity.packet_path,
+                    &identity.request_id,
+                )
+                .await?
+            {
+                if existing != *identity {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: format!(
+                            "host_bridge_receipt_binding_conflict:identity_key={identity_key}"
+                        ),
+                    });
+                }
+            }
+            let existing_receipt: Option<RunGraphDispatchReceiptStored> = self
+                .db
+                .select(("run_graph_dispatch_receipt", compact_run_id.as_str()))
+                .await?;
+            if existing_receipt.is_some()
+                && self
+                    .host_bridge_receipt_identity(
+                        &identity.run_id,
+                        &identity.dispatch_target,
+                        &identity.packet_path,
+                        &identity.request_id,
+                    )
+                    .await?
+                    .is_none()
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "host_bridge_receipt_binding_conflict:receipt_key={}",
+                        compact_run_id
+                    ),
+                });
+            }
+            return Err(error.into());
+        }
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
@@ -3079,12 +3227,14 @@ impl StateStore {
 
     pub async fn clear_host_bridge_receipt_identity(
         &self,
-        run_id: &str,
+        identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
     ) -> Result<(), StateStoreError> {
-        self.db
-            .query("DELETE host_bridge_receipt_identity WHERE run_id = $run_id;")
-            .bind(("run_id", run_id.to_string()))
-            .await?;
+        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord {
+            reason,
+        })?;
+        let key = identity.identity_key();
+        let _: Option<HostBridgeReceiptIdentityStored> =
+            self.db.delete(("host_bridge_receipt_identity", key.as_str())).await?;
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
@@ -6357,17 +6507,163 @@ mod tests {
         }
     }
 
+    fn sample_project_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should have a repository root parent")
+            .to_path_buf()
+    }
+
+    fn sample_project_overlay() -> serde_yaml::Value {
+        let project_root = sample_project_root();
+        crate::config_value_utils::load_project_overlay_yaml_for_root(&project_root)
+            .expect("repository project overlay should resolve for dispatch fixture")
+    }
+
+    fn configured_sample_dispatch_command(run_id: &str, runtime_role: &str) -> (String, String) {
+        let project_root = sample_project_root();
+        let overlay = sample_project_overlay();
+        let commands_path = crate::yaml_string(crate::yaml_lookup(
+            &overlay,
+            &["agent_extensions", "registries", "commands"],
+        ))
+        .map(|path| {
+            crate::project_activator_surface::resolve_overlay_path(&project_root, &path)
+        })
+        .expect("dispatch fixture should have a configured command registry path");
+        let registry = crate::project_activator_surface::read_yaml_file_checked(&commands_path)
+            .expect("dispatch fixture command registry should resolve");
+        let role_token = format!("--role {runtime_role}");
+        let command = crate::yaml_lookup(&registry, &["commands"])
+            .and_then(serde_yaml::Value::as_sequence)
+            .into_iter()
+            .flatten()
+            .find(|entry| {
+                crate::yaml_string(crate::yaml_lookup(entry, &["args"]))
+                    .is_some_and(|args| args.contains(&role_token))
+            })
+            .expect("dispatch fixture command registry should map the configured runtime role");
+        let surface = crate::yaml_string(crate::yaml_lookup(command, &["surface"]))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .expect("configured dispatch command should have a surface");
+        let args = crate::yaml_string(crate::yaml_lookup(command, &["args"]))
+            .map(|value| {
+                value
+                    .replace("{{task_id}}", &format!("task-{run_id}"))
+                    .trim()
+                    .to_string()
+            })
+            .filter(|value| !value.is_empty())
+            .expect("configured dispatch command should have args");
+        (surface.clone(), format!("{surface} {args}"))
+    }
+
+    fn configured_sample_dispatch_identity_fields() -> (String, String, String, String) {
+        let overlay = sample_project_overlay();
+        let mut dispatch_targets = crate::yaml_lookup(
+            &overlay,
+            &["run_graph", "dispatch_task_identity", "target_groups"],
+        )
+        .and_then(serde_yaml::Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .flat_map(|group| {
+            crate::yaml_string_list(crate::yaml_lookup(group, &["aliases"]))
+        })
+        .map(|target| target.trim().to_string())
+        .filter(|target| !target.is_empty())
+        .collect::<Vec<_>>();
+        dispatch_targets.sort();
+        dispatch_targets.dedup();
+        let dispatch_target = dispatch_targets
+            .into_iter()
+            .next()
+            .expect("dispatch fixture should have a configured target alias");
+
+        let backend_id = crate::yaml_string(crate::yaml_lookup(
+            &overlay,
+            &["party_chat", "single_agent", "backend"],
+        ))
+        .map(|backend| backend.trim().to_string())
+        .filter(|backend| !backend.is_empty())
+        .expect("dispatch fixture should have a configured backend");
+        let default_profile = crate::yaml_string(crate::yaml_lookup(
+            &overlay,
+            &[
+                "agent_system",
+                "subagents",
+                backend_id.as_str(),
+                "default_model_profile",
+            ],
+        ))
+        .map(|profile| profile.trim().to_string())
+        .filter(|profile| !profile.is_empty())
+        .expect("dispatch fixture backend should have a default profile");
+        let runtime_role = crate::yaml_string(crate::yaml_lookup(
+            &overlay,
+            &[
+                "agent_system",
+                "subagents",
+                backend_id.as_str(),
+                "default_runtime_role",
+            ],
+        ))
+        .map(|role| role.trim().to_string())
+        .filter(|role| !role.is_empty())
+        .expect("dispatch fixture backend should have a default runtime role");
+        let mut carrier_ids = crate::yaml_lookup(
+            &overlay,
+            &["host_environment", "codex", "agents"],
+        )
+        .and_then(serde_yaml::Value::as_mapping)
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, entry)| {
+            let carrier_id = key.as_str()?.trim();
+            let configured_profile = crate::yaml_string(crate::yaml_lookup(
+                entry,
+                &["default_model_profile"],
+            ))?;
+            (configured_profile.trim() == default_profile).then_some(carrier_id.to_string())
+        })
+        .filter(|carrier_id| !carrier_id.is_empty())
+        .collect::<Vec<_>>();
+        carrier_ids.sort();
+        carrier_ids.dedup();
+        assert_eq!(
+            carrier_ids.len(),
+            1,
+            "dispatch fixture backend profile should resolve to one configured carrier"
+        );
+        (
+            dispatch_target,
+            backend_id,
+            carrier_ids
+                .into_iter()
+                .next()
+                .expect("carrier id should remain after uniqueness check"),
+            runtime_role,
+        )
+    }
+
     fn sample_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
+        let (dispatch_target, backend_id, carrier_id, runtime_role) =
+            configured_sample_dispatch_identity_fields();
+        let (dispatch_surface, dispatch_command) =
+            configured_sample_dispatch_command(run_id, &runtime_role);
         RunGraphDispatchReceipt {
             run_id: run_id.to_string(),
-            dispatch_target: "implementer".to_string(),
+            dispatch_target,
             dispatch_status: "routed".to_string(),
             lane_status: "packet_ready".to_string(),
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
+            // `dispatch_kind` is the persisted routing semantic; command surface/args are registry-derived above.
             dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_surface: Some(dispatch_surface),
+            dispatch_command: Some(dispatch_command),
             dispatch_packet_path: Some("/tmp/packet.json".to_string()),
             dispatch_result_path: None,
             blocker_code: None,
@@ -6383,9 +6679,9 @@ mod tests {
             downstream_dispatch_executed_count: 0,
             downstream_dispatch_active_target: None,
             downstream_dispatch_last_target: None,
-            activation_agent_type: Some("middle".to_string()),
-            activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("middle".to_string()),
+            activation_agent_type: Some(carrier_id),
+            activation_runtime_role: Some(runtime_role),
+            selected_backend: Some(backend_id),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
     }
@@ -6426,6 +6722,254 @@ mod tests {
             matching.dispatch_packet_path.as_deref(),
             Some(requested_packet_path)
         );
+        close_store_and_remove_root(store, root).await;
+    }
+
+    fn sample_host_bridge_receipt_identity(
+        run_id: &str,
+        packet_path: &str,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+        let overlay = sample_project_overlay();
+        let (_, selected_cli_entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        let registry = serde_json::to_value(
+            selected_cli_entry.expect("configured host CLI registry entry should resolve"),
+        )
+        .expect("configured host CLI registry should serialize");
+        let adapter_operations =
+            taskflow_host_bridge::HostBridgeAdapterOperations::from_registry_value(&registry)
+                .expect("test adapter registry should resolve");
+        let adapter_contract_snapshot = adapter_operations.to_value();
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_contract_snapshot).expect("test adapter snapshot"),
+        )
+        .to_hex()
+        .to_string();
+        taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
+            schema_version:
+                taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION.to_string(),
+            request_id: format!("request-{run_id}"),
+            run_id: run_id.to_string(),
+            task_id: format!("task-{run_id}"),
+            attempt_id: format!("attempt-{run_id}"),
+            packet_id: format!("packet-{run_id}"),
+            dispatch_target: receipt.dispatch_target.clone(),
+            packet_path: packet_path.to_string(),
+            backend_id: receipt
+                .selected_backend
+                .clone()
+                .expect("dispatch fixture should select a backend"),
+            carrier_id: receipt
+                .activation_agent_type
+                .clone()
+                .expect("dispatch fixture should select a carrier"),
+            adapter_kind: adapter_operations.adapter_kind.clone(),
+            adapter_capability_id: adapter_operations.adapter_capability_id.clone(),
+            invocation_mode: adapter_operations.invocation_mode.clone(),
+            dispatch_transport: adapter_operations.dispatch_transport.clone(),
+            receipt_mode: adapter_operations.receipt_mode.clone(),
+            adapter_contract_source: sample_project_root()
+                .join("vida.config.yaml")
+                .display()
+                .to_string(),
+            adapter_contract_snapshot,
+            adapter_contract_hash,
+            adapter_operations,
+            request_path: format!("host-tool-bridge/requests/{run_id}.json"),
+            result_path: format!("host-tool-bridge/results/{run_id}.json"),
+            receipt_path: format!("host-tool-bridge/receipts/{run_id}.json"),
+            recorded_at: "2026-07-18T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_is_idempotent_and_rejects_conflicts() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding";
+        let packet_path = "/tmp/host-bridge-binding.json";
+        let mut receipt = sample_dispatch_receipt(run_id);
+        receipt.dispatch_packet_path = Some(packet_path.to_string());
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
+
+        store
+            .record_host_bridge_receipt_binding(&identity, &receipt)
+            .await
+            .expect("first host bridge binding should persist");
+        store
+            .record_host_bridge_receipt_binding(&identity, &receipt)
+            .await
+            .expect("same host bridge binding should be idempotent");
+
+        let mut progressed = receipt.clone();
+        progressed.dispatch_result_path = Some(identity.result_path.clone());
+        store
+            .record_host_bridge_receipt_binding(&identity, &progressed)
+            .await
+            .expect("same identity may advance its compact receipt idempotently");
+
+        let mut competing_identity = identity.clone();
+        competing_identity.request_id = format!("{}-competing", identity.request_id);
+        competing_identity.backend_id = format!("{}-competing", identity.backend_id);
+        let mut conflicting = progressed.clone();
+        conflicting.selected_backend = Some(competing_identity.backend_id.clone());
+        let error = store
+            .record_host_bridge_receipt_binding(&competing_identity, &conflicting)
+            .await
+            .expect_err("conflicting compact receipt must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("host_bridge_receipt_binding_conflict:receipt_key=run-host-bridge-binding"),
+            "error={error:?}"
+        );
+
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_some());
+        let stored = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should remain persisted");
+        assert_eq!(stored.dispatch_result_path, progressed.dispatch_result_path);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_atomic_rollback_leaves_no_partial_rows() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-rollback");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding-rollback";
+        let packet_path = "/tmp/host-bridge-binding-rollback.json";
+        let mut receipt = sample_dispatch_receipt(run_id);
+        receipt.dispatch_packet_path = Some(packet_path.to_string());
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
+
+        let _error = store
+            .record_host_bridge_receipt_binding_with_forced_rollback(&identity, &receipt)
+            .await
+            .expect_err("forced in-transaction fault should roll back every binding row");
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
+        assert!(store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .is_none());
+        assert!(store
+            .run_graph_owner_evidence_record(run_id, "dispatch_receipt")
+            .await
+            .expect("owner evidence lookup should succeed")
+            .is_none());
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_concurrent_distinct_identities_have_one_winner() {
+        for iteration in 0..10 {
+            let root = temp_run_graph_root(&format!(
+                "vida-host-bridge-receipt-binding-concurrent-{iteration}"
+            ));
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let second_store = StateStore {
+                db: store.db.clone(),
+                root: store.root.clone(),
+                _lifecycle_guard: std::sync::Arc::clone(&store._lifecycle_guard),
+            };
+            let run_id = format!("run-host-bridge-binding-concurrent-{iteration}");
+            let packet_path = format!("/tmp/host-bridge-binding-concurrent-{iteration}.json");
+            let mut receipt = sample_dispatch_receipt(&run_id);
+            receipt.dispatch_packet_path = Some(packet_path.clone());
+            let first_identity = sample_host_bridge_receipt_identity(&run_id, &packet_path, &receipt);
+            let mut second_identity = first_identity.clone();
+            second_identity.request_id = format!("{}-second", second_identity.request_id);
+
+            let (first_result, second_result) = tokio::join!(
+                store.record_host_bridge_receipt_binding(&first_identity, &receipt),
+                second_store.record_host_bridge_receipt_binding(&second_identity, &receipt),
+            );
+            assert_eq!(
+                usize::from(first_result.is_ok()) + usize::from(second_result.is_ok()),
+                1,
+                "exactly one distinct identity may win: first={first_result:?} second={second_result:?}"
+            );
+
+            let identities = store
+                .host_bridge_receipt_identities_for_run(&run_id)
+                .await
+                .expect("identity listing should succeed");
+            assert_eq!(identities.len(), 1, "losing identity must roll back");
+            let winner_request_id = if first_result.is_ok() {
+                &first_identity.request_id
+            } else {
+                &second_identity.request_id
+            };
+            assert_eq!(&identities[0].request_id, winner_request_id);
+            assert!(store
+                .run_graph_dispatch_receipt(&run_id)
+                .await
+                .expect("receipt lookup should succeed")
+                .is_some());
+            assert!(store
+                .run_graph_owner_evidence_record(&run_id, "dispatch_receipt")
+                .await
+                .expect("owner evidence lookup should succeed")
+                .is_some());
+
+            drop(second_store);
+            close_store_and_remove_root(store, root).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_rejects_identity_mismatch_without_writes() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-mismatch");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let identity_run_id = "run-host-bridge-identity";
+        let identity_packet_path = "/tmp/host-bridge-identity.json";
+        let identity_receipt = sample_dispatch_receipt(identity_run_id);
+        let identity = sample_host_bridge_receipt_identity(
+            identity_run_id,
+            identity_packet_path,
+            &identity_receipt,
+        );
+        let receipt = sample_dispatch_receipt("run-host-bridge-other");
+        let error = store
+            .record_host_bridge_receipt_binding(&identity, &receipt)
+            .await
+            .expect_err("run mismatch must fail closed");
+        assert!(error
+            .to_string()
+            .contains("host_bridge_receipt_binding_identity_mismatch:run_or_target"));
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
