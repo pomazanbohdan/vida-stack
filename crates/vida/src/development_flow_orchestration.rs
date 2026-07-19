@@ -356,151 +356,6 @@ struct ConfiguredDevelopmentFlow {
     lanes: Vec<ConfiguredDevelopmentLane>,
 }
 
-fn configured_string(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn exact_string_source(
-    step: &serde_json::Value,
-    role: &serde_json::Value,
-    key: &'static str,
-    node_id: &str,
-) -> Result<String, String> {
-    match (configured_string(step, key), configured_string(role, key)) {
-        (Some(_), Some(_)) => Err(format!(
-            "team_flow_authority_conflicting_sources:{node_id}:{key}"
-        )),
-        (Some(value), None) | (None, Some(value)) => Ok(value),
-        (None, None) => Err(format!("team_flow_authority_missing_field:{node_id}:{key}")),
-    }
-}
-
-fn exact_string_alias(
-    value: &serde_json::Value,
-    keys: &[&'static str],
-    field: &'static str,
-    scope: &str,
-) -> Result<Option<String>, String> {
-    let values = keys
-        .iter()
-        .filter_map(|key| configured_string(value, key))
-        .collect::<Vec<_>>();
-    match values.as_slice() {
-        [] => Ok(None),
-        [value] => Ok(Some(value.clone())),
-        _ => Err(format!(
-            "team_flow_authority_conflicting_aliases:{scope}:{field}"
-        )),
-    }
-}
-
-fn exact_bool_alias(
-    step: &serde_json::Value,
-    role: &serde_json::Value,
-    keys: &[&'static str],
-    field: &'static str,
-    node_id: &str,
-) -> Result<Option<bool>, String> {
-    let mut values = Vec::new();
-    for source in [step, role] {
-        for key in keys {
-            if let Some(value) = source.get(key) {
-                let value = value
-                    .as_bool()
-                    .ok_or_else(|| format!("team_flow_authority_invalid_type:{node_id}:{field}"))?;
-                values.push(value);
-            }
-        }
-    }
-    match values.as_slice() {
-        [] => Ok(None),
-        [value] => Ok(Some(*value)),
-        _ => Err(format!(
-            "team_flow_authority_conflicting_aliases:{node_id}:{field}"
-        )),
-    }
-}
-
-fn configured_steps(flow: &serde_json::Value) -> Result<&[serde_json::Value], String> {
-    match (flow.get("steps"), flow.get("ordered_steps")) {
-        (Some(_), Some(_)) => Err("team_flow_authority_conflicting_steps_aliases".to_string()),
-        (Some(steps), None) | (None, Some(steps)) => steps
-            .as_array()
-            .map(Vec::as_slice)
-            .ok_or_else(|| "team_flow_authority_invalid_steps_type".to_string()),
-        (None, None) => Err("team_flow_authority_missing_steps".to_string()),
-    }
-}
-
-fn configured_rework_targets(
-    step: &serde_json::Value,
-    node_id: &str,
-) -> Result<Vec<String>, String> {
-    let Some(value) = step.get("rework_transitions") else {
-        return Ok(Vec::new());
-    };
-    let values = match value {
-        serde_json::Value::String(value) => vec![value.as_str()],
-        serde_json::Value::Array(values) => values
-            .iter()
-            .map(serde_json::Value::as_str)
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| format!("team_flow_authority_invalid_rework:{node_id}"))?,
-        serde_json::Value::Object(values) => values
-            .values()
-            .map(serde_json::Value::as_str)
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| format!("team_flow_authority_invalid_rework:{node_id}"))?,
-        _ => return Err(format!("team_flow_authority_invalid_rework:{node_id}")),
-    };
-    Ok(values
-        .into_iter()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect())
-}
-
-fn configured_evidence_requirements(
-    step: &serde_json::Value,
-    node_id: &str,
-) -> Result<Vec<String>, String> {
-    let candidates = [
-        step.get("evidence_requirements"),
-        step.get("required_evidence"),
-        step.get("required_outputs"),
-        step.get("proof_gates")
-            .and_then(|proof| proof.get("required_outputs")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    if candidates.len() != 1 {
-        return Err(format!(
-            "team_flow_authority_evidence_source_count:{node_id}:{}",
-            candidates.len()
-        ));
-    }
-    candidates[0]
-        .as_array()
-        .ok_or_else(|| format!("team_flow_authority_invalid_evidence:{node_id}"))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| format!("team_flow_authority_invalid_evidence:{node_id}"))
-        })
-        .collect()
-}
-
 fn resolved_development_flow_templates(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
@@ -512,173 +367,58 @@ fn configured_dev_team_flow_templates(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
 ) -> Result<ConfiguredDevelopmentFlow, String> {
-    let config = &compiled_bundle["team_flow_authority"]["selected_config"];
-    let flow_id = selection
+    let flow_ref = selection
         .matched_terms
         .iter()
-        .find_map(|term| term.strip_prefix("dev_team_flow_id:"))
-        .map(str::to_string)
-        .or_else(|| configured_string(config, "default_flow_id"))
-        .ok_or_else(|| "team_flow_authority_missing_flow_id".to_string())?;
-    let flow = config["flows"]
-        .get(&flow_id)
-        .ok_or_else(|| format!("team_flow_authority_unknown_flow:{flow_id}"))?;
-    let steps = configured_steps(flow)?;
-    if steps.is_empty() {
-        return Err(format!("team_flow_authority_empty_flow:{flow_id}"));
-    }
-    let roles = config["roles"]
-        .as_object()
-        .ok_or_else(|| "team_flow_authority_missing_role_registry".to_string())?;
-    let command_catalog = compiled_bundle["command_catalog"]
-        .as_object()
-        .ok_or_else(|| "team_flow_authority_missing_command_registry".to_string())?;
-    let mut lanes = Vec::with_capacity(steps.len());
-    for step in steps {
-        let node_id = exact_string_alias(
-            step,
-            &["node_id", "role_id", "step_id"],
-            "node_id",
-            &flow_id,
-        )?
-        .ok_or_else(|| format!("team_flow_authority_missing_node_id:{flow_id}"))?;
-        let role = roles
-            .get(&node_id)
-            .ok_or_else(|| format!("team_flow_authority_unknown_role:{node_id}"))?;
-        let runtime_role = exact_string_source(step, role, "runtime_role", &node_id)?;
-        let task_class = exact_string_source(step, role, "task_class", &node_id)?;
-        let inclusion_rule = exact_string_source(step, role, "inclusion_rule", &node_id)?;
-        let included = exact_bool_alias(
-            step,
-            role,
-            &["included", "lane_template_included"],
-            "included",
-            &node_id,
-        )?
-        .or_else(|| match inclusion_rule.as_str() {
-            "always" => Some(true),
-            "never" => Some(false),
-            _ => None,
-        })
-        .ok_or_else(|| format!("team_flow_authority_missing_included:{node_id}"))?;
-        let required = exact_bool_alias(step, role, &["required"], "required", &node_id)?
-            .ok_or_else(|| format!("team_flow_authority_missing_required:{node_id}"))?;
-        let terminal = exact_bool_alias(
-            step,
-            role,
-            &["terminal", "terminal_closure", "closes_workflow"],
-            "terminal",
-            &node_id,
-        )?
-        .unwrap_or(false);
-        let next_node = exact_string_alias(step, &["next_node", "next"], "next_node", &node_id)?;
-        if terminal == next_node.is_some() {
-            return Err(format!(
-                "team_flow_authority_invalid_terminal_edge:{node_id}"
-            ));
-        }
-        let evidence_requirements = configured_evidence_requirements(step, &node_id)?;
-        if required && evidence_requirements.is_empty() {
-            return Err(format!("team_flow_authority_missing_evidence:{node_id}"));
-        }
-        let command_ref = exact_string_alias(
-            step,
-            &["command_ref", "command_mapping_ref"],
-            "command_ref",
-            &node_id,
-        )?;
-        let command_mapping = command_ref
-            .as_ref()
-            .map(|command_ref| {
-                command_catalog.get(command_ref).cloned().ok_or_else(|| {
-                    format!("team_flow_authority_unknown_command:{node_id}:{command_ref}")
-                })
-            })
-            .transpose()?;
-        let rework_targets = configured_rework_targets(step, &node_id)?;
-        let requires_user_approval = exact_bool_alias(
-            step,
-            role,
-            &["requires_user_approval"],
-            "requires_user_approval",
-            &node_id,
-        )?
-        .unwrap_or(false);
-        lanes.push(ConfiguredDevelopmentLane {
-            node_id: node_id.clone(),
-            lane_id: node_id.clone(),
-            dispatch_target: node_id.clone(),
-            dispatch_alias: configured_string(step, "dispatch_alias").unwrap_or_default(),
-            runtime_role: runtime_role.clone(),
-            task_class: task_class.clone(),
-            packet_template_kind: exact_string_source(
-                step,
-                role,
-                "packet_template_kind",
-                &node_id,
-            )?,
-            closure_class: exact_string_source(step, role, "closure_class", &node_id)?,
-            stage: exact_string_source(step, role, "stage", &node_id)?,
-            completion_blocker: exact_string_source(step, role, "completion_blocker", &node_id)?,
-            inclusion_rule,
-            included,
-            required,
-            next_node,
-            evidence_requirements,
-            proof_gates: step
-                .get("proof_gates")
-                .cloned()
-                .ok_or_else(|| format!("team_flow_authority_missing_proof_gates:{node_id}"))?,
-            command_ref,
-            command_mapping,
+        .find_map(|term| term.strip_prefix("dev_team_flow_id:"));
+    let profile = compiled_bundle["team_flow_authority"]["selected_config"]["authority_selection"]["team_profile_id"]
+        .as_str();
+    let projection = crate::team_flow_authority_adapter::compile_team_flow_authority(
+        compiled_bundle,
+        flow_ref,
+        profile,
+    )?;
+    let lanes = projection
+        .ordered_nodes()
+        .map(|node| ConfiguredDevelopmentLane {
+            node_id: node.node.node_id.clone(),
+            lane_id: node.node.node_id.clone(),
+            dispatch_target: node.node.node_id.clone(),
+            dispatch_alias: node.dispatch_alias.clone(),
+            runtime_role: node.node.runtime_role.clone(),
+            task_class: node.node.task_class.clone(),
+            packet_template_kind: node.packet_template_kind.clone(),
+            closure_class: node.closure_class.clone(),
+            stage: node.stage.clone(),
+            completion_blocker: node.completion_blocker.clone(),
+            inclusion_rule: node.node.inclusion_rule.clone(),
+            included: node.node.included,
+            required: node.node.required,
+            next_node: node.node.next_node.clone(),
+            evidence_requirements: node.node.evidence_requirements.clone(),
+            proof_gates: node.proof_gates.clone(),
+            command_ref: node.node.command_ref.clone(),
+            command_mapping: node.command_mapping.clone(),
             rework: TeamFlowReworkProjection {
-                targets: rework_targets,
+                targets: node.node.rework_targets.clone(),
             },
-            terminal,
+            terminal: node.node.terminal,
             profile_authority: TeamFlowProfileAuthority {
-                team_role_id: node_id.clone(),
-                runtime_role,
-                task_class,
-                source_path: format!("vida.config.yaml#dev_team.roles.{node_id}"),
+                team_role_id: node.node.node_id.clone(),
+                runtime_role: node.node.runtime_role.clone(),
+                task_class: node.node.task_class.clone(),
+                source_path: format!("vida.config.yaml#dev_team.roles.{}", node.node.node_id),
             },
-            requires_user_approval,
-            approval_policy: step
-                .get("approval_policy")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({})),
-            lifecycle_hook_templates: step
-                .get("lifecycle_hook_templates")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
-            resume_transitions: step
-                .get("resume_transitions")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({})),
-        });
-    }
-    let node_ids = lanes
-        .iter()
-        .map(|lane| lane.node_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    for lane in &lanes {
-        if let Some(target) = lane.next_node.as_deref() {
-            if !node_ids.contains(target) {
-                return Err(format!(
-                    "team_flow_authority_unknown_next_node:{}:{target}",
-                    lane.node_id
-                ));
-            }
-        }
-        for target in &lane.rework.targets {
-            if !node_ids.contains(target.as_str()) {
-                return Err(format!(
-                    "team_flow_authority_unknown_rework_target:{}:{target}",
-                    lane.node_id
-                ));
-            }
-        }
-    }
-    Ok(ConfiguredDevelopmentFlow { flow_id, lanes })
+            requires_user_approval: node.node.requires_user_approval,
+            approval_policy: node.approval_policy.clone(),
+            lifecycle_hook_templates: node.lifecycle_hook_templates.clone(),
+            resume_transitions: node.resume_transitions.clone(),
+        })
+        .collect();
+    Ok(ConfiguredDevelopmentFlow {
+        flow_id: projection.snapshot.flow_ref,
+        lanes,
+    })
 }
 
 pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
@@ -1374,10 +1114,15 @@ mod tests {
     use serde_json::json;
 
     fn strict_team_flow_bundle() -> serde_json::Value {
-        json!({
+        let mut bundle = json!({
             "team_flow_authority": {
                 "authority_id": "team-flow-authority:test",
                 "selected_config": {
+                    "authority_selection": {
+                        "config_id": "cfg",
+                        "team_profile_id": "profile",
+                        "default_flow_id": "strict_flow"
+                    },
                     "default_flow_id": "strict_flow",
                     "roles": {
                         "worker_node": {
@@ -1428,6 +1173,13 @@ mod tests {
                 "proof_command": {"command_id": "proof_command", "surface": "vida agent-init"}
             }
         })
+        ;
+        let config_hash = taskflow_authority::team_flow_transition::hash_json(
+            &bundle["team_flow_authority"]["selected_config"],
+        );
+        bundle["team_flow_authority"]["config"] = json!({"content_blake3": config_hash});
+        bundle["team_flow_authority"]["registries"] = json!({"content_blake3": "registry"});
+        bundle
     }
 
     fn strict_team_flow_selection(bundle: &serde_json::Value) -> RuntimeConsumptionLaneSelection {
@@ -1593,7 +1345,7 @@ mod tests {
         assert_eq!(contract["lane_sequence"], json!([]));
         assert!(contract["blocker_codes"][0]
             .as_str()
-            .is_some_and(|code| code.contains("missing_flow_id")));
+            .is_some_and(|code| code.contains("team_flow_authority_missing")));
     }
 
     #[test]
@@ -1853,7 +1605,7 @@ mod tests {
         let error = configured_dev_team_flow_templates(&bundle, &selection)
             .expect_err("conditional inclusion without included must fail");
 
-        assert!(error.contains("missing_included:proof_node"));
+        assert!(error.contains("snapshot_compile") && error.contains("included"));
     }
 
     #[test]
@@ -1868,7 +1620,7 @@ mod tests {
         let error = configured_dev_team_flow_templates(&bundle, &selection)
             .expect_err("missing terminal declaration must fail");
 
-        assert!(error.contains("invalid_terminal_edge:proof_node"));
+        assert!(error.contains("snapshot_compile") && error.contains("next_node"));
     }
 
     #[test]
@@ -1881,7 +1633,7 @@ mod tests {
         let error = configured_dev_team_flow_templates(&bundle, &selection)
             .expect_err("unknown rework target must fail");
 
-        assert!(error.contains("unknown_rework_target:worker_node:missing_node"));
+        assert!(error.contains("snapshot_compile") && error.contains("missing_node"));
     }
 
     #[test]
@@ -1896,7 +1648,7 @@ mod tests {
         let error = configured_dev_team_flow_templates(&bundle, &selection)
             .expect_err("required lane without evidence must fail");
 
-        assert!(error.contains("evidence_source_count:worker_node:0"));
+        assert!(error.contains("missing_proof_gates:worker_node"));
     }
 
     #[test]
@@ -1909,7 +1661,7 @@ mod tests {
         let error = configured_dev_team_flow_templates(&bundle, &selection)
             .expect_err("multiple node aliases must fail");
 
-        assert!(error.contains("conflicting_aliases:strict_flow:node_id"));
+        assert!(error.contains("snapshot_compile") && error.contains("node_id"));
     }
 
     #[test]

@@ -201,6 +201,7 @@ mod taskflow_run_graph_task_authority;
 mod taskflow_runtime_bundle;
 mod taskflow_spec_bootstrap;
 mod taskflow_task_bridge;
+mod team_flow_authority_adapter;
 mod team_flow_state_machine;
 mod temp_state;
 #[cfg(test)]

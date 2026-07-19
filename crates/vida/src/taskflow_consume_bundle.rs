@@ -799,7 +799,40 @@ pub(crate) fn build_dev_team_readiness(
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
     const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+    let team_flow_authority = activation_bundle
+        .get("team_flow_authority")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let source_paths = dev_team_source_paths(config_path, None);
+    let authority_error = crate::team_flow_authority_adapter::compile_team_flow_authority(
+        activation_bundle,
+        None,
+        None,
+    )
+    .err();
+    if let Some(error) = authority_error {
+        return serde_json::json!({
+            "status": "blocked",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "default_flow_id": serde_json::Value::Null,
+            "orchestrator_command_contract": serde_json::Value::Null,
+            "work_item_flow_bindings": {},
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "team_flow_authority": team_flow_authority,
+            "team_flow_authority_status": "blocked",
+            "lane_work_context_contract": activation_bundle
+                .get("lane_work_context_contract")
+                .cloned()
+                .unwrap_or_else(default_lane_work_context_contract),
+            "zombie_d_gate": serde_json::Value::Null,
+            "blockers": [format!("team_flow_authority_invalid:{error}")],
+            "source_paths": source_paths,
+        });
+    }
+    let team_flow_authority_status = "ready";
     let config_metadata = match std::fs::symlink_metadata(config_path) {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -932,6 +965,8 @@ pub(crate) fn build_dev_team_readiness(
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
+        "team_flow_authority": team_flow_authority,
+        "team_flow_authority_status": team_flow_authority_status,
         "lane_work_context_contract": activation_bundle
             .get("lane_work_context_contract")
             .cloned()
@@ -2058,6 +2093,7 @@ mod tests {
     #[test]
     fn agent_system_snapshot_prefers_carrier_runtime_fields_without_legacy_aliases() {
         let activation_bundle = serde_json::json!({
+            "team_flow_authority": authority_projection_fixture(),
             "agent_system": {
                 "mode": "native",
                 "state_owner": "orchestrator_only",
@@ -2233,6 +2269,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2284,6 +2321,174 @@ dev_team:
             readiness["flows"][0]["ordered_steps"][0]["requires_user_approval"],
             false
         );
+    }
+
+    fn authority_projection_fixture() -> serde_json::Value {
+        let selected_config = serde_json::json!({
+            "authority_selection": {
+                "config_id": "cfg",
+                "team_profile_id": "profile",
+                "default_flow_id": "defect_flow"
+            },
+            "roles": {
+                "developer": {
+                    "runtime_role": "worker",
+                    "task_class": "implementation",
+                    "inclusion_rule": "always",
+                    "packet_template_kind": "delivery_task_packet",
+                    "closure_class": "implementation",
+                    "stage": "execution",
+                    "completion_blocker": "pending"
+                }
+            },
+            "flows": {
+                "defect_flow": {
+                    "flow_id": "defect_flow",
+                    "steps": [{
+                        "role_id": "developer",
+                        "included": true,
+                        "required": true,
+                        "terminal": true,
+                        "proof_gates": {"required_outputs": ["changed_files"]}
+                    }]
+                }
+            }
+        });
+        let config_hash = taskflow_authority::team_flow_transition::hash_json(&selected_config);
+        serde_json::json!({
+            "schema_version": "team-flow-authority.v1",
+            "authority_id": "team-flow-authority:test",
+            "config": {"content_blake3": config_hash},
+            "registries": {"content_blake3": "registry"},
+            "selected_config": selected_config
+        })
+    }
+
+    fn readiness_config_fixture(path: &std::path::Path) {
+        std::fs::write(
+            path,
+            r#"
+dev_team:
+  enabled: true
+  default_flow_id: defect_flow
+  work_item_flow_bindings:
+    defect: defect_flow
+  roles:
+    developer:
+      runtime_role: worker
+      task_classes: [implementation]
+      default_carrier: junior
+      handoff:
+        next_role: terminal_closure
+        required_outputs: [changed_files]
+        fail_closed_on_missing_handoff: true
+  flows:
+    defect_flow:
+      enabled: true
+      sequential: true
+      steps: [developer]
+"#,
+        )
+        .expect("readiness config should write");
+    }
+
+    fn readiness_activation_bundle(authority: Option<serde_json::Value>) -> serde_json::Value {
+        let mut bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 1,
+                "pricing": {}
+            },
+            "autonomous_execution": {"enabled": true},
+            "carrier_runtime": {
+                "roles": [{
+                    "role_id": "junior",
+                    "model": "configured-model",
+                    "model_provider": "configured-provider",
+                    "model_reasoning_effort": "configured-effort",
+                    "normalized_cost_units": 1,
+                    "rate": 1,
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"]
+                }],
+                "model_selection": {},
+                "worker_strategy": {},
+                "dispatch_aliases": {}
+            }
+        });
+        if let Some(authority) = authority {
+            bundle["team_flow_authority"] = authority;
+        }
+        bundle
+    }
+
+    fn assert_team_flow_readiness_fails_closed(readiness: &serde_json::Value) {
+        assert_eq!(readiness["status"], "blocked");
+        assert_eq!(readiness["configured"], false);
+        assert_eq!(readiness["enabled"], serde_json::Value::Null);
+        assert_eq!(readiness["default_flow_id"], serde_json::Value::Null);
+        assert_eq!(readiness["orchestrator_command_contract"], serde_json::Value::Null);
+        assert_eq!(readiness["work_item_flow_bindings"], serde_json::json!({}));
+        assert_eq!(readiness["roles"], serde_json::json!([]));
+        assert_eq!(readiness["sequence"], serde_json::json!([]));
+        assert_eq!(readiness["flows"], serde_json::json!([]));
+        assert_eq!(readiness["team_flow_authority_status"], "blocked");
+        assert_eq!(readiness["zombie_d_gate"], serde_json::Value::Null);
+        assert!(readiness["blockers"][0]
+            .as_str()
+            .is_some_and(|blocker| blocker.starts_with("team_flow_authority_invalid:")));
+    }
+
+    #[test]
+    fn readiness_snapshot_carries_authoritative_team_flow_and_preserves_binding() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        readiness_config_fixture(&config_path);
+        let authority = authority_projection_fixture();
+        let snapshot = build_taskflow_agent_system_snapshot(
+            config_path.to_str().expect("config path should be valid"),
+            &readiness_activation_bundle(Some(authority.clone())),
+        );
+        let readiness = &snapshot["dev_team_readiness"];
+        assert_eq!(readiness["team_flow_authority"], authority);
+        assert_eq!(readiness["team_flow_authority_status"], "ready");
+        assert_eq!(
+            readiness["work_item_flow_bindings"]["defect"],
+            "defect_flow"
+        );
+        assert_eq!(
+            crate::dev_team_sequence_contract::dev_team_sequence_for_flow_id(
+                readiness,
+                "defect_flow"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn readiness_snapshot_without_authority_fails_closed_for_team_flow_selection() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        readiness_config_fixture(&config_path);
+        let snapshot = build_taskflow_agent_system_snapshot(
+            config_path.to_str().expect("config path should be valid"),
+            &readiness_activation_bundle(None),
+        );
+        let readiness = &snapshot["dev_team_readiness"];
+        assert_team_flow_readiness_fails_closed(readiness);
+        assert_eq!(readiness["team_flow_authority"], serde_json::Value::Null);
+
+        let mut invalid_bundle = readiness_activation_bundle(Some(authority_projection_fixture()));
+        invalid_bundle["team_flow_authority"]["selected_config"] = serde_json::Value::Null;
+        let invalid_snapshot = build_taskflow_agent_system_snapshot(
+            config_path.to_str().expect("config path should be valid"),
+            &invalid_bundle,
+        );
+        let invalid_readiness = &invalid_snapshot["dev_team_readiness"];
+        assert_team_flow_readiness_fails_closed(invalid_readiness);
+        assert!(invalid_readiness["team_flow_authority"].is_object());
     }
 
     #[test]
@@ -2380,6 +2585,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2580,6 +2786,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2653,6 +2860,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2768,6 +2976,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2842,6 +3051,7 @@ dev_team:
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
             &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
                 "carrier_runtime": {
                     "roles": [
                         {
@@ -2899,7 +3109,9 @@ dev_team:
 
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
-            &serde_json::json!({}),
+            &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
+            }),
         );
 
         assert_eq!(readiness["status"], "missing_config");
@@ -2922,7 +3134,9 @@ dev_team:
 
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
-            &serde_json::json!({}),
+            &serde_json::json!({
+                "team_flow_authority": authority_projection_fixture(),
+            }),
         );
 
         assert_eq!(readiness["status"], "config_unreadable");
