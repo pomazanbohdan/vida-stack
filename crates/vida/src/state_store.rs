@@ -277,6 +277,44 @@ pub struct StateStoreOpenDiagnostic {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+pub(crate) enum StateStoreOpenStage {
+    LifecycleGuard,
+    LegacyGuard,
+    DatastoreOpen,
+    DatastoreCheckVersion,
+    DatastoreBootstrap,
+    SurrealAttach,
+    NamespaceDatabase,
+    SchemaQuery,
+    Unclassified,
+}
+
+impl StateStoreOpenStage {
+    pub(crate) const fn lock_evidence(self) -> Option<StateStoreOpenLockEvidence> {
+        match self {
+            Self::LifecycleGuard => Some(StateStoreOpenLockEvidence::LifecycleGuard),
+            Self::LegacyGuard => Some(StateStoreOpenLockEvidence::LegacyGuard),
+            Self::DatastoreOpen
+            | Self::DatastoreCheckVersion
+            | Self::DatastoreBootstrap
+            | Self::SurrealAttach
+            | Self::NamespaceDatabase
+            | Self::SchemaQuery => Some(StateStoreOpenLockEvidence::Datastore),
+            Self::Unclassified => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StateStoreOpenLockEvidence {
+    LifecycleGuard,
+    LegacyGuard,
+    Datastore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum StateStoreOpenErrorKind {
     LockContention,
     PermissionAccess,
@@ -300,6 +338,9 @@ pub(crate) struct StateStoreOpenErrorDiagnostic {
     pub(crate) error_kind: StateStoreOpenErrorKind,
     pub(crate) retryable: bool,
     pub(crate) blocker_code: &'static str,
+    pub(crate) open_stage: StateStoreOpenStage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) lock_evidence: Option<StateStoreOpenLockEvidence>,
 }
 
 impl StateStoreOpenErrorDiagnostic {
@@ -370,6 +411,11 @@ pub enum StateStoreError {
     InvalidStorageMetadata {
         reason: String,
     },
+    OpenContext {
+        stage: StateStoreOpenStage,
+        lock_evidence: Option<StateStoreOpenLockEvidence>,
+        source: Box<StateStoreError>,
+    },
     InvalidStateSpineManifest {
         reason: String,
     },
@@ -414,10 +460,46 @@ pub enum StateStoreError {
 }
 
 impl StateStoreError {
+    pub(crate) fn with_open_context(
+        self,
+        stage: StateStoreOpenStage,
+        lock_evidence: Option<StateStoreOpenLockEvidence>,
+    ) -> Self {
+        match self {
+            Self::OpenContext {
+                stage: existing_stage,
+                lock_evidence: existing_lock_evidence,
+                source,
+            } if existing_stage != StateStoreOpenStage::Unclassified => Self::OpenContext {
+                stage: existing_stage,
+                lock_evidence: existing_lock_evidence,
+                source,
+            },
+            Self::OpenContext { source, .. } => Self::OpenContext {
+                stage,
+                lock_evidence,
+                source,
+            },
+            source => Self::OpenContext {
+                stage,
+                lock_evidence,
+                source: Box::new(source),
+            },
+        }
+    }
+
     pub(crate) fn open_error_diagnostic(&self) -> StateStoreOpenErrorDiagnostic {
-        let kind = match self {
+        let (source, open_stage, lock_evidence) = match self {
+            Self::OpenContext {
+                stage,
+                lock_evidence,
+                source,
+            } => (source.as_ref(), *stage, *lock_evidence),
+            _ => (self, StateStoreOpenStage::Unclassified, None),
+        };
+        let kind = match source {
             Self::Io(error) => classify_state_store_io_open_error(error),
-            Self::Db(error) => classify_state_store_open_error_message(&error.to_string()),
+            Self::Db(error) => classify_state_store_db_open_error(error),
             Self::InvalidStorageMetadata { reason }
             | Self::InvalidStateSpineManifest { reason }
             | Self::InvalidStateReset { reason }
@@ -430,7 +512,10 @@ impl StateStoreError {
             | Self::PatchConflict { reason } => classify_state_store_open_error_message(reason),
             _ => StateStoreOpenErrorKind::Unknown,
         };
-        state_store_open_error_diagnostic(kind)
+        let mut diagnostic = state_store_open_error_diagnostic(kind);
+        diagnostic.open_stage = open_stage;
+        diagnostic.lock_evidence = lock_evidence;
+        diagnostic
     }
 
     pub fn open_diagnostic(&self, state_dir: &Path) -> Option<StateStoreOpenDiagnostic> {
@@ -470,6 +555,8 @@ fn state_store_open_error_diagnostic(
         error_kind,
         retryable,
         blocker_code,
+        open_stage: StateStoreOpenStage::Unclassified,
+        lock_evidence: None,
     }
 }
 
@@ -489,10 +576,16 @@ fn classify_state_store_io_open_error(error: &io::Error) -> StateStoreOpenErrorK
     classify_state_store_open_error_message(&error.to_string())
 }
 
-pub(crate) fn state_store_io_open_error_diagnostic(
-    error: &io::Error,
-) -> StateStoreOpenErrorDiagnostic {
-    state_store_open_error_diagnostic(classify_state_store_io_open_error(error))
+fn classify_state_store_db_open_error(error: &surrealdb::Error) -> StateStoreOpenErrorKind {
+    classify_state_store_open_error_evidence(&error.to_string(), &format!("{error:?}"))
+}
+
+fn classify_state_store_open_error_evidence(display: &str, debug: &str) -> StateStoreOpenErrorKind {
+    let display_kind = classify_state_store_open_error_message(display);
+    if display_kind != StateStoreOpenErrorKind::Unknown {
+        return display_kind;
+    }
+    classify_state_store_open_error_message(debug)
 }
 
 fn classify_state_store_open_error_message(message: &str) -> StateStoreOpenErrorKind {
@@ -507,6 +600,12 @@ fn classify_state_store_open_error_message(message: &str) -> StateStoreOpenError
     {
         return StateStoreOpenErrorKind::StorageCorruption;
     }
+    if normalized.contains("permission denied")
+        || normalized.contains("access is denied")
+        || normalized.contains("os error 5")
+    {
+        return StateStoreOpenErrorKind::PermissionAccess;
+    }
     if normalized.contains("timed out while waiting for authoritative datastore lock")
         || normalized.contains("resource temporarily unavailable")
         || normalized.contains("another process has locked")
@@ -517,12 +616,6 @@ fn classify_state_store_open_error_message(message: &str) -> StateStoreOpenError
         || normalized.contains("os error 33")
     {
         return StateStoreOpenErrorKind::LockContention;
-    }
-    if normalized.contains("permission denied")
-        || normalized.contains("access is denied")
-        || normalized.contains("os error 5")
-    {
-        return StateStoreOpenErrorKind::PermissionAccess;
     }
     StateStoreOpenErrorKind::Unknown
 }
@@ -568,6 +661,7 @@ impl std::fmt::Display for StateStoreError {
                 }
                 Ok(())
             }
+            Self::OpenContext { source, .. } => source.fmt(f),
             Self::MissingStateSpineManifest => {
                 write!(
                     f,
@@ -620,7 +714,14 @@ impl std::fmt::Display for StateStoreError {
     }
 }
 
-impl std::error::Error for StateStoreError {}
+impl std::error::Error for StateStoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::OpenContext { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl From<io::Error> for StateStoreError {
     fn from(error: io::Error) -> Self {
@@ -9615,9 +9716,142 @@ hierarchy: framework,contracts
 
     #[test]
     fn access_denied_message_is_not_lock_contention_without_lock_evidence() {
-        let error = io::Error::new(io::ErrorKind::Other, "Access is denied. (os error 5)");
-        let diagnostic = state_store_io_open_error_diagnostic(&error);
+        let error = StateStoreError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "Access is denied. (os error 5)",
+        ));
+        let diagnostic = error.open_error_diagnostic();
         assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::PermissionAccess);
         assert!(!diagnostic.retryable);
+    }
+
+    #[test]
+    fn permission_evidence_precedes_generic_lock_word_for_io_and_db() {
+        for message in [
+            "Access is denied while locking state root",
+            "permission denied to lock file",
+        ] {
+            let io_error = StateStoreError::Io(io::Error::new(io::ErrorKind::Other, message));
+            let diagnostic = io_error.open_error_diagnostic();
+            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::PermissionAccess);
+            assert!(!diagnostic.retryable);
+            assert!(!StateStore::error_is_lock_contention(&io_error));
+
+            let db_error = StateStoreError::Db(surrealdb::Error::internal(message.to_string()));
+            let diagnostic = db_error.open_error_diagnostic();
+            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::PermissionAccess);
+            assert!(!diagnostic.retryable);
+            assert!(!StateStore::error_is_lock_contention(&db_error));
+        }
+    }
+
+    #[test]
+    fn exact_lock_contention_phrases_remain_retryable_without_generic_lock_heuristic() {
+        for message in [
+            "timed out while waiting for authoritative datastore lock",
+            "resource temporarily unavailable",
+            "another process has locked a portion of the file",
+            "the process cannot access the file because it is being used by another process",
+        ] {
+            let io_error = StateStoreError::Io(io::Error::new(io::ErrorKind::Other, message));
+            let diagnostic = io_error.open_error_diagnostic();
+            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+            assert!(diagnostic.retryable);
+            assert!(StateStore::error_is_lock_contention(&io_error));
+
+            let db_error = StateStoreError::Db(surrealdb::Error::internal(message.to_string()));
+            let diagnostic = db_error.open_error_diagnostic();
+            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+            assert!(diagnostic.retryable);
+            assert!(StateStore::error_is_lock_contention(&db_error));
+        }
+    }
+
+    #[test]
+    fn open_error_diagnostic_preserves_stage_and_sanitizes_lock_evidence() {
+        let error = StateStoreError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            r"C:\secret\state\LOCK pid=424242 raw holder details",
+        ))
+        .with_open_context(
+            StateStoreOpenStage::DatastoreOpen,
+            Some(StateStoreOpenLockEvidence::Datastore),
+        );
+        let diagnostic = error.open_error_diagnostic();
+        assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+        assert!(diagnostic.retryable);
+        assert_eq!(diagnostic.open_stage, StateStoreOpenStage::DatastoreOpen);
+        assert_eq!(
+            diagnostic.lock_evidence,
+            Some(StateStoreOpenLockEvidence::Datastore)
+        );
+        let serialized = serde_json::to_string(&diagnostic).expect("diagnostic serializes");
+        assert!(serialized.contains("\"open_stage\":\"datastore_open\""));
+        assert!(serialized.contains("\"lock_evidence\":\"datastore\""));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("424242"));
+        assert!(!serialized.contains("raw holder"));
+    }
+
+    #[test]
+    fn open_context_keeps_first_meaningful_stage_without_recursive_wrapping() {
+        let error = StateStoreError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "state metadata is invalid",
+        ))
+        .with_open_context(StateStoreOpenStage::SchemaQuery, None)
+        .with_open_context(
+            StateStoreOpenStage::DatastoreOpen,
+            Some(StateStoreOpenLockEvidence::Datastore),
+        );
+        let diagnostic = error.open_error_diagnostic();
+        assert_eq!(diagnostic.open_stage, StateStoreOpenStage::SchemaQuery);
+        assert_eq!(diagnostic.lock_evidence, None);
+        assert!(!matches!(error, StateStoreError::OpenContext { source, .. } if matches!(*source, StateStoreError::OpenContext { .. })));
+    }
+
+    #[test]
+    fn invalid_storage_metadata_is_not_assumed_corruption_without_storage_signal() {
+        let error = StateStoreError::InvalidStorageMetadata {
+            reason: "namespace metadata is missing".to_string(),
+        }
+        .with_open_context(StateStoreOpenStage::SchemaQuery, None);
+        let diagnostic = error.open_error_diagnostic();
+        assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::Unknown);
+        assert_eq!(diagnostic.open_stage, StateStoreOpenStage::SchemaQuery);
+        assert!(!diagnostic.retryable);
+    }
+
+    #[test]
+    fn contextualized_lock_errors_remain_retryable_for_open_retry_loop() {
+        let error = StateStoreError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "authoritative datastore lock wait timed out",
+        ))
+        .with_open_context(
+            StateStoreOpenStage::DatastoreOpen,
+            Some(StateStoreOpenLockEvidence::Datastore),
+        );
+        assert!(StateStore::error_is_lock_contention(&error));
+        assert!(error.open_error_diagnostic().retryable);
+    }
+
+    #[test]
+    fn db_display_and_debug_evidence_share_retry_and_diagnostic_classification() {
+        let error = StateStoreError::Db(surrealdb::Error::internal(
+            "resource temporarily unavailable".to_string(),
+        ))
+        .with_open_context(
+            StateStoreOpenStage::DatastoreCheckVersion,
+            Some(StateStoreOpenLockEvidence::Datastore),
+        );
+        let diagnostic = error.open_error_diagnostic();
+        assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+        assert!(diagnostic.retryable);
+        assert!(StateStore::error_is_lock_contention(&error));
+        assert_eq!(
+            diagnostic.open_stage,
+            StateStoreOpenStage::DatastoreCheckVersion
+        );
     }
 }

@@ -39,6 +39,16 @@ const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
+fn contextualize_open_error(
+    error: StateStoreError,
+    stage: StateStoreOpenStage,
+) -> StateStoreError {
+    let lock_evidence = stage
+        .lock_evidence()
+        .filter(|_| StateStore::error_is_lock_contention(&error));
+    error.with_open_context(stage, lock_evidence)
+}
+
 #[derive(Debug)]
 pub(super) struct ExclusiveFileAcquireGuard {
     file: std::fs::File,
@@ -453,13 +463,24 @@ impl StateStore {
             .with_config(Self::bounded_surrealkv_config())
             .build_with_path(&endpoint)
             .await
-            .map_err(|error| Self::bounded_surrealkv_open_error("open", error.to_string()))?;
+            .map_err(|error| {
+                contextualize_open_error(
+                    Self::bounded_surrealkv_open_error("open", error.to_string()),
+                    StateStoreOpenStage::DatastoreOpen,
+                )
+            })?;
         datastore.check_version().await.map_err(|error| {
-            Self::bounded_surrealkv_open_error("check version for", error.to_string())
+            contextualize_open_error(
+                Self::bounded_surrealkv_open_error("check version for", error.to_string()),
+                StateStoreOpenStage::DatastoreCheckVersion,
+            )
         })?;
         if bootstrap {
             datastore.bootstrap().await.map_err(|error| {
-                Self::bounded_surrealkv_open_error("bootstrap", error.to_string())
+                contextualize_open_error(
+                    Self::bounded_surrealkv_open_error("bootstrap", error.to_string()),
+                    StateStoreOpenStage::DatastoreBootstrap,
+                )
             })?;
         }
         Surreal::<Db>::unstable_from_datastore(
@@ -469,7 +490,12 @@ impl StateStore {
             EngineOptions::default(),
         )
         .await
-        .map_err(StateStoreError::from)
+        .map_err(|error| {
+            contextualize_open_error(
+                StateStoreError::from(error),
+                StateStoreOpenStage::SurrealAttach,
+            )
+        })
     }
 
     fn bounded_surrealkv_open_error(action: &str, error: String) -> StateStoreError {
@@ -609,28 +635,27 @@ impl StateStore {
 
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
         match error {
+            StateStoreError::OpenContext { source, .. } => Self::error_is_lock_contention(source),
             StateStoreError::Io(io_error) => {
                 StateRootLifecycleGuard::is_lock_contention_error(io_error)
+                    || matches!(
+                        super::classify_state_store_open_error_message(&io_error.to_string()),
+                        StateStoreOpenErrorKind::LockContention
+                    )
             }
-            StateStoreError::Db(db_error) => {
-                Self::message_is_lock_contention(&db_error.to_string())
-                    || Self::message_is_lock_contention(&format!("{db_error:?}"))
-            }
+            StateStoreError::Db(db_error) => matches!(
+                super::classify_state_store_db_open_error(db_error),
+                StateStoreOpenErrorKind::LockContention
+            ),
             _ => false,
         }
     }
 
     pub(crate) fn message_is_lock_contention(message: &str) -> bool {
-        let normalized = message.to_ascii_lowercase();
-        normalized.contains("lock")
-            || normalized.contains("resource temporarily unavailable")
-            || normalized.contains("os error 32")
-            || normalized.contains("os error 33")
-            || normalized.contains("os error 5")
-            || normalized.contains("access is denied")
-            || normalized.contains("being used by another process")
-            || normalized.contains("process cannot access the file")
-            || normalized.contains("portion of the file")
+        matches!(
+            super::classify_state_store_open_error_message(message),
+            StateStoreOpenErrorKind::LockContention
+        )
     }
 
     async fn sanitize_legacy_task_execution_semantics(&self) -> Result<(), StateStoreError> {
@@ -704,8 +729,16 @@ impl StateStore {
     }
 
     async fn open_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
-        lifecycle_guard.validate_root_identity(&root)?;
+        let lifecycle_guard = Arc::new(
+            StateRootLifecycleGuard::acquire(&root)
+                .await
+                .map_err(|error| {
+                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+                })?,
+        );
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         Self::open_with_lifecycle_guard(root, lifecycle_guard).await
     }
 
@@ -713,9 +746,16 @@ impl StateStore {
         root: PathBuf,
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
-        fs::create_dir_all(&root)?;
-        lifecycle_guard.validate_root_identity(&root)?;
-        lifecycle_guard.acquire_legacy_guard(&root).await?;
+        fs::create_dir_all(&root).map_err(|error| {
+            contextualize_open_error(StateStoreError::from(error), StateStoreOpenStage::LifecycleGuard)
+        })?;
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+        lifecycle_guard
+            .acquire_legacy_guard(&root)
+            .await
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LegacyGuard))?;
         Self::open_with_authoritative_lock_retry(root, lifecycle_guard, Self::open_once).await
     }
 
@@ -724,12 +764,23 @@ impl StateStore {
     }
 
     async fn open_existing_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
-        lifecycle_guard.validate_root_identity(&root)?;
+        let lifecycle_guard = Arc::new(
+            StateRootLifecycleGuard::acquire(&root)
+                .await
+                .map_err(|error| {
+                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+                })?,
+        );
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
-        lifecycle_guard.acquire_legacy_guard(&root).await?;
+        lifecycle_guard
+            .acquire_legacy_guard(&root)
+            .await
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LegacyGuard))?;
         if !Self::state_dir_has_existing_datastore_payload(&root)? {
             return Self::open_with_lifecycle_guard(root, lifecycle_guard).await;
         }
@@ -752,10 +803,13 @@ impl StateStore {
             Ok(result) => result,
             Err(_) => {
                 let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
-                Err(StateStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
-                )))
+                Err(contextualize_open_error(
+                    StateStoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+                    )),
+                    StateStoreOpenStage::DatastoreOpen,
+                ))
             }
         }
     }
@@ -765,12 +819,23 @@ impl StateStore {
     }
 
     async fn open_existing_read_only_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
-        lifecycle_guard.validate_root_identity(&root)?;
+        let lifecycle_guard = Arc::new(
+            StateRootLifecycleGuard::acquire(&root)
+                .await
+                .map_err(|error| {
+                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+                })?,
+        );
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
-        lifecycle_guard.acquire_legacy_guard(&root).await?;
+        lifecycle_guard
+            .acquire_legacy_guard(&root)
+            .await
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LegacyGuard))?;
 
         for attempt in 0..READ_ONLY_OPEN_RETRY_COUNT {
             let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
@@ -851,9 +916,24 @@ impl StateStore {
         }
         let timeout = Self::strict_read_only_open_timeout(timeout);
         match tokio::time::timeout(timeout, async {
-            let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
-            lifecycle_guard.validate_root_identity(&root)?;
-            lifecycle_guard.acquire_legacy_guard(&root).await?;
+            let lifecycle_guard = Arc::new(
+                StateRootLifecycleGuard::acquire(&root)
+                    .await
+                    .map_err(|error| {
+                        contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+                    })?,
+            );
+            lifecycle_guard
+                .validate_root_identity(&root)
+                .map_err(|error| {
+                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+                })?;
+            lifecycle_guard
+                .acquire_legacy_guard(&root)
+                .await
+                .map_err(|error| {
+                    contextualize_open_error(error, StateStoreOpenStage::LegacyGuard)
+                })?;
             let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
             Self::open_existing_structural_read_only_once(root.clone(), lifecycle_guard).await
         })
@@ -862,10 +942,13 @@ impl StateStore {
             Ok(result) => result,
             Err(_) => {
                 let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
-                Err(StateStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out while opening structural read-only state; retry later or run a full diagnostic surface for recovery",
-                )))
+                Err(contextualize_open_error(
+                    StateStoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out while opening structural read-only state; retry later or run a full diagnostic surface for recovery",
+                    )),
+                    StateStoreOpenStage::DatastoreOpen,
+                ))
             }
         }
     }
@@ -878,10 +961,13 @@ impl StateStore {
             Ok(result) => result,
             Err(_) => {
                 let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
-                Err(StateStoreError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
-                )))
+                Err(contextualize_open_error(
+                    StateStoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+                    )),
+                    StateStoreOpenStage::DatastoreOpen,
+                ))
             }
         }
     }
@@ -913,10 +999,25 @@ impl StateStore {
         root: PathBuf,
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
-        lifecycle_guard.validate_root_identity(&root)?;
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
-        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        db.query(state_schema_document()).await?;
+        db.use_ns(STATE_NAMESPACE)
+            .use_db(STATE_DATABASE)
+            .await
+            .map_err(|error| {
+                contextualize_open_error(
+                    StateStoreError::from(error),
+                    StateStoreOpenStage::NamespaceDatabase,
+                )
+            })?;
+        db.query(state_schema_document()).await.map_err(|error| {
+            contextualize_open_error(
+                StateStoreError::from(error),
+                StateStoreOpenStage::SchemaQuery,
+            )
+        })?;
         Ok(Self {
             db,
             root,
@@ -928,10 +1029,25 @@ impl StateStore {
         root: PathBuf,
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
-        lifecycle_guard.validate_root_identity(&root)?;
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
-        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        db.query(state_schema_document()).await?;
+        db.use_ns(STATE_NAMESPACE)
+            .use_db(STATE_DATABASE)
+            .await
+            .map_err(|error| {
+                contextualize_open_error(
+                    StateStoreError::from(error),
+                    StateStoreOpenStage::NamespaceDatabase,
+                )
+            })?;
+        db.query(state_schema_document()).await.map_err(|error| {
+            contextualize_open_error(
+                StateStoreError::from(error),
+                StateStoreOpenStage::SchemaQuery,
+            )
+        })?;
         Ok(Self {
             db,
             root,
@@ -943,9 +1059,19 @@ impl StateStore {
         root: PathBuf,
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
-        lifecycle_guard.validate_root_identity(&root)?;
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, false)).await?;
-        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+        db.use_ns(STATE_NAMESPACE)
+            .use_db(STATE_DATABASE)
+            .await
+            .map_err(|error| {
+                contextualize_open_error(
+                    StateStoreError::from(error),
+                    StateStoreOpenStage::NamespaceDatabase,
+                )
+            })?;
         Ok(Self {
             db,
             root,
@@ -957,10 +1083,25 @@ impl StateStore {
         root: PathBuf,
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
-        lifecycle_guard.validate_root_identity(&root)?;
+        lifecycle_guard
+            .validate_root_identity(&root)
+            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
-        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        db.query(state_schema_document()).await?;
+        db.use_ns(STATE_NAMESPACE)
+            .use_db(STATE_DATABASE)
+            .await
+            .map_err(|error| {
+                contextualize_open_error(
+                    StateStoreError::from(error),
+                    StateStoreOpenStage::NamespaceDatabase,
+                )
+            })?;
+        db.query(state_schema_document()).await.map_err(|error| {
+            contextualize_open_error(
+                StateStoreError::from(error),
+                StateStoreOpenStage::SchemaQuery,
+            )
+        })?;
 
         let store = Self {
             db,
@@ -1658,5 +1799,26 @@ mod tests {
             "unknown"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bounded_surrealkv_open_wrappers_preserve_stage_and_retryability() {
+        let cases = [
+            ("open", StateStoreOpenStage::DatastoreOpen),
+            ("check version for", StateStoreOpenStage::DatastoreCheckVersion),
+            ("bootstrap", StateStoreOpenStage::DatastoreBootstrap),
+        ];
+        for (action, stage) in cases {
+            let error = StateStore::bounded_surrealkv_open_error(
+                action,
+                "resource temporarily unavailable".to_string(),
+            );
+            let error = contextualize_open_error(error, stage);
+            let diagnostic = error.open_error_diagnostic();
+            assert_eq!(diagnostic.open_stage, stage);
+            assert_eq!(diagnostic.lock_evidence, Some(StateStoreOpenLockEvidence::Datastore));
+            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+            assert!(diagnostic.retryable);
+        }
     }
 }

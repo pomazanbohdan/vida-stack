@@ -2809,8 +2809,12 @@ fn agent_host_bridge_json_retains_sanitized_lock_open_diagnostic() {
         payload["state_access"]["blocker_code"],
         "authoritative_state_store_locked"
     );
+    assert_eq!(payload["state_access"]["open_stage"], "datastore_open");
+    assert_eq!(payload["state_access"]["lock_evidence"], "datastore");
     assert!(payload.get("error").is_none());
     assert!(payload["state_access"].to_string().find(&state_dir).is_none());
+    assert!(payload["state_access"].to_string().find("999999").is_none());
+    assert!(payload["state_access"].to_string().find("LOCK").is_none());
 
     let _ = lock_file.unlock();
     let _ = std::fs::remove_dir_all(&state_dir);

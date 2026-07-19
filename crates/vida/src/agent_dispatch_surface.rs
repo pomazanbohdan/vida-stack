@@ -111,7 +111,7 @@ fn host_bridge_state_lock_diagnostic(
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => return Some(state_store::state_store_io_open_error_diagnostic(&error)),
+        Err(error) => return Some(host_bridge_io_open_diagnostic(error)),
     };
     let mut marker = String::new();
     if file.read_to_string(&mut marker).is_ok()
@@ -124,8 +124,22 @@ fn host_bridge_state_lock_diagnostic(
             let _ = FileExt::unlock(&file);
             None
         }
-        Err(error) => Some(state_store::state_store_io_open_error_diagnostic(&error)),
+        Err(error) => Some(host_bridge_io_open_diagnostic(error)),
     }
+}
+
+fn host_bridge_io_open_diagnostic(
+    error: std::io::Error,
+) -> state_store::StateStoreOpenErrorDiagnostic {
+    let source = state_store::StateStoreError::Io(error);
+    let lock_evidence = if state_store::StateStore::error_is_lock_contention(&source) {
+        Some(state_store::StateStoreOpenLockEvidence::Datastore)
+    } else {
+        None
+    };
+    source
+        .with_open_context(state_store::StateStoreOpenStage::DatastoreOpen, lock_evidence)
+        .open_error_diagnostic()
 }
 
 fn release1_contract_status_value(ok: bool) -> &'static str {
@@ -12917,6 +12931,8 @@ mod tests {
             payload["state_access"]["blocker_code"],
             "authoritative_state_store_open_failed"
         );
+        assert_eq!(payload["state_access"]["open_stage"], "datastore_open");
+        assert!(payload["state_access"].get("lock_evidence").is_none());
         assert_eq!(payload["host_bridge"]["state_access"], payload["state_access"]);
         let state_access_text = payload["state_access"].to_string();
         assert!(!state_access_text.contains(&state_root.display().to_string()));
