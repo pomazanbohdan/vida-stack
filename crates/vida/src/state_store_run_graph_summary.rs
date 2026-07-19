@@ -6244,6 +6244,46 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn dispatch_receipt_for_packet_ignores_mismatching_primary_receipt_on_fresh_store() {
+        let root = temp_run_graph_root("vida-dispatch-receipt-for-packet-fresh-store");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-dispatch-receipt-for-packet-fresh-store";
+        let requested_packet_path = "/tmp/current-packet.json";
+
+        let mut primary_receipt = sample_dispatch_receipt(run_id);
+        primary_receipt.dispatch_packet_path = Some("/tmp/stale-packet.json".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&primary_receipt)
+            .await
+            .expect("persist primary dispatch receipt");
+
+        let mismatch = store
+            .run_graph_dispatch_receipt_for_packet(run_id, requested_packet_path)
+            .await
+            .expect("mismatching packet lookup should succeed");
+        assert!(mismatch.is_none());
+
+        let mut lane_receipt = sample_dispatch_receipt(run_id);
+        lane_receipt.dispatch_packet_path = Some(requested_packet_path.to_string());
+        store
+            .record_run_graph_dispatch_lane_receipt(&lane_receipt)
+            .await
+            .expect("persist matching lane receipt");
+
+        let matching = store
+            .run_graph_dispatch_receipt_for_packet(run_id, requested_packet_path)
+            .await
+            .expect("matching lane packet lookup should succeed")
+            .expect("matching lane receipt should be returned");
+        assert_eq!(
+            matching.dispatch_packet_path.as_deref(),
+            Some(requested_packet_path)
+        );
+
+        close_store_and_remove_root(store, root).await;
+    }
+
     #[test]
     fn downstream_ready_receipt_without_expected_next_node_cannot_select_handoff_target() {
         let mut status = sample_run_graph_status();

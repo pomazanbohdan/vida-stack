@@ -202,6 +202,7 @@ DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 DEFINE TABLE run_graph_owner_evidence SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
+DEFINE TABLE run_graph_dispatch_lane_receipt SCHEMALESS;
 DEFINE TABLE host_bridge_receipt_identity SCHEMALESS;
 DEFINE TABLE orchestrator_claim SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
@@ -1790,6 +1791,10 @@ hierarchy: framework,contracts
         let bootstrap_document = target.bootstrap_schema_document();
 
         assert!(state_store_open::state_schema_document().contains(&bootstrap_document));
+        assert!(
+            state_store_open::state_schema_document()
+                .contains("DEFINE TABLE run_graph_dispatch_lane_receipt SCHEMALESS;")
+        );
     }
 
     #[test]
