@@ -604,71 +604,73 @@ fn route_profile_mapping_source_path(
     None
 }
 
-fn route_executor_backend(
+fn configured_executor_backend_relation(
     compiled_bundle: &serde_json::Value,
-    route_key: &str,
+    task_class: &str,
     conversation_role: &str,
-) -> Option<String> {
-    json_lookup(
-        &compiled_bundle["agent_system"]["routing"][route_key],
-        &["executor_backend"],
-    )
-    .or_else(|| {
-        json_lookup(
-            &compiled_bundle["agent_system"]["routing"][conversation_role],
-            &["executor_backend"],
-        )
-    })
-    .or_else(|| {
-        json_lookup(
-            &compiled_bundle["agent_system"]["routing"]["default"],
-            &["executor_backend"],
-        )
-    })
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(str::to_string)
-}
-
-fn route_executor_backend_source_path(
-    compiled_bundle: &serde_json::Value,
-    route_key: &str,
-    conversation_role: &str,
-) -> Option<String> {
-    if json_lookup(
-        &compiled_bundle["agent_system"]["routing"][route_key],
-        &["executor_backend"],
-    )
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .is_some_and(|value| !value.is_empty())
-    {
-        return Some(format!("agent_system.routing.{route_key}.executor_backend"));
+) -> Result<(String, String), serde_json::Value> {
+    let relation = &compiled_bundle["carrier_runtime"]["executor_backend_relation"];
+    let backend_id = relation["backend_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let required_backend_class = relation["required_backend_class"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some((backend_id, required_backend_class)) = backend_id.zip(required_backend_class) else {
+        return Err(serde_json::json!({
+            "enabled": false,
+            "reason": "host_executor_backend_relation_missing",
+            "blocker_codes": ["host_executor_backend_relation_missing"],
+            "task_class": task_class,
+            "conversation_role": conversation_role,
+            "relation_source_path": "carrier_runtime.executor_backend_relation",
+        }));
+    };
+    let Some(backend) = compiled_bundle["agent_system"]["subagents"].get(backend_id) else {
+        return Err(serde_json::json!({
+            "enabled": false,
+            "reason": "host_executor_backend_relation_missing",
+            "blocker_codes": ["host_executor_backend_relation_missing"],
+            "task_class": task_class,
+            "conversation_role": conversation_role,
+            "selected_backend_id": backend_id,
+            "relation_source_path": "carrier_runtime.executor_backend_relation.backend_id",
+        }));
+    };
+    if backend["enabled"].as_bool() != Some(true) {
+        return Err(serde_json::json!({
+            "enabled": false,
+            "reason": "host_executor_backend_disabled",
+            "blocker_codes": ["host_executor_backend_disabled"],
+            "task_class": task_class,
+            "conversation_role": conversation_role,
+            "selected_backend_id": backend_id,
+            "relation_source_path": "carrier_runtime.executor_backend_relation.backend_id",
+        }));
     }
-    if json_lookup(
-        &compiled_bundle["agent_system"]["routing"][conversation_role],
-        &["executor_backend"],
-    )
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .is_some_and(|value| !value.is_empty())
-    {
-        return Some(format!(
-            "agent_system.routing.{conversation_role}.executor_backend"
-        ));
+    let actual_backend_class = backend["subagent_backend_class"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if actual_backend_class != Some(required_backend_class) {
+        return Err(serde_json::json!({
+            "enabled": false,
+            "reason": "host_executor_backend_class_mismatch",
+            "blocker_codes": ["host_executor_backend_class_mismatch"],
+            "task_class": task_class,
+            "conversation_role": conversation_role,
+            "selected_backend_id": backend_id,
+            "required_backend_class": required_backend_class,
+            "actual_backend_class": actual_backend_class,
+            "relation_source_path": "carrier_runtime.executor_backend_relation.required_backend_class",
+        }));
     }
-    if json_lookup(
-        &compiled_bundle["agent_system"]["routing"]["default"],
-        &["executor_backend"],
-    )
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .is_some_and(|value| !value.is_empty())
-    {
-        return Some("agent_system.routing.default.executor_backend".to_string());
-    }
-    None
+    Ok((
+        backend_id.to_string(),
+        "carrier_runtime.executor_backend_relation.backend_id".to_string(),
+    ))
 }
 
 fn mapped_profile_for_carrier(
@@ -1390,60 +1392,29 @@ fn build_runtime_assignment_from_dispatch_alias_with_readiness(
         .find(|value| !value.is_empty())
         .unwrap_or(fallback_task_class)
         .to_string();
-    let mut assignment = if probe_external_readiness {
-        build_runtime_assignment_from_resolved_constraints(
-            compiled_bundle,
-            alias_id,
-            &task_class,
-            &runtime_role,
-        )
-    } else {
-        build_runtime_assignment_preview_from_resolved_constraints(
-            compiled_bundle,
-            alias_id,
-            &task_class,
-            &runtime_role,
-        )
-    };
-    let alias_carrier_tier = alias
-        .get("carrier_tier")
-        .and_then(serde_json::Value::as_str)
+    let Some(alias_carrier_id) = alias["template_role_id"]
+        .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "dispatch_alias_carrier_relation_missing",
+            "blocker_codes": ["dispatch_alias_carrier_relation_missing"],
+            "dispatch_alias_id": alias_id,
+            "task_class": task_class,
+        });
+    };
+    let mut assignment = build_runtime_assignment_from_resolved_constraints_with_readiness(
+        compiled_bundle,
+        alias_id,
+        &task_class,
+        &runtime_role,
+        probe_external_readiness,
+        None,
+        Some(alias_carrier_id),
+    );
     if let Some(map) = assignment.as_object_mut() {
-        if let Some(carrier_tier) = alias_carrier_tier.as_ref() {
-            map.insert(
-                "activation_agent_type".to_string(),
-                serde_json::Value::String(carrier_tier.clone()),
-            );
-            map.insert(
-                "selected_tier".to_string(),
-                alias
-                    .get("concrete_tier")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::Value::String(carrier_tier.clone())),
-            );
-            map.insert(
-                "selected_concrete_tier".to_string(),
-                alias
-                    .get("concrete_tier")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::Value::String(carrier_tier.clone())),
-            );
-            map.insert(
-                "selected_carrier_provider".to_string(),
-                alias
-                    .get("carrier_provider")
-                    .cloned()
-                    .or_else(|| alias.get("model_provider").cloned())
-                    .unwrap_or(serde_json::Value::Null),
-            );
-            map.insert(
-                "selected_carrier_tier".to_string(),
-                serde_json::Value::String(carrier_tier.clone()),
-            );
-        }
         map.insert(
             "dispatch_alias_id".to_string(),
             serde_json::Value::String(alias_id.to_string()),
@@ -1528,6 +1499,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         execution_runtime_role,
         true,
         None,
+        None,
     )
 }
 
@@ -1543,6 +1515,7 @@ pub(crate) fn build_runtime_assignment_preview_from_resolved_constraints(
         task_class,
         execution_runtime_role,
         false,
+        None,
         None,
     )
 }
@@ -1561,6 +1534,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_stage_isolation(
         execution_runtime_role,
         true,
         stage_isolation,
+        None,
     )
 }
 
@@ -1571,6 +1545,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
     execution_runtime_role: &str,
     probe_external_readiness: bool,
     scoped_row_isolation: Option<&str>,
+    required_carrier_id: Option<&str>,
 ) -> serde_json::Value {
     let carrier_runtime = carrier_runtime_section(compiled_bundle);
     let selection_rule = selection_rule_for_runtime(carrier_runtime);
@@ -1645,6 +1620,11 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "rejected_candidates": [],
         });
     }
+    let (selected_dispatch_backend, selected_dispatch_backend_source_path) =
+        match configured_executor_backend_relation(compiled_bundle, task_class, conversation_role) {
+            Ok(relation) => relation,
+            Err(blocker) => return blocker,
+        };
     let Some(roles) = carrier_runtime["roles"].as_array() else {
         return serde_json::json!({
             "enabled": false,
@@ -1825,13 +1805,23 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         })
         .collect::<Vec<_>>();
 
-    let has_exact_match = candidates
-        .iter()
-        .any(|candidate| candidate.supports_runtime_role && candidate.supports_task_class);
+    let has_exact_match = candidates.iter().any(|candidate| {
+        candidate.supports_runtime_role
+            && candidate.supports_task_class
+            && required_carrier_id
+                .is_none_or(|required| candidate.role["role_id"].as_str() == Some(required))
+    });
     if !has_exact_match {
+        let reason = if required_carrier_id.is_some() {
+            "dispatch_alias_carrier_capability_mismatch"
+        } else {
+            "no_carrier_declares_runtime_role_and_task_class"
+        };
         return serde_json::json!({
             "enabled": false,
-            "reason": "no_carrier_declares_runtime_role_and_task_class",
+            "reason": reason,
+            "blocker_codes": if required_carrier_id.is_some() { vec![reason] } else { Vec::<&str>::new() },
+            "required_carrier_id": required_carrier_id,
             "task_class": task_class,
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role,
@@ -1858,6 +1848,12 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty());
+
+        if required_carrier_id.is_some_and(|required| {
+            candidate.role["role_id"].as_str() != Some(required)
+        }) {
+            reasons.push("dispatch_alias_carrier_relation_mismatch".to_string());
+        }
 
         if profile_id.is_none() {
             reasons.push("selected_model_profile_id_missing".to_string());
@@ -2108,18 +2104,6 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
     let selected_profile = &selected_candidate.profile;
     let selected_role_id = selected_role["role_id"].as_str().unwrap_or_default();
     let selected_profile_id = selected_profile["profile_id"].as_str().unwrap_or_default();
-    let selected_dispatch_backend =
-        route_executor_backend(compiled_bundle, task_class, conversation_role).unwrap_or_else(
-            || {
-                selected_role["role_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string()
-            },
-        );
-    let selected_dispatch_backend_source_path =
-        route_executor_backend_source_path(compiled_bundle, task_class, conversation_role)
-            .unwrap_or_else(|| format!("carrier_runtime.roles[{selected_role_id}].role_id"));
     let selected_route_profile_mapping = mapped_profile_for_carrier(
         route_profiles,
         selected_role["role_id"].as_str().unwrap_or_default(),
@@ -2656,13 +2640,21 @@ pub(crate) fn build_stage_attempt_policy_from_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_assignment, build_runtime_assignment_from_resolved_constraints,
-        build_runtime_assignment_preview_from_resolved_constraints,
-        build_stage_attempt_policy_from_config,
+        build_runtime_assignment as build_runtime_assignment_impl,
+        build_runtime_assignment_from_resolved_constraints as build_runtime_assignment_from_resolved_constraints_impl,
+        build_runtime_assignment_preview_from_dispatch_alias,
+        build_runtime_assignment_preview_from_resolved_constraints as build_runtime_assignment_preview_from_resolved_constraints_impl,
+        build_stage_attempt_policy_from_config as build_stage_attempt_policy_from_config_impl,
     };
     use crate::RuntimeConsumptionLaneSelection;
 
     fn compiled_bundle_with_roles(roles: Vec<serde_json::Value>) -> serde_json::Value {
+        let relation_seed = roles
+            .first()
+            .and_then(|role| role["role_id"].as_str())
+            .expect("assignment fixture must declare one carrier role");
+        let backend_id = format!("{relation_seed}-executor");
+        let backend_class = format!("{relation_seed}-executor-class");
         let worker_agents = roles
             .iter()
             .filter_map(|role| {
@@ -2678,9 +2670,21 @@ mod tests {
             })
             .collect::<serde_json::Map<_, _>>();
         serde_json::json!({
+            "agent_system": {
+                "subagents": {
+                    (backend_id.clone()): {
+                        "enabled": true,
+                        "subagent_backend_class": backend_class,
+                    }
+                }
+            },
             "carrier_runtime": {
                 "roles": roles,
                 "dispatch_aliases": [],
+                "executor_backend_relation": {
+                    "backend_id": backend_id,
+                    "required_backend_class": backend_class,
+                },
                 "worker_strategy": {
                     "selection_policy": {
                         "rule": "capability_first_then_score_guard_then_cheapest_tier",
@@ -2717,6 +2721,154 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn compiled_master_bundle() -> serde_json::Value {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut template: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(
+                root.join("docs/framework/templates/vida.config.yaml.template"),
+            )
+            .expect("framework template"),
+        )
+        .expect("framework template yaml");
+        let project_config: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(root.join("vida.config.yaml")).expect("project config"),
+        )
+        .expect("project config yaml");
+        template["agent_extensions"]["registries"] =
+            project_config["agent_extensions"]["registries"].clone();
+        let selected_system_id = template["host_environment"]["systems"]
+            .as_mapping()
+            .expect("template host systems")
+            .iter()
+            .find_map(|(system_id, system)| {
+                (system["enabled"].as_bool() == Some(true))
+                    .then(|| system_id.as_str().map(str::to_string))
+                    .flatten()
+            })
+            .expect("one enabled host system");
+        template["host_environment"]["cli_system"] = serde_yaml::Value::String(selected_system_id);
+        crate::compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root(
+            &template, &root,
+        )
+        .expect("master host system bundle must compile")
+    }
+
+    fn first_materialized_alias_request(
+        compiled_bundle: &serde_json::Value,
+    ) -> (String, String, String) {
+        compiled_bundle["carrier_runtime"]["dispatch_aliases"]
+            .as_array()
+            .expect("compiled dispatch aliases")
+            .iter()
+            .find_map(|alias| {
+                if alias["enabled"] == serde_json::Value::Bool(false)
+                    || alias["unresolved"] == serde_json::Value::Bool(true)
+                {
+                    return None;
+                }
+                Some((
+                    alias["role_id"].as_str()?.to_string(),
+                    alias["task_classes"]
+                        .as_array()?
+                        .first()?
+                        .as_str()?
+                        .to_string(),
+                    alias["template_role_id"].as_str()?.to_string(),
+                ))
+            })
+            .expect("one materialized dispatch alias")
+    }
+
+    fn configured_backend_identity(compiled_bundle: &serde_json::Value) -> (String, String) {
+        let relation = &compiled_bundle["carrier_runtime"]["executor_backend_relation"];
+        (
+            relation["backend_id"]
+                .as_str()
+                .expect("configured backend id")
+                .to_string(),
+            relation["required_backend_class"]
+                .as_str()
+                .expect("configured backend class")
+                .to_string(),
+        )
+    }
+
+    fn restore_configured_executor_backend(compiled_bundle: &mut serde_json::Value) {
+        let (backend_id, backend_class) = configured_backend_identity(compiled_bundle);
+        let agent_system = compiled_bundle["agent_system"]
+            .as_object_mut()
+            .expect("agent system object");
+        let subagents = agent_system
+            .entry("subagents".to_string())
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .expect("subagents object");
+        subagents.entry(backend_id).or_insert_with(|| {
+            serde_json::json!({
+                "enabled": true,
+                "subagent_backend_class": backend_class,
+            })
+        });
+    }
+
+    fn prepared_assignment_fixture_bundle(
+        compiled_bundle: &serde_json::Value,
+    ) -> serde_json::Value {
+        let mut prepared = compiled_bundle.clone();
+        restore_configured_executor_backend(&mut prepared);
+        prepared
+    }
+
+    fn build_runtime_assignment(
+        compiled_bundle: &serde_json::Value,
+        selection: &RuntimeConsumptionLaneSelection,
+        requires_design_gate: bool,
+    ) -> serde_json::Value {
+        build_runtime_assignment_impl(
+            &prepared_assignment_fixture_bundle(compiled_bundle),
+            selection,
+            requires_design_gate,
+        )
+    }
+
+    fn build_runtime_assignment_from_resolved_constraints(
+        compiled_bundle: &serde_json::Value,
+        conversation_role: &str,
+        task_class: &str,
+        execution_runtime_role: &str,
+    ) -> serde_json::Value {
+        build_runtime_assignment_from_resolved_constraints_impl(
+            &prepared_assignment_fixture_bundle(compiled_bundle),
+            conversation_role,
+            task_class,
+            execution_runtime_role,
+        )
+    }
+
+    fn build_runtime_assignment_preview_from_resolved_constraints(
+        compiled_bundle: &serde_json::Value,
+        conversation_role: &str,
+        task_class: &str,
+        execution_runtime_role: &str,
+    ) -> serde_json::Value {
+        build_runtime_assignment_preview_from_resolved_constraints_impl(
+            &prepared_assignment_fixture_bundle(compiled_bundle),
+            conversation_role,
+            task_class,
+            execution_runtime_role,
+        )
+    }
+
+    fn build_stage_attempt_policy_from_config(
+        compiled_bundle: &serde_json::Value,
+        stage_id: &str,
+    ) -> serde_json::Value {
+        build_stage_attempt_policy_from_config_impl(
+            &prepared_assignment_fixture_bundle(compiled_bundle),
+            stage_id,
+        )
     }
 
     #[test]
@@ -3131,64 +3283,159 @@ mod tests {
 
     #[test]
     fn configured_executor_backend_stays_separate_from_selected_carrier() {
-        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
-            "role_id": "middle",
-            "tier": "middle",
-            "rate": 4,
-            "normalized_cost_units": 4,
-            "default_runtime_role": "worker",
-            "runtime_roles": ["worker"],
-            "task_classes": ["test_authoring"],
-            "reasoning_band": "medium",
-            "default_model_profile": "codex_gpt55_medium_write",
-            "model_profiles": {
-                "codex_gpt55_medium_write": {
-                    "profile_id": "codex_gpt55_medium_write",
-                    "model_ref": "gpt-5.5",
-                    "provider": "openai",
-                    "reasoning_effort": "medium",
-                    "plan_mode_reasoning_effort": "high",
-                    "sandbox_mode": "workspace-write",
-                    "normalized_cost_units": 4,
-                    "speed_tier": "fast",
-                    "quality_tier": "medium",
-                    "write_scope": "workspace-write",
-                    "runtime_roles": ["worker"],
-                    "task_classes": ["test_authoring"],
-                    "readiness": { "required": true, "ready": true }
-                }
-            }
-        })]);
-        compiled_bundle.as_object_mut().unwrap().insert(
-            "agent_system".to_string(),
-            serde_json::json!({
-                "routing": {
-                    "default": {
-                        "executor_backend": "internal_subagents"
-                    }
-                }
-            }),
-        );
-
-        let assignment = build_runtime_assignment_from_resolved_constraints(
+        let compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, configured_carrier_id) =
+            first_materialized_alias_request(&compiled_bundle);
+        let (configured_backend_id, _) = configured_backend_identity(&compiled_bundle);
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
             &compiled_bundle,
-            "test_author",
-            "test_authoring",
-            "worker",
+            &alias_id,
+            &task_class,
         );
 
         assert_eq!(assignment["enabled"], true);
-        assert_eq!(assignment["selected_carrier_id"], "middle");
-        assert_eq!(assignment["activation_agent_type"], "middle");
-        assert_eq!(assignment["selected_backend_id"], "internal_subagents");
+        assert_eq!(assignment["selected_carrier_id"], configured_carrier_id);
+        assert_eq!(assignment["selected_backend_id"], configured_backend_id);
+        assert_ne!(
+            assignment["selected_carrier_id"],
+            assignment["selected_backend_id"]
+        );
+        assert!(assignment["selected_model_profile_id"].as_str().is_some());
+        assert!(assignment["selected_model_ref"].as_str().is_some());
         assert_eq!(
             assignment["selected_dispatch_backend_id"],
-            "internal_subagents"
+            assignment["selected_backend_id"]
         );
         assert_eq!(
             assignment["selection_source_paths"]["selected_backend_id"],
-            "agent_system.routing.default.executor_backend"
+            "carrier_runtime.executor_backend_relation.backend_id"
         );
+    }
+
+    #[test]
+    fn missing_executor_backend_relation_fails_closed_without_null_dispatch_identity() {
+        let mut compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, _) = first_materialized_alias_request(&compiled_bundle);
+        compiled_bundle["carrier_runtime"]
+            .as_object_mut()
+            .expect("carrier runtime object")
+            .remove("executor_backend_relation");
+
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            &alias_id,
+            &task_class,
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(
+            assignment["reason"],
+            "host_executor_backend_relation_missing"
+        );
+        assert!(assignment
+            .as_object()
+            .expect("assignment object")
+            .get("selected_backend_id")
+            .is_none());
+    }
+
+    #[test]
+    fn missing_related_executor_backend_fails_closed() {
+        let mut compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, _) = first_materialized_alias_request(&compiled_bundle);
+        let (backend_id, _) = configured_backend_identity(&compiled_bundle);
+        compiled_bundle["agent_system"]["subagents"]
+            .as_object_mut()
+            .expect("configured backends")
+            .remove(&backend_id);
+
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            &alias_id,
+            &task_class,
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(
+            assignment["reason"],
+            "host_executor_backend_relation_missing"
+        );
+        assert_eq!(assignment["selected_backend_id"], backend_id);
+    }
+
+    #[test]
+    fn disabled_related_executor_backend_fails_closed() {
+        let mut compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, _) = first_materialized_alias_request(&compiled_bundle);
+        let (backend_id, _) = configured_backend_identity(&compiled_bundle);
+        compiled_bundle["agent_system"]["subagents"][backend_id.as_str()]["enabled"] =
+            serde_json::json!(false);
+
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            &alias_id,
+            &task_class,
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "host_executor_backend_disabled");
+        assert_eq!(assignment["selected_backend_id"], backend_id);
+    }
+
+    #[test]
+    fn related_executor_backend_class_mismatch_fails_closed() {
+        let mut compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, _) = first_materialized_alias_request(&compiled_bundle);
+        let (backend_id, required_backend_class) = configured_backend_identity(&compiled_bundle);
+        let mismatched_class = format!("{required_backend_class}-mismatch");
+        compiled_bundle["agent_system"]["subagents"][backend_id.as_str()]
+            ["subagent_backend_class"] = serde_json::json!(mismatched_class);
+
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            &alias_id,
+            &task_class,
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "host_executor_backend_class_mismatch");
+        assert_eq!(assignment["selected_backend_id"], backend_id);
+        assert_eq!(assignment["required_backend_class"], required_backend_class);
+    }
+
+    #[test]
+    fn dispatch_alias_carrier_profile_capability_mismatch_fails_closed() {
+        let mut compiled_bundle = compiled_master_bundle();
+        let (alias_id, task_class, configured_carrier_id) =
+            first_materialized_alias_request(&compiled_bundle);
+        let mismatched_task_class = format!("{task_class}-not-configured");
+        let carrier = compiled_bundle["carrier_runtime"]["roles"]
+            .as_array_mut()
+            .expect("carrier roles")
+            .iter_mut()
+            .find(|carrier| carrier["role_id"].as_str() == Some(configured_carrier_id.as_str()))
+            .expect("alias carrier role");
+        carrier["task_classes"] = serde_json::json!([mismatched_task_class.clone()]);
+        for profile in carrier["model_profiles"]
+            .as_object_mut()
+            .expect("carrier model profiles")
+            .values_mut()
+        {
+            profile["task_classes"] = serde_json::json!([mismatched_task_class.clone()]);
+        }
+
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            &alias_id,
+            &task_class,
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(
+            assignment["reason"],
+            "dispatch_alias_carrier_capability_mismatch"
+        );
+        assert_eq!(assignment["required_carrier_id"], configured_carrier_id);
     }
 
     #[test]
@@ -4450,6 +4697,7 @@ mod tests {
             "agent_system".to_string(),
             serde_json::json!({"subagents": {"vida_coder": service_backend_entry}}),
         );
+        let (configured_backend_id, _) = configured_backend_identity(&compiled_bundle);
 
         let assignment = build_runtime_assignment_from_resolved_constraints(
             &compiled_bundle,
@@ -4460,7 +4708,11 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "vida_coder");
-        assert_eq!(assignment["selected_backend_id"], "vida_coder");
+        assert_eq!(assignment["selected_backend_id"], configured_backend_id);
+        assert_ne!(
+            assignment["selected_carrier_id"],
+            assignment["selected_backend_id"]
+        );
         assert_eq!(
             assignment["selected_model_profile_id"],
             "vida_coder_medium_write"

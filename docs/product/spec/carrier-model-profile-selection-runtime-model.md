@@ -115,6 +115,10 @@ Will implement / choose:
 - retain `tier` as provider/status compatibility metadata and read legacy rows as `carrier_tier := explicit carrier_tier || tier`,
 - keep the exhaustive generic tier catalog and admissible system/carrier combinations in the master config template; project config may only select or override declared options,
 - require every master-template host system/provider to declare `admissible_carrier_tiers`; absent an explicit documented capability constraint, the admissibility set is the complete catalog and therefore documents the full system-by-tier option matrix,
+- require exactly one configured carrier for every declared system/provider and admissible canonical tier; concrete provider `tier` values may repeat across those rows but never replace the canonical selector,
+- require every enabled dispatch alias to resolve to exactly one compatible configured carrier in every declared host-system option; an intentionally unavailable alias must carry an explicit config-owned disabled reason,
+- validate matrix completeness from the master template and configured alias registry without named system, carrier, model, role, or reasoning tables in Rust,
+- declare `host_environment.bootstrap_carrier_system` in config so pre-activation state/bootstrap validation can resolve the carrier catalog while `cli_system` still contains the activation placeholder; this selection is validation-only, must reference a declared system, and never authorizes execution,
 - validate `selected carrier_tier ∈ system admissible_carrier_tiers ∈ master tier_catalog`; dispatch aliases resolve against selected carriers rather than a free-standing tier label,
 - Why
   - provider identities and capability/economic ladders evolve independently; conflating them causes aliases to bind the wrong carrier or silently fall through,
@@ -136,6 +140,23 @@ Will implement / choose:
   - rewrite routing and runtime assignment into one global cross-backend optimizer immediately
 - ADR link if needed
   - none
+
+### 2a. Host carrier identity and executor backend identity are separate
+Will implement / choose:
+- each host system declares exactly one `executor_backend_relation` containing a configured backend id and its required backend class,
+- `host_environment.systems.<system>.carriers` is the only carrier-ranking input; `agent_system.subagents` supplies execution backends and never enters carrier ranking,
+- a dispatch alias binds assignment to its config-materialized `template_role_id`; runtime must not replace that carrier with a cheaper role, route, or backend,
+- an enabled host-system option must provide complete model-profile, runtime-role, task-class, cost, reasoning, and write-scope metadata for every declared carrier tier,
+- after carrier/profile selection, runtime resolves the executor only through the selected host system's relation; it never infers the backend from a route, runtime role, alias id, or selected carrier id,
+- a missing relation or referenced backend fails closed with `host_executor_backend_relation_missing`; a disabled backend fails with `host_executor_backend_disabled`; a class mismatch fails with `host_executor_backend_class_mismatch`; an alias/carrier capability mismatch fails with `dispatch_alias_carrier_capability_mismatch`,
+- successful assignment emits non-null `selected_carrier_id`, `selected_model_profile_id`, `selected_model_ref`, and `selected_backend_id`, with carrier and backend identities remaining independently auditable,
+- Why
+  - carriers answer who/how to reason, while executor backends answer where/how execution occurs; treating them as one identity allowed backend rows into carrier ranking and enabled silent route/role fallback,
+- Trade-offs
+  - every enabled host system must declare a resolvable backend relation and a complete carrier/profile catalog before assignment can proceed,
+- Alternatives considered
+  - append backend rows to carrier candidates or infer a backend from route/role/carrier ids,
+  - Rejected because both create implicit authority outside configuration and can produce null or mismatched dispatch identities.
 
 ### 3. `architect` defaults through the configured model-profile catalog
 Will implement / choose:
@@ -201,6 +222,9 @@ Will implement / choose:
   - `selection_strategy`
   - `rejected_candidates`
   - `normalized_cost_units`
+  - `executor_backend_relation.backend_id`
+  - `executor_backend_relation.required_backend_class`
+  - `selected_backend_id`
 - Migration or compatibility notes
   - old-style carrier/backends normalize into one synthetic profile keyed from legacy model/reasoning fields
   - `default_model` and `models_hint` remain readable compatibility input for external backends, but no longer act as the only source of truth
@@ -247,8 +271,12 @@ Will implement / choose:
   - no silent fallback from a selected profile to ambient backend state when the profile is present and admissible
   - no status surface that hides rejected or blocked profiles behind one generic pass/fail
   - no silent alias drop or provider-specific reinterpretation when `carrier_tier` is missing, unresolved, or ambiguous
+  - no executor-backend fallback from routing, runtime role, dispatch alias, or selected carrier identity
+  - no `agent_system.subagents` row in carrier/profile ranking
 - Required receipts / proofs / gates
   - runtime assignment must expose selected profile fields and rejected candidate reasons
+  - enabled host-system aliases must prove carrier/profile assignment, distinct configured executor resolution, and carrier-policy revalidation
+  - missing, disabled, wrong-class, and capability-mismatched config relations must have structured fail-closed proof
   - `.codex` parity must stay test-backed under the normalized profile contract
   - external/internal dispatch tests must prove selected profile pinning
 - Safety boundaries that must remain true during rollout
@@ -281,6 +309,7 @@ Will implement / choose:
   - runtime assignment profile selection and rejected-candidate reasons
   - synthetic-profile normalization from legacy config
   - external backend selected-profile resolution and zero-cost admissibility
+  - config-derived carrier/backend separation, non-null dispatch identity, and executor-relation failure matrix
 - Integration tests:
   - `.codex` render parity through `boot_smoke`
   - TaskFlow agent-system/runtime-assignment snapshot projection
@@ -346,10 +375,10 @@ Will implement / choose:
 artifact_path: product/spec/carrier-model-profile-selection-runtime-model
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-04-22
+artifact_revision: 2026-07-20
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/carrier-model-profile-selection-runtime-model.md
 created_at: 2026-04-22T09:43:31.446725801Z
-updated_at: 2026-04-22T10:13:29.70930412Z
+updated_at: 2026-07-20T00:00:00+03:00
 changelog_ref: carrier-model-profile-selection-runtime-model.changelog.jsonl

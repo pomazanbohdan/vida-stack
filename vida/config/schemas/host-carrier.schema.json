@@ -5,7 +5,7 @@
   "description": "Schema for the host_environment carrier fragment. Generic capability/economic selection uses carrier_tier; tier remains provider or status compatibility metadata.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["host_carrier_schema_ref", "systems"],
+  "required": ["host_carrier_schema_ref", "bootstrap_carrier_system", "systems"],
   "oneOf": [
     {
       "required": ["carrier_tier_contract"],
@@ -31,6 +31,10 @@
   "properties": {
     "host_carrier_schema_ref": {
       "const": "vida/config/schemas/host-carrier.schema.json"
+    },
+    "bootstrap_carrier_system": {
+      "$ref": "#/$defs/identifier",
+      "description": "Config-owned host-system selection used only while cli_system is an unresolved activation placeholder. It must reference a declared system and does not authorize execution."
     },
     "carrier_tier_contract": {
       "$ref": "#/$defs/carrierTierContract"
@@ -91,7 +95,7 @@
     "carrier": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["tier", "carrier_tier"],
+      "required": ["tier", "carrier_tier", "runtime_roles", "task_classes"],
       "properties": {
         "tier": {
           "type": "string",
@@ -101,14 +105,45 @@
         "carrier_tier": {
           "$ref": "#/$defs/identifier",
           "description": "Canonical generic capability/economic selector. Its admissible values are declared by the master template tier_catalog."
+        },
+        "runtime_roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Config-owned runtime-role capabilities used for dispatch-alias compatibility."
+        },
+        "task_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Config-owned task-class capabilities used for dispatch-alias compatibility."
+        }
+      }
+    },
+    "executorBackendRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend_id", "required_backend_class"],
+      "properties": {
+        "backend_id": {
+          "$ref": "#/$defs/identifier",
+          "description": "Config-owned executor backend identity for this host system; it remains separate from carrier identity."
+        },
+        "required_backend_class": {
+          "$ref": "#/$defs/identifier",
+          "description": "Exact backend class required from agent_system.subagents.<backend_id>.subagent_backend_class."
         }
       }
     },
     "masterHostSystem": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["admissible_carrier_tiers", "carriers"],
+      "description": "Exhaustive host-system option. Each admissible carrier tier must be instantiated by exactly one configured carrier; alias compatibility and ambiguity are validated from the config-derived matrix.",
+      "required": ["executor_backend_relation", "admissible_carrier_tiers", "carriers"],
       "properties": {
+        "executor_backend_relation": { "$ref": "#/$defs/executorBackendRelation" },
         "admissible_carrier_tiers": {
           "type": "array",
           "minItems": 1,
@@ -126,8 +161,9 @@
     "projectHostSystem": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["carriers"],
+      "required": ["executor_backend_relation", "carriers"],
       "properties": {
+        "executor_backend_relation": { "$ref": "#/$defs/executorBackendRelation" },
         "carriers": {
           "type": "object",
           "minProperties": 1,

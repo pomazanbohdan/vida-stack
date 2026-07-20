@@ -48,12 +48,29 @@ fn rendered_host_runtime_agent_catalog(
 }
 
 fn selected_host_runtime_system_id(config: &serde_yaml::Value) -> Option<String> {
-    yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
-        .filter(|system_id| {
-            !system_id.trim().is_empty()
-                && yaml_lookup(config, &["host_environment", "systems", system_id.trim()]).is_some()
-        })
+    let selected = yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
         .map(|system_id| system_id.trim().to_string())
+        .filter(|system_id| !system_id.is_empty());
+    if let Some(system_id) = selected
+        .as_deref()
+        .filter(|system_id| *system_id != crate::project_activator_surface::HOST_CLI_PLACEHOLDER)
+    {
+        let entry = yaml_lookup(config, &["host_environment", "systems", system_id])?;
+        return crate::project_activator_surface::host_cli_system_enabled(entry)
+            .then(|| system_id.to_string());
+    }
+
+    let bootstrap = yaml_string(yaml_lookup(
+        config,
+        &["host_environment", "bootstrap_carrier_system"],
+    ))?
+    .trim()
+    .to_string();
+    if bootstrap.is_empty() {
+        return None;
+    }
+    let entry = yaml_lookup(config, &["host_environment", "systems", &bootstrap])?;
+    crate::project_activator_surface::host_cli_system_enabled(entry).then_some(bootstrap)
 }
 
 fn render_host_runtime_config_toml(
@@ -905,6 +922,13 @@ mod tests {
         serde_yaml::from_str(&config_text).expect("project vida.config.yaml should parse")
     }
 
+    fn master_host_runtime_config() -> serde_yaml::Value {
+        let config_path = project_root().join("docs/framework/templates/vida.config.yaml.template");
+        let config_text =
+            fs::read_to_string(&config_path).expect("master vida config should be readable");
+        serde_yaml::from_str(&config_text).expect("master vida config should parse")
+    }
+
     fn configured_host_runtime_agent_catalog() -> Vec<serde_json::Value> {
         let config = configured_host_runtime_config();
         let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
@@ -913,6 +937,92 @@ mod tests {
             "project config should define carriers for host_environment.cli_system"
         );
         agent_catalog
+    }
+
+    #[test]
+    fn unresolved_template_selection_uses_configured_bootstrap_system() {
+        let config = master_host_runtime_config();
+        let bootstrap = super::yaml_string(super::yaml_lookup(
+            &config,
+            &["host_environment", "bootstrap_carrier_system"],
+        ))
+        .expect("master config bootstrap carrier system");
+        assert_eq!(
+            super::selected_host_runtime_system_id(&config),
+            Some(bootstrap)
+        );
+    }
+
+    #[test]
+    fn invalid_bootstrap_or_explicit_selection_fails_closed_without_fallback() {
+        let config = master_host_runtime_config();
+        let systems = config["host_environment"]["systems"]
+            .as_mapping()
+            .expect("master host systems");
+        let enabled_system = systems
+            .iter()
+            .find(|(_, entry)| crate::project_activator_surface::host_cli_system_enabled(entry))
+            .and_then(|(system_id, _)| system_id.as_str())
+            .expect("enabled host system")
+            .to_string();
+        let disabled_system = systems
+            .iter()
+            .find(|(_, entry)| !crate::project_activator_surface::host_cli_system_enabled(entry))
+            .and_then(|(system_id, _)| system_id.as_str())
+            .expect("disabled host system")
+            .to_string();
+        let unknown_system = format!("{enabled_system}-unknown");
+
+        let mut missing_bootstrap = config.clone();
+        missing_bootstrap["host_environment"]["cli_system"] = serde_yaml::Value::String(
+            crate::project_activator_surface::HOST_CLI_PLACEHOLDER.to_string(),
+        );
+        missing_bootstrap["host_environment"]
+            .as_mapping_mut()
+            .expect("host environment mapping")
+            .remove(&serde_yaml::Value::String(
+                "bootstrap_carrier_system".to_string(),
+            ));
+        assert_eq!(
+            super::selected_host_runtime_system_id(&missing_bootstrap),
+            None
+        );
+
+        let mut unknown_bootstrap = config.clone();
+        unknown_bootstrap["host_environment"]["bootstrap_carrier_system"] =
+            serde_yaml::Value::String(unknown_system.clone());
+        assert_eq!(
+            super::selected_host_runtime_system_id(&unknown_bootstrap),
+            None
+        );
+
+        let mut disabled_bootstrap = config.clone();
+        disabled_bootstrap["host_environment"]["bootstrap_carrier_system"] =
+            serde_yaml::Value::String(disabled_system.clone());
+        assert_eq!(
+            super::selected_host_runtime_system_id(&disabled_bootstrap),
+            None
+        );
+
+        let mut explicit_unknown = config.clone();
+        explicit_unknown["host_environment"]["cli_system"] =
+            serde_yaml::Value::String(unknown_system);
+        explicit_unknown["host_environment"]["bootstrap_carrier_system"] =
+            serde_yaml::Value::String(enabled_system.clone());
+        assert_eq!(
+            super::selected_host_runtime_system_id(&explicit_unknown),
+            None
+        );
+
+        let mut explicit_disabled = config;
+        explicit_disabled["host_environment"]["cli_system"] =
+            serde_yaml::Value::String(disabled_system);
+        explicit_disabled["host_environment"]["bootstrap_carrier_system"] =
+            serde_yaml::Value::String(enabled_system);
+        assert_eq!(
+            super::selected_host_runtime_system_id(&explicit_disabled),
+            None
+        );
     }
 
     #[test]
@@ -1177,6 +1287,97 @@ mod tests {
             );
             assert!(!config_toml.contains(&format!("[agents.{role}]")));
         }
+    }
+
+    #[test]
+    fn master_template_carriers_materialize_enabled_aliases_by_canonical_tier() {
+        let root = project_root();
+        let template: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(root.join("docs/framework/templates/vida.config.yaml.template"))
+                .expect("framework template should be readable"),
+        )
+        .expect("framework template should parse");
+        let configured_path = template["agent_extensions"]["registries"]["dispatch_aliases"]
+            .as_str()
+            .expect("template dispatch alias path");
+        let configured = root.join(configured_path);
+        let registry_path = if configured.is_file() {
+            configured
+        } else {
+            let suffix = std::path::Path::new(configured_path)
+                .strip_prefix(std::path::Path::new(".vida/project"))
+                .expect("template registry path should use project overlay root");
+            root.join("docs/process").join(suffix)
+        };
+        let registry: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(registry_path).expect("dispatch aliases should be readable"),
+        )
+        .expect("dispatch aliases should parse");
+        let aliases = crate::registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[])
+            .into_iter()
+            .filter(|alias| {
+                if alias["enabled"].as_bool() == Some(false) {
+                    assert!(
+                        alias["disabled_reason"]
+                            .as_str()
+                            .map(str::trim)
+                            .is_some_and(|reason| !reason.is_empty()),
+                        "disabled dispatch alias must declare a config-owned reason: {alias}"
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
+        let systems = template["host_environment"]["systems"]
+            .as_mapping()
+            .expect("template host systems");
+        let mut provider_tier_separation_observed = false;
+
+        for (system_id, system) in systems {
+            let system_id = system_id.as_str().expect("host system id");
+            let carriers = super::host_runtime_entry_carrier_catalog(Some(system));
+            assert!(
+                !carriers.is_empty(),
+                "host system {system_id} must configure carriers"
+            );
+            provider_tier_separation_observed |= carriers.iter().any(|carrier| {
+                crate::carrier_runtime_catalog::canonical_carrier_tier(carrier)
+                    != crate::carrier_runtime_catalog::concrete_carrier_tier(carrier)
+            });
+
+            let materialized =
+                super::materialize_host_runtime_dispatch_alias_catalog(&aliases, &carriers);
+            assert_eq!(materialized.len(), aliases.len());
+            for alias in &aliases {
+                let alias_id = alias["alias_id"].as_str().expect("dispatch alias id");
+                let row = materialized
+                    .iter()
+                    .find(|row| row["role_id"].as_str() == Some(alias_id))
+                    .expect("dispatch alias must be retained");
+                assert_eq!(
+                    row["unresolved"], false,
+                    "host system {system_id} alias {alias_id} must resolve: {}",
+                    row["unresolved_diagnostic"]
+                );
+                assert_eq!(row["carrier_tier"], alias["carrier_tier"]);
+                let selected_id = row["template_role_id"]
+                    .as_str()
+                    .expect("materialized alias must identify its configured carrier");
+                let selected = carriers
+                    .iter()
+                    .find(|carrier| carrier["role_id"].as_str() == Some(selected_id))
+                    .expect("selected carrier must come from config");
+                assert_eq!(row["tier"], selected["tier"]);
+                assert_eq!(row["concrete_tier"], selected["concrete_tier"]);
+            }
+        }
+
+        assert!(
+            provider_tier_separation_observed,
+            "master template must exercise distinct concrete and canonical carrier tiers"
+        );
     }
 
     #[test]

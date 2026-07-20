@@ -104,21 +104,30 @@ pub(crate) fn master_template_dispatch_alias_matrix(
                 let alias_tier = canonical_carrier_tier(alias);
                 let runtime_roles = json_string_list(alias.get("runtime_roles"));
                 let task_classes = json_string_list(alias.get("task_classes"));
-                let mut compatible = carriers.iter().filter(|carrier| {
-                    canonical_carrier_tier(carrier).as_deref() == alias_tier.as_deref()
-                        && (runtime_roles.is_empty()
-                            || runtime_roles.iter().any(|requested| {
-                                json_string_list(carrier.get("runtime_roles"))
-                                    .iter()
-                                    .any(|actual| actual == requested)
-                            }))
-                        && (task_classes.is_empty()
-                            || task_classes.iter().any(|requested| {
-                                json_string_list(carrier.get("task_classes"))
-                                    .iter()
-                                    .any(|actual| actual == requested)
-                            }))
-                });
+                let instantiated_carrier_count = carriers
+                    .iter()
+                    .filter(|carrier| {
+                        canonical_carrier_tier(carrier).as_deref() == Some(tier.as_str())
+                    })
+                    .count();
+                let compatible_carrier_count = carriers
+                    .iter()
+                    .filter(|carrier| {
+                        canonical_carrier_tier(carrier).as_deref() == alias_tier.as_deref()
+                            && (runtime_roles.is_empty()
+                                || runtime_roles.iter().any(|requested| {
+                                    json_string_list(carrier.get("runtime_roles"))
+                                        .iter()
+                                        .any(|actual| actual == requested)
+                                }))
+                            && (task_classes.is_empty()
+                                || task_classes.iter().any(|requested| {
+                                    json_string_list(carrier.get("task_classes"))
+                                        .iter()
+                                        .any(|actual| actual == requested)
+                                }))
+                    })
+                    .count();
                 let (status, diagnostic) = if alias_id.is_none() {
                     (
                         "diagnostic",
@@ -143,12 +152,28 @@ pub(crate) fn master_template_dispatch_alias_matrix(
                             "alias requests a different carrier tier",
                         )),
                     )
-                } else if compatible.next().is_none() {
+                } else if instantiated_carrier_count == 0 {
+                    (
+                        "diagnostic",
+                        Some((
+                            "carrier_tier_uninstantiated",
+                            "admissible carrier tier has no configured carrier",
+                        )),
+                    )
+                } else if compatible_carrier_count == 0 {
                     (
                         "diagnostic",
                         Some((
                             "carrier_capability_mismatch",
                             "no compatible carrier capability is materialized",
+                        )),
+                    )
+                } else if compatible_carrier_count > 1 {
+                    (
+                        "diagnostic",
+                        Some((
+                            "ambiguous_compatible_carriers",
+                            "multiple compatible carriers are materialized",
                         )),
                     )
                 } else {
@@ -170,6 +195,8 @@ pub(crate) fn master_template_dispatch_alias_matrix(
                     "carrier_tier": tier,
                     "alias_id": alias_id,
                     "source_index": source_index,
+                    "instantiated_carrier_count": instantiated_carrier_count,
+                    "compatible_carrier_count": compatible_carrier_count,
                     "status": status,
                     "admissible": status == "materialized",
                     "materialized": status == "materialized",
@@ -278,9 +305,21 @@ pub(crate) fn materialized_dispatch_aliases(
             carrier_roles,
         )
     } else {
+        let configured_host_roles =
+            super::project_activator_surface::overlay_host_cli_agent_catalog(config);
+        let config_declares_host_systems = config
+            .get("host_environment")
+            .and_then(|value| value.get("systems"))
+            .and_then(serde_yaml::Value::as_mapping)
+            .is_some();
+        let alias_carrier_roles = if config_declares_host_systems {
+            configured_host_roles.as_slice()
+        } else {
+            carrier_roles
+        };
         super::project_activator_surface::materialize_host_cli_dispatch_alias_catalog(
             dispatch_alias_rows,
-            carrier_roles,
+            alias_carrier_roles,
         )
     }
 }
@@ -351,8 +390,9 @@ pub(crate) fn carrier_dispatch_alias_validation_errors(
 #[cfg(test)]
 mod tests {
     use super::{
-        carrier_dispatch_alias_validation_errors, carrier_role_validation_errors,
-        duplicate_non_empty_carrier_role_ids, master_template_dispatch_alias_matrix,
+        canonical_carrier_tier, carrier_dispatch_alias_validation_errors,
+        carrier_role_validation_errors, duplicate_non_empty_carrier_role_ids,
+        master_template_dispatch_alias_matrix,
     };
 
     #[test]
@@ -532,6 +572,7 @@ mod tests {
         .expect("dispatch aliases yaml");
         let aliases = crate::registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
         let materialized = super::materialized_dispatch_aliases(&config, &aliases, &agents);
+        assert_eq!(materialized.len(), aliases.len());
         let ids = materialized
             .iter()
             .filter_map(|row| row["role_id"].as_str())
@@ -539,7 +580,85 @@ mod tests {
         for alias in aliases {
             let alias_id = alias["alias_id"].as_str().expect("alias id");
             assert!(ids.contains(alias_id), "alias {alias_id} must be retained");
+            let row = materialized
+                .iter()
+                .find(|row| row["role_id"].as_str() == Some(alias_id))
+                .expect("declared alias must be materialized");
+            assert_eq!(
+                row["unresolved"], false,
+                "project alias {alias_id} must resolve uniquely: {}",
+                row["unresolved_diagnostic"]
+            );
         }
+    }
+
+    #[test]
+    fn configured_host_aliases_exclude_general_backend_candidates() {
+        let (mut config, agents) = project_fixture();
+        let host_carrier = agents.first().expect("configured host carrier");
+        let host_carrier_id = host_carrier["role_id"]
+            .as_str()
+            .expect("configured host carrier id");
+        let carrier_tier =
+            super::canonical_carrier_tier(host_carrier).expect("configured canonical carrier tier");
+        let runtime_role = host_carrier["runtime_roles"]
+            .as_array()
+            .and_then(|roles| roles.first())
+            .and_then(serde_json::Value::as_str)
+            .expect("configured runtime role");
+        let task_class = host_carrier["task_classes"]
+            .as_array()
+            .and_then(|classes| classes.first())
+            .and_then(serde_json::Value::as_str)
+            .expect("configured task class");
+        let alias_id = format!("{host_carrier_id}-alias-fixture");
+        let alias = serde_json::json!({
+            "alias_id": alias_id,
+            "carrier_tier": carrier_tier,
+            "runtime_role": runtime_role,
+            "runtime_roles": [runtime_role],
+            "task_classes": [task_class],
+            "developer_instructions": "config-derived alias fixture",
+        });
+        let mut mixed_candidates = agents.clone();
+        let mut general_backend = host_carrier.clone();
+        general_backend["role_id"] =
+            serde_json::Value::String(format!("{host_carrier_id}-general-backend-fixture"));
+        mixed_candidates.push(general_backend);
+
+        let resolved = super::materialized_dispatch_aliases(
+            &config,
+            std::slice::from_ref(&alias),
+            &mixed_candidates,
+        );
+        assert_eq!(resolved[0]["unresolved"], false);
+        assert_eq!(resolved[0]["template_role_id"], host_carrier_id);
+
+        let selected_system = config["host_environment"]["cli_system"]
+            .as_str()
+            .expect("selected host system");
+        config["host_environment"]["cli_system"] =
+            serde_yaml::Value::String(format!("{selected_system}-unknown-fixture"));
+        let blocked = super::materialized_dispatch_aliases(
+            &config,
+            std::slice::from_ref(&alias),
+            &mixed_candidates,
+        );
+        assert_eq!(blocked[0]["unresolved"], true);
+        assert_eq!(
+            blocked[0]["unresolved_diagnostic"]["code"],
+            "carrier_tier_not_available"
+        );
+    }
+
+    #[test]
+    fn installed_template_projection_matches_authoritative_master_bytes() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let owner = std::fs::read(root.join("docs/framework/templates/vida.config.yaml.template"))
+            .expect("authoritative framework template");
+        let projection = std::fs::read(root.join("install/assets/vida.config.yaml.template"))
+            .expect("installed template projection");
+        assert_eq!(projection, owner);
     }
 
     #[test]
@@ -569,19 +688,38 @@ mod tests {
         )
         .expect("dispatch aliases registry yaml");
         let aliases = crate::registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
-        let tier_count = template["host_environment"]["carrier_tier_contract"]["tier_catalog"]
+        let tier_catalog = template["host_environment"]["carrier_tier_contract"]["tier_catalog"]
             .as_sequence()
-            .map(Vec::len)
             .expect("template tier catalog");
-        let system_count = template["host_environment"]["systems"]
+        let systems = template["host_environment"]["systems"]
             .as_mapping()
-            .map(serde_yaml::Mapping::len)
             .expect("template systems");
+        assert!(!tier_catalog.is_empty());
+        assert!(!systems.is_empty());
+        assert!(!aliases.is_empty());
+
+        let enabled_aliases = aliases
+            .iter()
+            .filter(|alias| {
+                if alias["enabled"].as_bool() == Some(false) {
+                    assert!(
+                        alias["disabled_reason"]
+                            .as_str()
+                            .map(str::trim)
+                            .is_some_and(|reason| !reason.is_empty()),
+                        "disabled dispatch alias must declare a config-owned reason: {alias}"
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
         let matrix = master_template_dispatch_alias_matrix(&template, &aliases);
-        assert_eq!(tier_count, 4);
-        assert_eq!(system_count, 4);
-        assert_eq!(aliases.len(), 9);
-        assert_eq!(matrix.len(), tier_count * system_count * aliases.len());
+        assert_eq!(
+            matrix.len(),
+            tier_catalog.len() * systems.len() * aliases.len()
+        );
         let keys = matrix
             .iter()
             .map(|row| row["key"].to_string())
@@ -593,5 +731,144 @@ mod tests {
                 Some("materialized") | Some("diagnostic")
             ) && (row["materialized"].as_bool() == Some(true) || row["diagnostic"].is_object())
         }));
+
+        for (system_id, system) in systems {
+            let system_id = system_id.as_str().expect("host system id");
+            let admissible_tiers = system["admissible_carrier_tiers"]
+                .as_sequence()
+                .expect("host system admissible tiers")
+                .iter()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|tier| !tier.is_empty())
+                .collect::<std::collections::BTreeSet<_>>();
+            let carriers = system["carriers"]
+                .as_mapping()
+                .expect("host system carriers");
+
+            for tier in &admissible_tiers {
+                let instantiated = carriers
+                    .values()
+                    .filter_map(|carrier| serde_json::to_value(carrier).ok())
+                    .filter(|carrier| canonical_carrier_tier(carrier).as_deref() == Some(*tier))
+                    .count();
+                assert_eq!(
+                    instantiated, 1,
+                    "host system {system_id} must instantiate admissible tier {tier} exactly once"
+                );
+            }
+            for carrier in carriers.values() {
+                let carrier = serde_json::to_value(carrier).expect("carrier json projection");
+                let carrier_tier =
+                    canonical_carrier_tier(&carrier).expect("configured canonical carrier tier");
+                assert!(
+                    admissible_tiers.contains(carrier_tier.as_str()),
+                    "host system {system_id} carrier tier {carrier_tier} must be declared admissible"
+                );
+            }
+
+            for alias in &enabled_aliases {
+                let alias_id = alias["alias_id"].as_str().expect("dispatch alias id");
+                let alias_tier =
+                    canonical_carrier_tier(alias).expect("dispatch alias carrier tier");
+                assert!(
+                    admissible_tiers.contains(alias_tier.as_str()),
+                    "host system {system_id} must admit enabled alias {alias_id} tier {alias_tier}"
+                );
+                let relations = matrix
+                    .iter()
+                    .filter(|row| {
+                        row["system_id"].as_str() == Some(system_id)
+                            && row["carrier_tier"].as_str() == Some(alias_tier.as_str())
+                            && row["alias_id"].as_str() == Some(alias_id)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    relations.len(),
+                    1,
+                    "host system {system_id} alias {alias_id} must have one matrix relation"
+                );
+                let relation = relations[0];
+                assert_eq!(
+                    relation["status"], "materialized",
+                    "host system {system_id} alias {alias_id} must resolve: {}",
+                    relation["diagnostic"]
+                );
+                assert_eq!(relation["instantiated_carrier_count"], 1);
+                assert_eq!(relation["compatible_carrier_count"], 1);
+            }
+        }
+    }
+
+    #[test]
+    fn enabled_master_system_aliases_build_complete_runtime_assignments() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut template: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(
+                root.join("docs/framework/templates/vida.config.yaml.template"),
+            )
+            .expect("framework template"),
+        )
+        .expect("framework template yaml");
+        let project_config: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(root.join("vida.config.yaml")).expect("project config"),
+        )
+        .expect("project config yaml");
+        template["agent_extensions"]["registries"] =
+            project_config["agent_extensions"]["registries"].clone();
+        let enabled_system_ids = template["host_environment"]["systems"]
+            .as_mapping()
+            .expect("template host systems")
+            .iter()
+            .filter_map(|(system_id, system)| {
+                (system["enabled"].as_bool() == Some(true))
+                    .then(|| system_id.as_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+
+        for system_id in enabled_system_ids {
+            template["host_environment"]["cli_system"] =
+                serde_yaml::Value::String(system_id.clone());
+            let compiled = crate::compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root(
+                &template,
+                &root,
+            )
+            .unwrap_or_else(|error| panic!("system {system_id} bundle must compile: {error}"));
+            let aliases = compiled["carrier_runtime"]["dispatch_aliases"]
+                .as_array()
+                .expect("compiled dispatch aliases");
+            for alias in aliases.iter().filter(|alias| {
+                alias["enabled"] != serde_json::Value::Bool(false)
+                    && alias["unresolved"] != serde_json::Value::Bool(true)
+            }) {
+                let alias_id = alias["role_id"].as_str().expect("dispatch alias id");
+                let task_class = alias["task_classes"]
+                    .as_array()
+                    .and_then(|classes| classes.first())
+                    .and_then(serde_json::Value::as_str)
+                    .expect("dispatch alias task class");
+                let assignment =
+                    crate::runtime_assignment_builder::build_runtime_assignment_from_dispatch_alias(
+                        &compiled, alias_id, task_class,
+                    );
+                assert!(
+                    assignment["selected_backend_id"].as_str().is_some(),
+                    "system {system_id} alias {alias_id} must select a backend: {assignment}"
+                );
+                assert!(
+                    assignment["selected_carrier_id"].as_str().is_some(),
+                    "system {system_id} alias {alias_id} must select a carrier: {assignment}"
+                );
+                let revalidation = crate::carrier_runtime_projection::carrier_policy_revalidation(
+                    &compiled,
+                    &assignment,
+                );
+                assert_eq!(
+                    revalidation["status"], "pass",
+                    "system {system_id} alias {alias_id} assignment must revalidate: {revalidation}"
+                );
+            }
+        }
     }
 }

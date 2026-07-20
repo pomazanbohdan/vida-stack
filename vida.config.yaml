@@ -36,6 +36,7 @@ operator_surfaces:
 
 host_environment:
   cli_system: codex
+  bootstrap_carrier_system: codex
   host_carrier_schema_ref: vida/config/schemas/host-carrier.schema.json
   carrier_tier_contract_ref: docs/framework/templates/vida.config.yaml.template#host_environment.carrier_tier_contract
   host_agent_bridge_contract:
@@ -117,9 +118,15 @@ host_environment:
               - specification
               - planning
               - coach
+              - implementation
               - implementation_medium
+              - delivery_task
+              - execution_block
               - test_authoring
               - regression_test
+              - refactor
+              - architecture_cleanup
+              - normalization
               - quality_gate
             readiness:
               mode: codex_profile
@@ -136,9 +143,15 @@ host_environment:
           - specification
           - planning
           - coach
+          - implementation
           - implementation_medium
+          - delivery_task
+          - execution_block
           - test_authoring
           - regression_test
+          - refactor
+          - architecture_cleanup
+          - normalization
           - quality_gate
       senior:
         tier: senior
@@ -224,6 +237,9 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      executor_backend_relation:
+        backend_id: internal_subagents
+        required_backend_class: internal
       execution_boundary: parent_host_session
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt

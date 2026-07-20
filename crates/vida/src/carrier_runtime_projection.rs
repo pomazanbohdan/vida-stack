@@ -38,199 +38,6 @@ fn selected_runtime_root(
     root.join(".host-runtime")
 }
 
-fn subagent_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
-    let Some(entries) = crate::yaml_lookup(config, &["agent_system", "subagents"])
-        .and_then(serde_yaml::Value::as_mapping)
-    else {
-        return Vec::new();
-    };
-
-    let mut rows = entries
-        .iter()
-        .filter_map(|(key, entry)| {
-            let backend_id = key.as_str()?.trim();
-            if backend_id.is_empty()
-                || !crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false)
-            {
-                return None;
-            }
-            let backend_class = crate::yaml_string(crate::yaml_lookup(
-                entry,
-                &["subagent_backend_class"],
-            ))
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                if backend_id == "internal_subagents" {
-                    "internal".to_string()
-                } else {
-                    "external_cli".to_string()
-                }
-            });
-
-            let fallback_rate = crate::yaml_string(
-                crate::yaml_lookup(entry, &["budget_cost_units"]),
-            )
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .or_else(|| {
-                crate::yaml_string(crate::yaml_lookup(entry, &["normalized_cost_units"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-            })
-            .or_else(|| {
-                crate::yaml_string(crate::yaml_lookup(entry, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-            })
-            .unwrap_or(0);
-            let fallback_runtime_roles =
-                crate::yaml_string_list(crate::yaml_lookup(entry, &["runtime_roles"]));
-            let fallback_task_classes =
-                crate::yaml_string_list(crate::yaml_lookup(entry, &["task_classes"]));
-            let profile_projection =
-                crate::model_profile_contract::normalize_profile_projection_from_yaml(
-                    backend_id,
-                    entry,
-                    Some(fallback_rate),
-                    &fallback_runtime_roles,
-                    &fallback_task_classes,
-                );
-
-            let model_profiles = profile_projection["model_profiles"]
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
-            let runtime_roles = if fallback_runtime_roles.is_empty() {
-                let mut roles = model_profiles
-                    .values()
-                    .flat_map(|profile| {
-                        profile["runtime_roles"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::to_string)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                roles.sort();
-                roles.dedup();
-                roles
-            } else {
-                fallback_runtime_roles
-            };
-            let task_classes = if fallback_task_classes.is_empty() {
-                let mut task_classes = model_profiles
-                    .values()
-                    .flat_map(|profile| {
-                        profile["task_classes"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::to_string)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                task_classes.sort();
-                task_classes.dedup();
-                task_classes
-            } else {
-                fallback_task_classes
-            };
-            let default_runtime_role = crate::yaml_string(crate::yaml_lookup(
-                entry,
-                &["default_runtime_role"],
-            ))
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                profile_projection["model_profiles"]
-                    .as_object()
-                    .and_then(|profiles| {
-                        profile_projection["default_model_profile"]
-                            .as_str()
-                            .and_then(|profile_id| profiles.get(profile_id))
-                    })
-                    .and_then(|profile| {
-                        profile["runtime_roles"]
-                            .as_array()
-                            .and_then(|roles| roles.first())
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    })
-            })
-            .or_else(|| runtime_roles.first().cloned())
-            .unwrap_or_default();
-            let reasoning_band = crate::yaml_string(crate::yaml_lookup(entry, &["reasoning_band"]))
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| {
-                    profile_projection["current_reasoning_effort"]
-                        .as_str()
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
-
-            Some(serde_json::json!({
-                "role_id": backend_id,
-                "description": crate::yaml_string(crate::yaml_lookup(entry, &["description"]))
-                    .unwrap_or_else(|| format!("{} backend `{backend_id}`", backend_class)),
-                "config_file": "",
-                "model": profile_projection["model"].clone(),
-                "model_provider": profile_projection["model_provider"].clone(),
-                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
-                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
-                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
-                "default_model_profile": profile_projection["default_model_profile"].clone(),
-                "model_profiles": profile_projection["model_profiles"].clone(),
-                "tier": crate::yaml_string(crate::yaml_lookup(entry, &["orchestration_tier"]))
-                    .unwrap_or_else(|| backend_id.to_string()),
-                "carrier_tier": crate::yaml_string(crate::yaml_lookup(entry, &["carrier_tier"]))
-                    .or_else(|| crate::yaml_string(crate::yaml_lookup(entry, &["orchestration_tier"])))
-                    .unwrap_or_else(|| backend_id.to_string()),
-                "rate": fallback_rate,
-                "normalized_cost_units": profile_projection["model_profiles"]
-                    .as_object()
-                    .and_then(|profiles| {
-                        profile_projection["default_model_profile"]
-                            .as_str()
-                            .and_then(|profile_id| profiles.get(profile_id))
-                    })
-                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
-                    .unwrap_or(fallback_rate),
-                "reasoning_band": reasoning_band,
-                "default_runtime_role": default_runtime_role,
-                "runtime_roles": runtime_roles,
-                "task_classes": task_classes,
-                "backend_class": backend_class,
-                "carrier_kind": format!("{backend_class}_backend"),
-                "write_scope": crate::yaml_string(crate::yaml_lookup(entry, &["write_scope"])).unwrap_or_default(),
-                "speed_tier": profile_projection["model_profiles"]
-                    .as_object()
-                    .and_then(|profiles| {
-                        profile_projection["default_model_profile"]
-                            .as_str()
-                            .and_then(|profile_id| profiles.get(profile_id))
-                    })
-                    .and_then(|profile| profile["speed_tier"].as_str())
-                    .unwrap_or_default(),
-                "quality_tier": profile_projection["model_profiles"]
-                    .as_object()
-                    .and_then(|profiles| {
-                        profile_projection["default_model_profile"]
-                            .as_str()
-                            .and_then(|profile_id| profiles.get(profile_id))
-                    })
-                    .and_then(|profile| profile["quality_tier"].as_str())
-                    .unwrap_or_default(),
-            }))
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["role_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["role_id"].as_str().unwrap_or_default())
-    });
-    rows
-}
-
 pub(crate) fn build_carrier_runtime_projection(
     config: &serde_yaml::Value,
     root: &Path,
@@ -242,9 +49,8 @@ pub(crate) fn build_carrier_runtime_projection(
     let runtime_root =
         selected_runtime_root(root, selected_host_cli_system, host_cli_system_registry);
     let runtime_config = read_simple_toml_sections(&runtime_root.join("config.toml"));
-    let mut carrier_roles =
+    let carrier_roles =
         crate::carrier_runtime_catalog::resolved_carrier_roles(config, &runtime_root);
-    carrier_roles.extend(subagent_runtime_candidate_rows(config));
     let dispatch_alias_rows = registry_rows_by_key(
         dispatch_aliases_registry,
         "dispatch_aliases",
@@ -284,6 +90,12 @@ pub(crate) fn build_carrier_runtime_projection(
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
+    let executor_backend_relation = selected_host_cli_system
+        .and_then(|system_id| host_cli_system_registry.get(system_id))
+        .and_then(|system| crate::yaml_lookup(system, &["executor_backend_relation"]))
+        .cloned()
+        .and_then(|relation| serde_json::to_value(relation).ok())
+        .unwrap_or(serde_json::Value::Null);
 
     let mut validation_errors =
         crate::carrier_runtime_catalog::carrier_role_validation_errors(&carrier_roles);
@@ -329,6 +141,8 @@ pub(crate) fn build_carrier_runtime_projection(
             "pricing_policy": pricing_policy,
             "model_selection": model_selection,
             "stage_attempt_policies": stage_attempt_policies,
+            "selected_host_system_id": selected_host_cli_system,
+            "executor_backend_relation": executor_backend_relation,
         }),
         validation_errors,
     }
@@ -769,8 +583,7 @@ pub(crate) fn carrier_policy_revalidation_for_project_root(
         selected_host_cli_system.as_deref(),
         &host_cli_system_registry,
     );
-    let mut roles = crate::carrier_runtime_catalog::resolved_carrier_roles(&config, &runtime_root);
-    roles.extend(subagent_runtime_candidate_rows(&config));
+    let roles = crate::carrier_runtime_catalog::resolved_carrier_roles(&config, &runtime_root);
     let current_bundle = serde_json::json!({
         "agent_system": serde_json::to_value(
             crate::yaml_lookup(&config, &["agent_system"])
@@ -787,7 +600,6 @@ pub(crate) fn carrier_policy_revalidation_for_project_root(
 mod tests {
     use super::build_carrier_runtime_projection;
     use super::selected_runtime_root;
-    use super::subagent_runtime_candidate_rows;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
@@ -1091,118 +903,99 @@ host_environment:
     }
 
     #[test]
-    fn subagent_runtime_candidate_rows_preserve_profile_only_backend_projection() {
-        let config = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-agent_system:
-  subagents:
-    opencode_cli:
-      enabled: true
-      subagent_backend_class: external_cli
-      default_model_profile: opencode_minimax_free_review
-      budget_cost_units: 0
-      model_profiles:
-        opencode_minimax_free_review:
-          provider: opencode
-          model_ref: opencode/minimax-m2.5-free
-          reasoning_effort: provider_default
-          normalized_cost_units: 0
-          speed_tier: fast
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - coach
-            - verifier
-          task_classes:
-            - review
-            - verification
-          readiness:
-            mode: external_cli_profile
-            required: true
-"#,
+    fn configured_backends_never_enter_host_carrier_ranking() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut template: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(
+                root.join("docs/framework/templates/vida.config.yaml.template"),
+            )
+            .expect("framework template"),
         )
-        .expect("config should parse");
-
-        let rows = subagent_runtime_candidate_rows(&config);
-
-        assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row["role_id"], "opencode_cli");
-        assert_eq!(row["default_model_profile"], "opencode_minimax_free_review");
-        assert_eq!(row["model"], "opencode/minimax-m2.5-free");
-        assert_eq!(row["model_provider"], "opencode");
-        assert_eq!(row["model_reasoning_effort"], "provider_default");
-        assert_eq!(row["normalized_cost_units"], 0);
-        assert_eq!(row["default_runtime_role"], "coach");
-        assert_eq!(row["runtime_roles"], json!(["coach", "verifier"]));
-        assert_eq!(row["task_classes"], json!(["review", "verification"]));
-        assert_eq!(row["speed_tier"], "fast");
-        assert_eq!(row["quality_tier"], "medium");
-        assert_eq!(
-            row["model_profiles"]["opencode_minimax_free_review"]["normalized_cost_units"],
-            0
-        );
-    }
-
-    #[test]
-    fn subagent_runtime_candidate_rows_project_service_executor_backend_capability() {
-        let config = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-agent_system:
-  subagents:
-    vida_coder:
-      enabled: true
-      subagent_backend_class: service_executor
-      default_model_profile: vida_coder_medium_write
-      budget_cost_units: 3
-      write_scope: guard_required_packet_owned_paths
-      runtime_roles:
-        - worker
-      task_classes:
-        - implementation
-      dispatch:
-        command: vida-coder
-        mode: service
-      readiness:
-        adapter:
-          mode: command_found
-          command: sh
-        write_scope_guard:
-          mode: adapter_feature_required
-          required_for_write_profiles: true
-          fail_closed_until_available: true
-      model_profiles:
-        vida_coder_medium_write:
-          provider: vida-coder
-          model_ref: vida-coder/medium
-          reasoning_effort: medium
-          normalized_cost_units: 3
-          speed_tier: medium
-          quality_tier: high
-          write_scope: guard_required_packet_owned_paths
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
-"#,
+        .expect("framework template yaml");
+        let project_config: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(root.join("vida.config.yaml")).expect("project config"),
         )
-        .expect("config should parse");
+        .expect("project config yaml");
+        template["agent_extensions"]["registries"] =
+            project_config["agent_extensions"]["registries"].clone();
+        let enabled_system_ids = template["host_environment"]["systems"]
+            .as_mapping()
+            .expect("template host systems")
+            .iter()
+            .filter_map(|(system_id, system)| {
+                (system["enabled"].as_bool() == Some(true))
+                    .then(|| system_id.as_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        let backend_ids = template["agent_system"]["subagents"]
+            .as_mapping()
+            .expect("configured execution backends")
+            .keys()
+            .filter_map(serde_yaml::Value::as_str)
+            .map(str::to_string)
+            .collect::<std::collections::BTreeSet<_>>();
 
-        let rows = subagent_runtime_candidate_rows(&config);
+        for system_id in enabled_system_ids {
+            template["host_environment"]["cli_system"] =
+                serde_yaml::Value::String(system_id.clone());
+            let configured_carrier_ids = template["host_environment"]["systems"][&system_id]
+                ["carriers"]
+                .as_mapping()
+                .expect("configured host carriers")
+                .keys()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(str::to_string)
+                .collect::<std::collections::BTreeSet<_>>();
+            let compiled = crate::compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root(
+                &template,
+                &root,
+            )
+            .unwrap_or_else(|error| panic!("system {system_id} bundle must compile: {error}"));
+            let ranked_carrier_ids = compiled["carrier_runtime"]["roles"]
+                .as_array()
+                .expect("ranked carrier roles")
+                .iter()
+                .filter_map(|role| role["role_id"].as_str())
+                .map(str::to_string)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(ranked_carrier_ids, configured_carrier_ids);
+            assert!(ranked_carrier_ids.is_disjoint(&backend_ids));
 
-        assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row["role_id"], "vida_coder");
-        assert_eq!(row["backend_class"], "service_executor");
-        assert_eq!(row["carrier_kind"], "service_executor_backend");
-        assert_eq!(row["write_scope"], "guard_required_packet_owned_paths");
-        assert_eq!(row["runtime_roles"], json!(["worker"]));
-        assert_eq!(row["task_classes"], json!(["implementation"]));
-        assert_eq!(row["default_model_profile"], "vida_coder_medium_write");
-        assert_eq!(
-            row["model_profiles"]["vida_coder_medium_write"]["model_ref"],
-            "vida-coder/medium"
-        );
+            for alias in compiled["carrier_runtime"]["dispatch_aliases"]
+                .as_array()
+                .expect("compiled dispatch aliases")
+                .iter()
+                .filter(|alias| {
+                    alias["enabled"] != serde_json::Value::Bool(false)
+                        && alias["unresolved"] != serde_json::Value::Bool(true)
+                })
+            {
+                let alias_id = alias["role_id"].as_str().expect("dispatch alias id");
+                let task_class = alias["task_classes"]
+                    .as_array()
+                    .and_then(|classes| classes.first())
+                    .and_then(serde_json::Value::as_str)
+                    .expect("dispatch alias task class");
+                let assignment =
+                    crate::runtime_assignment_builder::build_runtime_assignment_from_dispatch_alias(
+                        &compiled, alias_id, task_class,
+                    );
+                let selected_carrier = assignment["selected_carrier_id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("missing carrier: {assignment}"));
+                let selected_backend = assignment["selected_backend_id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("missing backend: {assignment}"));
+                assert!(configured_carrier_ids.contains(selected_carrier));
+                assert!(backend_ids.contains(selected_backend));
+                let revalidation = super::carrier_policy_revalidation(&compiled, &assignment);
+                assert_eq!(
+                    revalidation["status"], "pass",
+                    "system {system_id} alias {alias_id} must revalidate: {revalidation}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1253,71 +1046,6 @@ agent_system:
         assert_eq!(
             projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]["model_profile_id"],
             "codex_medium"
-        );
-    }
-
-    #[test]
-    fn subagent_runtime_candidate_rows_include_internal_model_profiles() {
-        let config = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-agent_system:
-  subagents:
-    internal_subagents:
-      enabled: true
-      subagent_backend_class: internal
-      default_model_profile: internal_fast
-      budget_cost_units: 10
-      runtime_roles:
-        - worker
-        - verifier
-      task_classes:
-        - implementation
-        - verification
-      model_profiles:
-        internal_fast:
-          provider: internal
-          model_ref: internal_fast
-          reasoning_effort: low
-          normalized_cost_units: 6
-          speed_tier: fast
-          quality_tier: medium_high
-          write_scope: orchestrator_native
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
-        internal_review:
-          provider: internal
-          model_ref: internal_review
-          reasoning_effort: high
-          normalized_cost_units: 8
-          speed_tier: medium
-          quality_tier: high
-          write_scope: read_only
-          runtime_roles:
-            - verifier
-          task_classes:
-            - verification
-"#,
-        )
-        .expect("config should parse");
-
-        let rows = subagent_runtime_candidate_rows(&config);
-
-        assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row["role_id"], "internal_subagents");
-        assert_eq!(row["backend_class"], "internal");
-        assert_eq!(row["carrier_kind"], "internal_backend");
-        assert_eq!(row["default_model_profile"], "internal_fast");
-        assert_eq!(row["model"], "internal_fast");
-        assert_eq!(
-            row["model_profiles"]["internal_fast"]["model_ref"],
-            "internal_fast"
-        );
-        assert_eq!(
-            row["model_profiles"]["internal_review"]["model_ref"],
-            "internal_review"
         );
     }
 }
