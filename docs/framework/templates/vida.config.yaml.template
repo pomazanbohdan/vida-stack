@@ -24,6 +24,26 @@ language_policy:
 
 host_environment:
   cli_system: __HOST_CLI_SYSTEM__
+  host_carrier_schema_ref: vida/config/schemas/host-carrier.schema.json
+  carrier_tier_contract:
+    schema_version: host-carrier.v1
+    canonical_field: carrier_tier
+    legacy_compatibility_field: tier
+    legacy_fallback: explicit_carrier_tier_or_legacy_tier
+    unresolved_alias_policy: fail_closed_diagnostic
+    tier_catalog:
+      - tier_id: junior
+        capability_class: bounded_write
+        selection_order: 10
+      - tier_id: middle
+        capability_class: balanced_delivery
+        selection_order: 20
+      - tier_id: senior
+        capability_class: independent_verification
+        selection_order: 30
+      - tier_id: architect
+        capability_class: architecture_escalation
+        selection_order: 40
   host_agent_bridge_contract:
     schema_version: 1
     selection_mode: configured_host_capability
@@ -41,6 +61,7 @@ host_environment:
     agents: &codex_agent_catalog
       junior:
         tier: junior
+        carrier_tier: junior
         rate: 1
         reasoning_band: high
         model: gpt-5.6-luna
@@ -87,6 +108,7 @@ host_environment:
           - execution_block
       middle:
         tier: middle
+        carrier_tier: middle
         rate: 4
         reasoning_band: xhigh
         model: gpt-5.6-luna
@@ -163,6 +185,7 @@ host_environment:
           - regression_test
       senior:
         tier: senior
+        carrier_tier: senior
         rate: 16
         reasoning_band: max
         model: gpt-5.6-luna
@@ -202,6 +225,7 @@ host_environment:
           - release_readiness
       architect:
         tier: architect
+        carrier_tier: architect
         rate: 48
         reasoning_band: medium
         model: gpt-5.6-sol
@@ -241,6 +265,11 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      admissible_carrier_tiers:
+        - junior
+        - middle
+        - senior
+        - architect
       execution_boundary: parent_host_session
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
@@ -395,12 +424,18 @@ host_environment:
     qwen:
       enabled: true
       execution_class: external
+      admissible_carrier_tiers:
+        - junior
+        - middle
+        - senior
+        - architect
       materialization_mode: copy_tree_only
       template_root: .qwen
       runtime_root: .qwen
       carriers:
         qwen-primary:
           tier: qwen
+          carrier_tier: middle
           rate: 4
           reasoning_band: medium
           default_runtime_role: worker
@@ -412,12 +447,18 @@ host_environment:
     hermes:
       enabled: false
       execution_class: external
+      admissible_carrier_tiers:
+        - junior
+        - middle
+        - senior
+        - architect
       materialization_mode: copy_tree_only
       template_root: .hermes
       runtime_root: .hermes
       carriers:
         hermes-primary:
           tier: hermes
+          carrier_tier: middle
           rate: 4
           reasoning_band: medium
           default_runtime_role: worker
@@ -429,6 +470,11 @@ host_environment:
     pi:
       enabled: false
       execution_class: external
+      admissible_carrier_tiers:
+        - junior
+        - middle
+        - senior
+        - architect
       materialization_mode: pi_agent_projection_render
       template_root: .pi
       runtime_root: .pi
@@ -459,6 +505,7 @@ host_environment:
       carriers:
         pi-primary:
           tier: pi
+          carrier_tier: middle
           rate: 4
           reasoning_band: medium
           default_runtime_role: worker
@@ -2872,10 +2919,10 @@ agent_system:
 # artifact_path: framework/templates/vida.config.yaml.template
 # artifact_type: framework_template
 # artifact_version: '1'
-# artifact_revision: '2026-07-19'
+# artifact_revision: '2026-07-20'
 # schema_version: '1'
 # status: canonical
 # source_path: docs/framework/templates/vida.config.yaml.template
 # created_at: '2026-03-10T02:13:40+02:00'
-# updated_at: 2026-07-19T00:00:00+03:00
+# updated_at: 2026-07-20T00:00:00+03:00
 # changelog_ref: vida.config.yaml.template.changelog.jsonl

@@ -12,7 +12,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - default framework agent templates become available only after the selected host CLI template is materialized
 - the current supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`
 - framework template inventory may include multiple built-in host systems, but the active host-system list is owned by `vida.config.yaml -> host_environment.systems`
-- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`; compatibility projections such as `host_environment.codex.agents` may exist but must not become a second canonical source
+- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`; every declared carrier has canonical generic `carrier_tier` plus legacy provider/status `tier`; compatibility projections such as `host_environment.codex.agents` may exist but must not become a second canonical source
 - host CLI execution posture is owned by `vida.config.yaml -> host_environment.systems.<system>.execution_class` so internal vs external runtime handling does not depend on vendor id heuristics
 - canonical runtime outputs are `carrier_runtime` and `runtime_assignment`
 - `codex_multi_agent` and `codex_runtime_assignment` are compatibility aliases only and must not be treated as owner-law canonical fields
@@ -28,7 +28,11 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - Pi host files under `.pi/**` are rendered host affordance projections from VIDA config/runtime truth, not a source of carrier, model-profile, write-scope, closure, or delegation authority
 - Pi projected agents must carry no-recursion, no-self-dispatch, and no-closure-authority semantics; canonical delegated execution remains TaskFlow/`vida agent-init` with receipt-backed runtime assignment
 - project activation materializes host templates using the configured `materialization_mode` per system
-- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`
+- runtime chooses the cheapest capable configured generic `carrier_tier` that still satisfies the local score guard from `.vida/state/worker-strategy.json`; the exhaustive tier catalog and admissible combinations come from the master template, while project config selects or overrides declared options
+- when a dispatch alias names a missing or ambiguous `carrier_tier`, runtime emits a deterministic fail-closed diagnostic; it must not silently drop the selector or reinterpret a provider-specific `tier`
+- legacy carrier records are read as `carrier_tier := explicit carrier_tier || legacy tier` during compatibility migration, with the fallback recorded in diagnostics
+- every master-template host system/provider declares `admissible_carrier_tiers`; the default is the complete master tier catalog, and only an explicit documented capability constraint may narrow it
+- config validation enforces `selected carrier_tier ∈ system admissible_carrier_tiers ∈ master tier_catalog`; aliases resolve to selected carriers rather than merely matching a catalog label
 - local score guard evidence comes from orchestrator-classified attempts; low
   scores from timeout, shutdown, empty artifact, missing telemetry, or
   false-green validation should narrow or escalate the next packet, but do not

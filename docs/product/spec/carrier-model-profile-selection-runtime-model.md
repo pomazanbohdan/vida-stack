@@ -5,14 +5,14 @@ Status: active product model
 Use this model to define the carrier/model-profile contract for runtime selection, dispatch truth, and operator proof.
 
 ## Summary
-- Model: unify carrier + model_profile selection/runtime truth for Codex carriers, internal subagent profiles, and external CLI backends
+- Model: unify generic `carrier_tier` + carrier + model_profile selection/runtime truth for Codex carriers, internal subagent profiles, and external CLI backends
 - Owner layer: `mixed`
 - Runtime surface: `launcher | project activation | taskflow | status`
 - Status: active product model
 
 ## Current Context
 - Existing system overview
-  - `vida.config.yaml` already carries concrete Codex carrier metadata (`model`, `model_reasoning_effort`, `sandbox_mode`, `rate`, `runtime_roles`, `task_classes`) for `junior`, `middle`, `senior`, and `architect`.
+  - `vida.config.yaml` carries concrete carrier metadata (`model`, `model_reasoning_effort`, `sandbox_mode`, `rate`, `runtime_roles`, `task_classes`) plus explicit generic `carrier_tier`; legacy `tier` remains provider/status compatibility metadata.
   - external CLI backends already carry `default_model`, `models_hint`, readiness, and dispatch pinning hooks, but not a canonical `model_profiles` registry.
   - internal subagents already expose profile ids (`internal_fast`, `internal_arch`, `internal_review`), but those ids are not normalized into one model-profile contract with cost/reasoning/readiness metadata.
 - Key components and relationships
@@ -22,18 +22,18 @@ Use this model to define the carrier/model-profile contract for runtime selectio
   - `crates/vida/src/runtime_dispatch_execution.rs` and `crates/vida/src/runtime_dispatch_state.rs` already know how to pass `model`, `sandbox_mode`, and `model_reasoning_effort`, but only from legacy carrier/backend fields.
   - `crates/vida/src/status_surface_host_agents.rs`, `crates/vida/src/status_surface_external_cli.rs`, and `crates/vida/src/taskflow_consume_bundle.rs` surface carrier/runtime state to operators, but they do not yet emit model-profile truth.
 - Current pain point or gap
-  - runtime proof still tells only `selected_tier` / `model_reasoning_effort`, not `selected_model_profile_id`, `selected_model_ref`, or rejected candidate reasons.
+  - runtime proof still tells only `selected_tier` / `model_reasoning_effort`, not `selected_carrier_tier`, `selected_model_profile_id`, `selected_model_ref`, or rejected candidate reasons.
   - external and internal profile metadata live in incompatible shapes, so selection, status, and dispatch do not share one contract.
   - rendered `.codex` parity is now correct in the current workspace for `senior` and `architect`, but the renderer still lacks a profile-aware contract and explicit parity proof against new-style `model_profiles`.
 
 ## Goal
 - What this change should achieve
-  - normalize legacy carrier/backend/profile metadata into one canonical `model_profile` contract
+  - normalize legacy carrier/backend/profile metadata into one canonical `model_profile` contract while separating generic `carrier_tier` from provider/status `tier`
   - expose selected model-profile truth in runtime assignment, dispatch receipts, and operator status
   - make internal and external dispatch consume the resolved model profile instead of ad hoc legacy fields
   - keep legacy config fields readable through synthetic default-profile normalization
 - What success looks like
-  - every carrier/backend/profile-bearing surface has at least one resolved `model_profile`
+  - every carrier/backend/profile-bearing surface has an explicit or normalized `carrier_tier` and at least one resolved `model_profile`
   - runtime assignment exposes `selected_model_profile_id`, `selected_model_ref`, `selected_reasoning_effort`, `selection_strategy`, and `rejected_candidates`
   - external CLI status shows profile readiness and selected/default profile truth
   - `.codex` materialization remains parity-safe under legacy and new-style profile config
@@ -46,12 +46,13 @@ Use this model to define the carrier/model-profile contract for runtime selectio
 
 ### Functional Requirements
 - Must-have behavior
-  - support both legacy carrier fields (`model`, `model_reasoning_effort`, `sandbox_mode`) and new-style `default_model_profile` plus `model_profiles`
+  - support both legacy carrier fields (`model`, `model_reasoning_effort`, `sandbox_mode`, `tier`) and new-style `carrier_tier`, `default_model_profile` plus `model_profiles`
   - synthesize one default profile for legacy carriers/backends so runtime logic sees one uniform shape
   - expose profile truth for internal Codex carriers, internal subagent profiles, and external CLI backends
   - keep zero-cost/free model profiles admissible instead of dropping them by `rate == 0`
   - use the resolved model profile for internal/external dispatch pinning and status visibility
   - emit selected and rejected candidate diagnostics in runtime assignment and status/operator surfaces
+  - resolve dispatch aliases only against the master-template tier catalog; missing or ambiguous aliases fail closed with a deterministic diagnostic
 - Integration points
   - `vida.config.yaml`
   - host template materialization
@@ -105,8 +106,23 @@ Will implement / choose:
   - some fields will exist both as compatibility aliases and canonical normalized profile metadata during the bridge window
 - Alternatives considered
   - hard-cut to `model_profiles` only and reject legacy config
-- ADR link if this must become a durable decision record
-  - none
+ - ADR link if this must become a durable decision record
+   - none
+
+### 1a. Generic carrier tier is distinct from legacy provider/status tier
+Will implement / choose:
+- use explicit `carrier_tier` as the capability/economic selector for every declared carrier option,
+- retain `tier` as provider/status compatibility metadata and read legacy rows as `carrier_tier := explicit carrier_tier || tier`,
+- keep the exhaustive generic tier catalog and admissible system/carrier combinations in the master config template; project config may only select or override declared options,
+- require every master-template host system/provider to declare `admissible_carrier_tiers`; absent an explicit documented capability constraint, the admissibility set is the complete catalog and therefore documents the full system-by-tier option matrix,
+- validate `selected carrier_tier ∈ system admissible_carrier_tiers ∈ master tier_catalog`; dispatch aliases resolve against selected carriers rather than a free-standing tier label,
+- Why
+  - provider identities and capability/economic ladders evolve independently; conflating them causes aliases to bind the wrong carrier or silently fall through,
+- Trade-offs
+  - compatibility diagnostics must remain visible while legacy rows migrate,
+- Alternatives considered
+  - infer generic tiers from provider names or hardcode a Rust ladder,
+  - Rejected because both create a second authority and make unresolved aliases non-deterministic.
 
 ### 2. Runtime assignment becomes profile-aware inside the current carrier ladder
 Will implement / choose:
@@ -176,6 +192,8 @@ Will implement / choose:
   - `rejected_candidate`
 - Receipts / runtime state / config fields
   - `default_model_profile`
+  - `carrier_tier`
+  - `tier` (legacy provider/status compatibility)
   - `model_profiles`
   - `selected_model_profile_id`
   - `selected_model_ref`
@@ -206,6 +224,8 @@ Will implement / choose:
 
 ### Bounded File Set
 - `vida.config.yaml`
+- `docs/framework/templates/vida.config.yaml.template`
+- `vida/config/schemas/host-carrier.schema.json`
 - `crates/vida/src/host_runtime_materialization.rs`
 - `crates/vida/src/runtime_assignment_builder.rs`
 - `crates/vida/src/runtime_assignment_policy.rs`
@@ -226,6 +246,7 @@ Will implement / choose:
   - no silent drop of zero-cost profiles
   - no silent fallback from a selected profile to ambient backend state when the profile is present and admissible
   - no status surface that hides rejected or blocked profiles behind one generic pass/fail
+  - no silent alias drop or provider-specific reinterpretation when `carrier_tier` is missing, unresolved, or ambiguous
 - Required receipts / proofs / gates
   - runtime assignment must expose selected profile fields and rejected candidate reasons
   - `.codex` parity must stay test-backed under the normalized profile contract
@@ -292,6 +313,7 @@ Will implement / choose:
   - docs/schema first, then normalization/assignment, then dispatch/status/proofs
 - Migration / compatibility notes
   - legacy fields stay accepted until the profile contract is fully propagated through status and dispatch
+  - legacy carrier rows use the explicit-or-legacy fallback for `carrier_tier`; fallback use is diagnostic evidence, not a new canonical option
   - route-based backend selection remains the planner boundary for this slice
 - Operator or user restart / restart-notice requirements
   - rerun `vida project-activator --host-cli-system codex --json` after profile-aware materialization changes when `.codex` output must be refreshed

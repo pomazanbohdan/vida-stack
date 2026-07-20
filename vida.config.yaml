@@ -36,6 +36,8 @@ operator_surfaces:
 
 host_environment:
   cli_system: codex
+  host_carrier_schema_ref: vida/config/schemas/host-carrier.schema.json
+  carrier_tier_contract_ref: docs/framework/templates/vida.config.yaml.template#host_environment.carrier_tier_contract
   host_agent_bridge_contract:
     schema_version: 1
     selection_mode: configured_host_capability
@@ -48,6 +50,7 @@ host_environment:
     agents: &codex_agent_catalog
       junior:
         tier: junior
+        carrier_tier: junior
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
         reasoning_band: high
@@ -84,6 +87,7 @@ host_environment:
           - execution_block
       middle:
         tier: middle
+        carrier_tier: middle
         description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
         rate: 4
         reasoning_band: xhigh
@@ -138,6 +142,7 @@ host_environment:
           - quality_gate
       senior:
         tier: senior
+        carrier_tier: senior
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
         reasoning_band: max
@@ -178,6 +183,7 @@ host_environment:
           - release_readiness
       architect:
         tier: architect
+        carrier_tier: architect
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 48
         reasoning_band: medium

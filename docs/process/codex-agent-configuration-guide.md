@@ -77,7 +77,7 @@ Project-local Codex configuration should live under:
 8. `.codex/templates/codex-cli.config.toml`
    - legacy Codex CLI launcher/materialization template
 9. `vida.config.yaml -> host_environment.systems.codex.carriers`
-   - canonical project-owned source of truth for carrier-tier metadata, rates, runtime-role fit, task-class fit, and profile-aware model selection metadata (`default_model_profile`, `model_profiles`)
+   - canonical project-owned selection surface for generic `carrier_tier`, legacy provider/status `tier`, rates, runtime-role fit, task-class fit, and profile-aware model selection metadata (`default_model_profile`, `model_profiles`); the exhaustive tier catalog is declared by the master template and validated by `vida/config/schemas/host-carrier.schema.json`
 10. `vida.config.yaml -> host_environment.codex.agents`
    - compatibility projection for older Codex consumers; it must not become a second canonical carrier source.
 11. `vida.config.yaml -> host_environment.systems.codex.app`
@@ -92,13 +92,13 @@ Project-local Codex configuration should live under:
 Layout rule:
 
 1. the active root Codex session is the orchestrator and must remain outside the delegated agent list,
-2. `vida.config.yaml -> host_environment.systems.codex.carriers` owns carrier-tier/rate/runtime-role/task-class metadata,
+2. `vida.config.yaml -> host_environment.systems.codex.carriers` owns explicit generic `carrier_tier` selection plus legacy `tier` compatibility metadata, rates, runtime-role/task-class metadata,
    and also owns the canonical default-profile/model-profile catalog for each Codex carrier tier,
 3. `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
 4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps, carrier-tier mappings, and internal alias mappings,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
 6. project activation should render `.codex/**` from the overlay catalog while preserving the framework-owned tier instruction bodies from the template source,
-7. project-visible agent activation should target the carrier tiers declared in `vida.config.yaml -> host_environment.systems.codex.carriers`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
+7. project-visible agent activation should target the generic carrier tiers declared by the master template and selected in `vida.config.yaml -> host_environment.systems.codex.carriers`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
 8. VIDA role/skill/profile/team meaning still comes from the project activation layer, not from Codex TOML alone.
 9. Role/profile/flow catalogs should be sourced from the agent-extension YAML registries; `vida.config.yaml` may narrow them, but runtime should not require duplicated id lists when the registries already define the active set.
 10. the root session is a bootstrap and coordination owner, not a separate long-lived local implementer role.
@@ -158,7 +158,7 @@ Internal dispatch aliases:
 
 1. canonical `dispatch_aliases` should live in the registry path declared by `vida.config.yaml -> agent_extensions.registries.dispatch_aliases`,
 2. it is not the primary visible agent model of the project,
-3. the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded ladder,
+3. the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded ladder; dispatch aliases are generic `carrier_tier` selectors and unresolved or ambiguous selectors fail closed with a diagnostic,
 4. runtime role is activation-time state such as `worker`, `coach`, `verifier`, or `solution_architect`.
 5. the current rendered Codex App alias files are:
    - `.codex/agents/development_specification.toml`
@@ -172,7 +172,10 @@ Ownership note:
 
 1. optional named aliases are not Rust-owned catalogs,
 2. they should be treated as internal dispatch projections from the configured dispatch-alias registry, not as the operational team model,
-3. carrier tiers remain the primary activated agent ids; alias ids, runtime-role coverage, task-class coverage, and overlay instruction bodies should be changed in overlay/template owner state and then re-materialized through activation.
+3. generic carrier tiers remain the primary activated agent ids; alias ids, runtime-role coverage, task-class coverage, and overlay instruction bodies should be changed in overlay/template owner state and then re-materialized through activation,
+4. compatibility readers use `carrier_tier := explicit carrier_tier || legacy tier`; a legacy fallback must be visible in runtime diagnostics and must not silently redefine an alias.
+5. the master template declares `admissible_carrier_tiers` for each host system/provider; unless a capability constraint is explicit, every catalog tier is admissible, while project config remains a selection/override surface,
+6. validation requires each selected carrier tier to belong to its system admissibility set and the master catalog; aliases must resolve to a selected carrier or fail closed.
 
 Packet posture:
 
@@ -192,7 +195,7 @@ Coordination pattern:
 2. `junior`, `middle`, and `senior` are the normal delegated tiers for eligible work,
 3. the root session should stay in orchestrator scope after bootstrap rather than collapsing into a second local implementer,
 4. runtime role law still distinguishes `worker`, `coach`, `verifier`, and `solution_architect`; Codex tiers are execution carriers, not replacements for those framework roles,
-5. runtime should activate the chosen carrier tier and pass the lawful `runtime_role` explicitly instead of presenting alias ids as the primary project role model,
+5. runtime should activate the chosen generic `carrier_tier` and pass the lawful `runtime_role` explicitly instead of presenting alias ids as the primary project role model,
 6. `architect` is not part of the normal steady-state path and should activate only when the first-line tiers cannot close lawfully.
 7. a user request to continue development does not reassign the root session into `junior`.
 

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vida://config/schema/host-carrier-v1",
+  "title": "VIDA host carrier catalog",
+  "description": "Schema for the host_environment carrier fragment. Generic capability/economic selection uses carrier_tier; tier remains provider or status compatibility metadata.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["host_carrier_schema_ref", "systems"],
+  "oneOf": [
+    {
+      "required": ["carrier_tier_contract"],
+      "properties": {
+        "systems": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/masterHostSystem" }
+        }
+      }
+    },
+    {
+      "required": ["carrier_tier_contract_ref"],
+      "properties": {
+        "systems": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/projectHostSystem" }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "host_carrier_schema_ref": {
+      "const": "vida/config/schemas/host-carrier.schema.json"
+    },
+    "carrier_tier_contract": {
+      "$ref": "#/$defs/carrierTierContract"
+    },
+    "carrier_tier_contract_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project-selection reference to the exhaustive carrier-tier contract in the master template."
+    },
+    "systems": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/projectHostSystem"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "carrierTierContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "canonical_field",
+        "legacy_compatibility_field",
+        "legacy_fallback",
+        "unresolved_alias_policy",
+        "tier_catalog"
+      ],
+      "properties": {
+        "schema_version": { "const": "host-carrier.v1" },
+        "canonical_field": { "const": "carrier_tier" },
+        "legacy_compatibility_field": { "const": "tier" },
+        "legacy_fallback": { "const": "explicit_carrier_tier_or_legacy_tier" },
+        "unresolved_alias_policy": { "const": "fail_closed_diagnostic" },
+        "tier_catalog": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tier_id", "capability_class", "selection_order"],
+            "properties": {
+              "tier_id": { "$ref": "#/$defs/identifier" },
+              "capability_class": { "$ref": "#/$defs/identifier" },
+              "selection_order": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "carrier": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["tier", "carrier_tier"],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Legacy provider/status compatibility identity; not the generic selection key."
+        },
+        "carrier_tier": {
+          "$ref": "#/$defs/identifier",
+          "description": "Canonical generic capability/economic selector. Its admissible values are declared by the master template tier_catalog."
+        }
+      }
+    },
+    "masterHostSystem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["admissible_carrier_tiers", "carriers"],
+      "properties": {
+        "admissible_carrier_tiers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "System/provider admissibility set. Every value must resolve in the master tier_catalog, and each selected carrier_tier must be a member; cross-reference validation is config-derived."
+        },
+        "carriers": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/carrier" }
+        }
+      }
+    },
+    "projectHostSystem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["carriers"],
+      "properties": {
+        "carriers": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/carrier" }
+        }
+      }
+    }
+  }
+}

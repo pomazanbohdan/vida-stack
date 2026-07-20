@@ -63,11 +63,14 @@ Project-local Codex skill note:
 
 ## Carrier And Model Authority
 
-1. `vida.config.yaml` is the authority for carrier tier, model profile, model ref, reasoning effort, and normalized cost units.
+1. `vida.config.yaml` is the authority for generic `carrier_tier`, legacy provider/status `tier`, model profile, model ref, reasoning effort, and normalized cost units; the exhaustive tier catalog is declared by the master template referenced from `host_environment.carrier_tier_contract_ref`.
 2. Framework-level docs own the model-profile schema, pricing semantics, and selection behavior.
-3. Project profile fields such as `preferred_backend` and dispatch-alias `carrier_tier` are selectors into the configured carrier catalog, not a second model matrix.
+3. Project profile fields such as `preferred_backend` and dispatch-alias `carrier_tier` are selectors into the configured generic carrier catalog, not a second model matrix; an unresolved alias is a deterministic fail-closed diagnostic.
 4. Project extension bridge files must not name concrete model refs, providers, pricing, or model profile ids unless the framework schema explicitly requires a selector field for import/export.
 5. Materialized host files such as `.codex/agents/*.toml` are projections of this catalog and must be refreshed when they drift.
+6. `carrier_tier` is the canonical capability/economic selector; `tier` remains a compatibility field and is used only as the documented legacy fallback when the explicit selector is absent (`carrier_tier := explicit || tier`).
+7. Each master-template host-system/provider option declares `admissible_carrier_tiers`; absent an explicit capability constraint, that set is the complete master tier catalog, so the option matrix is the full system-by-tier cross-product.
+8. Validation is `selected carrier_tier ∈ system admissible_carrier_tiers ∈ master tier_catalog`; dispatch aliases resolve against selected carriers, and missing or ambiguous resolution fails closed.
 
 ## Activation Path
 

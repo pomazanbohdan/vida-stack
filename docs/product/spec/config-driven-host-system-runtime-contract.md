@@ -5,7 +5,7 @@ Status: active product contract
 Current product contract for config-driven host-system discovery, runtime-root resolution, and active host-system selection.
 
 ## Summary
-- Contract: Keep framework templates available for all host CLI systems, but derive the active host-system list, runtime roots, and selection behavior only from `vida.config.yaml`; remove hardcoded host-system inventories from runtime logic; add Hermes as a template/config-backed external system.
+- Contract: Keep framework templates available for all host CLI systems, but derive the active host-system list, runtime roots, and generic carrier-tier selection behavior only from `vida.config.yaml`; remove hardcoded host-system inventories from runtime logic; add Hermes as a template/config-backed external system.
 - Owner layer: `mixed`
 - Runtime surface: `project activation | launcher | taskflow`
 - Status: active product contract
@@ -44,6 +44,12 @@ Current product contract for config-driven host-system discovery, runtime-root r
 
 ### Functional Requirements
 - Must derive the active host-system registry from `vida.config.yaml -> host_environment.systems`.
+- Must require every declared carrier option to expose generic `carrier_tier`; provider/status `tier` remains compatibility metadata and never replaces the generic selector when it is explicit.
+- Must source the exhaustive generic tier catalog and admissible system/carrier combinations from `docs/framework/templates/vida.config.yaml.template`; project config may select or override only declared options.
+- Must require every master-template host system/provider option to declare `admissible_carrier_tiers`; the default is the complete catalog, and an explicit documented capability constraint is the only lawful narrowing mechanism.
+- Must validate `selected carrier_tier ∈ system admissible_carrier_tiers ∈ master tier_catalog`; project selections remain a subset and do not redefine admissibility.
+- Must resolve aliases against selected carriers, not only catalog labels; a catalog tier with no selected admissible carrier is unresolved.
+- Must fail closed with a deterministic diagnostic when a dispatch alias references an unresolved or ambiguous generic tier.
 - Must treat template roots as inventory/materialization sources, not as the active-system authority.
 - Must let runtime-root detection succeed when at least one configured runtime root is materialized, without requiring a hardcoded built-in list.
 - Must add Hermes as a selectable external host system and external CLI subagent/backend through config/template surfaces.
@@ -133,6 +139,10 @@ Will implement / choose:
   - `host_environment.systems.<system>.template_root`
   - `host_environment.systems.<system>.runtime_root`
   - `host_environment.systems.<system>.execution_class`
+  - `host_environment.systems.<system>.carriers.<carrier>.carrier_tier`
+  - `host_environment.systems.<system>.carriers.<carrier>.tier` (legacy provider/status compatibility)
+  - `host_environment.systems.<system>.admissible_carrier_tiers`
+  - `host_environment.carrier_tier_contract`
   - `agent_system.subagents.<backend>`
 - Migration or compatibility notes
   - Existing systems remain readable from config.
@@ -167,8 +177,10 @@ Will implement / choose:
 
 ## Fail-Closed Constraints
 - Forbidden fallback paths
-  - No new hardcoded named-system registry in Rust as the active source of truth.
-  - No Hermes-specific bypass path that skips config-backed system entries.
+- No new hardcoded named-system registry in Rust as the active source of truth.
+- No provider-name inference or hardcoded generic tier ladder in runtime code; use the master-template carrier-tier catalog.
+- No Hermes-specific bypass path that skips config-backed system entries.
+- No silent fallback when a generic tier alias is missing, unresolved, or ambiguous; legacy fallback is only `carrier_tier := explicit || tier` and remains diagnostic.
 - Required receipts / proofs / gates
   - Config-backed project activation must still report the selected system and runtime root.
   - Tests must prove host-runtime detection succeeds from config-derived roots.
