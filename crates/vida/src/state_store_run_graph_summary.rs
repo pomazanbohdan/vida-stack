@@ -3035,7 +3035,21 @@ impl StateStore {
                    THROW 'host_bridge_receipt_binding_conflict:identity_key=' + $identity_key; \
                  }; \
                  LET $existing_receipt = SELECT VALUE { run_id: run_id, dispatch_target: dispatch_target, dispatch_status: dispatch_status, lane_status: lane_status, supersedes_receipt_id: supersedes_receipt_id, exception_path_receipt_id: exception_path_receipt_id, dispatch_kind: dispatch_kind, dispatch_surface: dispatch_surface, dispatch_command: dispatch_command, dispatch_packet_path: dispatch_packet_path, dispatch_result_path: dispatch_result_path, blocker_code: blocker_code, downstream_dispatch_target: downstream_dispatch_target, downstream_dispatch_command: downstream_dispatch_command, downstream_dispatch_note: downstream_dispatch_note, downstream_dispatch_ready: downstream_dispatch_ready, downstream_dispatch_blockers: downstream_dispatch_blockers, downstream_dispatch_packet_path: downstream_dispatch_packet_path, downstream_dispatch_status: downstream_dispatch_status, downstream_dispatch_result_path: downstream_dispatch_result_path, downstream_dispatch_trace_path: downstream_dispatch_trace_path, downstream_dispatch_executed_count: downstream_dispatch_executed_count, downstream_dispatch_active_target: downstream_dispatch_active_target, downstream_dispatch_last_target: downstream_dispatch_last_target, activation_agent_type: activation_agent_type, activation_runtime_role: activation_runtime_role, selected_backend: selected_backend, recorded_at: recorded_at } FROM type::record('run_graph_dispatch_receipt', $run_id); \
-                 IF array::len($existing_receipt) > 0 AND array::len($existing_identity) = 0 { \
+                 LET $matching_in_flight_receipt = array::len($existing_receipt) > 0 \
+                   AND $existing_receipt[0].run_id = $receipt.run_id \
+                   AND $existing_receipt[0].dispatch_target = $receipt.dispatch_target \
+                   AND $existing_receipt[0].dispatch_status = 'executing' \
+                   AND $existing_receipt[0].lane_status = 'lane_running' \
+                   AND $existing_receipt[0].supersedes_receipt_id = $receipt.supersedes_receipt_id \
+                   AND $existing_receipt[0].exception_path_receipt_id = $receipt.exception_path_receipt_id \
+                   AND $existing_receipt[0].dispatch_kind = $receipt.dispatch_kind \
+                   AND $existing_receipt[0].dispatch_surface = $receipt.dispatch_surface \
+                   AND $existing_receipt[0].dispatch_command = $receipt.dispatch_command \
+                   AND $existing_receipt[0].dispatch_packet_path = $receipt.dispatch_packet_path \
+                   AND $existing_receipt[0].activation_agent_type = $receipt.activation_agent_type \
+                   AND $existing_receipt[0].activation_runtime_role = $receipt.activation_runtime_role \
+                   AND $existing_receipt[0].selected_backend = $receipt.selected_backend; \
+                 IF array::len($existing_receipt) > 0 AND array::len($existing_identity) = 0 AND $matching_in_flight_receipt = false { \
                    THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
                  }; \
                  UPSERT type::record('host_bridge_receipt_identity', $identity_key) CONTENT $identity; \
@@ -3049,7 +3063,7 @@ impl StateStore {
             .bind(("identity_key", identity_key.clone()))
             .bind(("identity", identity_row))
             .bind(("run_id", compact.run_id.clone()))
-            .bind(("receipt", compact))
+            .bind(("receipt", compact.clone()))
             .bind(("owner_record_id", owner_record_id))
             .bind(("owner_record", owner_record))
             .bind((
@@ -3079,7 +3093,9 @@ impl StateStore {
                 .db
                 .select(("run_graph_dispatch_receipt", compact_run_id.as_str()))
                 .await?;
-            if existing_receipt.is_some()
+            if existing_receipt.as_ref().is_some_and(|existing| {
+                !Self::host_bridge_binding_matches_in_flight_receipt(existing, &compact)
+            })
                 && self
                     .host_bridge_receipt_identity(
                         &identity.run_id,
@@ -3101,6 +3117,25 @@ impl StateStore {
         }
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
+    }
+
+    fn host_bridge_binding_matches_in_flight_receipt(
+        existing: &RunGraphDispatchReceiptStored,
+        pending: &RunGraphDispatchReceiptStored,
+    ) -> bool {
+        existing.run_id == pending.run_id
+            && existing.dispatch_target == pending.dispatch_target
+            && existing.dispatch_status == "executing"
+            && existing.lane_status.as_deref() == Some("lane_running")
+            && existing.supersedes_receipt_id == pending.supersedes_receipt_id
+            && existing.exception_path_receipt_id == pending.exception_path_receipt_id
+            && existing.dispatch_kind == pending.dispatch_kind
+            && existing.dispatch_surface == pending.dispatch_surface
+            && existing.dispatch_command == pending.dispatch_command
+            && existing.dispatch_packet_path == pending.dispatch_packet_path
+            && existing.activation_agent_type == pending.activation_agent_type
+            && existing.activation_runtime_role == pending.activation_runtime_role
+            && existing.selected_backend == pending.selected_backend
     }
 
     pub async fn host_bridge_receipt_identity(
@@ -6900,6 +6935,84 @@ mod tests {
             .expect("receipt lookup should succeed")
             .expect("receipt should remain persisted");
         assert_eq!(stored.dispatch_result_path, progressed.dispatch_result_path);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_accepts_matching_in_flight_receipt() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-in-flight");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding-in-flight";
+        let packet_path = "/tmp/host-bridge-binding-in-flight.json";
+        let mut in_flight = sample_dispatch_receipt(run_id);
+        in_flight.dispatch_packet_path = Some(packet_path.to_string());
+        in_flight.dispatch_status = "executing".to_string();
+        in_flight.lane_status = "lane_running".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&in_flight)
+            .await
+            .expect("in-flight dispatch receipt should persist");
+
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        let mut pending = in_flight.clone();
+        pending.dispatch_status = "bridge_request_pending".to_string();
+        pending.dispatch_result_path = Some(identity.result_path.clone());
+        store
+            .record_host_bridge_receipt_binding(&identity, &pending)
+            .await
+            .expect("matching in-flight receipt should advance to host bridge pending");
+
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_some());
+        let stored = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("pending receipt should remain persisted");
+        assert_eq!(stored.dispatch_status, "bridge_request_pending");
+        assert_eq!(stored.dispatch_result_path, pending.dispatch_result_path);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_rejects_mismatched_in_flight_receipt() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-in-flight-mismatch");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding-in-flight-mismatch";
+        let packet_path = "/tmp/host-bridge-binding-in-flight-mismatch.json";
+        let mut in_flight = sample_dispatch_receipt(run_id);
+        in_flight.dispatch_packet_path = Some(packet_path.to_string());
+        in_flight.dispatch_status = "executing".to_string();
+        in_flight.lane_status = "lane_running".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&in_flight)
+            .await
+            .expect("in-flight dispatch receipt should persist");
+
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        let mut mismatched = in_flight.clone();
+        mismatched.dispatch_status = "bridge_request_pending".to_string();
+        mismatched.dispatch_command = Some("different-command".to_string());
+        let error = store
+            .record_host_bridge_receipt_binding(&identity, &mismatched)
+            .await
+            .expect_err("mismatched in-flight receipt must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("host_bridge_receipt_binding_conflict:receipt_key="),
+            "error={error:?}"
+        );
 
         close_store_and_remove_root(store, root).await;
     }
