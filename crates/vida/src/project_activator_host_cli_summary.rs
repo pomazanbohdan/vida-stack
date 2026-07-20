@@ -58,6 +58,7 @@ pub(crate) struct ProjectActivatorHostCliSummary {
     pub(crate) default_host_agent_templates: Vec<String>,
     pub(crate) default_agent_topology: Vec<String>,
     pub(crate) carrier_tier_rates: serde_json::Map<String, serde_json::Value>,
+    pub(crate) concrete_tier_rates: serde_json::Map<String, serde_json::Value>,
 }
 
 pub(crate) fn build_project_activator_host_cli_summary(
@@ -179,9 +180,22 @@ pub(crate) fn build_project_activator_host_cli_summary(
         .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
         .collect::<Vec<_>>();
     let mut carrier_tier_rates = serde_json::Map::new();
+    let mut concrete_tier_rates = serde_json::Map::new();
     for row in &host_cli_agent_catalog {
-        if let (Some(tier), Some(rate)) = (row["tier"].as_str(), row["rate"].as_u64()) {
+        if let (Some(tier), Some(rate)) = (
+            crate::carrier_runtime_catalog::canonical_carrier_tier(row).as_deref(),
+            row["rate"].as_u64(),
+        ) {
             carrier_tier_rates.insert(
+                tier.to_string(),
+                serde_json::Value::Number(serde_json::Number::from(rate)),
+            );
+        }
+        if let (Some(tier), Some(rate)) = (
+            crate::carrier_runtime_catalog::concrete_carrier_tier(row).as_deref(),
+            row["rate"].as_u64(),
+        ) {
+            concrete_tier_rates.insert(
                 tier.to_string(),
                 serde_json::Value::Number(serde_json::Number::from(rate)),
             );
@@ -202,6 +216,7 @@ pub(crate) fn build_project_activator_host_cli_summary(
         default_host_agent_templates,
         default_agent_topology,
         carrier_tier_rates,
+        concrete_tier_rates,
     }
 }
 

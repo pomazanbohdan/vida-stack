@@ -1363,6 +1363,16 @@ fn build_runtime_assignment_from_dispatch_alias_with_readiness(
             "task_class": fallback_task_class,
         });
     };
+    if alias["unresolved"] == serde_json::Value::Bool(true) {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "dispatch_alias_unresolved",
+            "dispatch_alias_id": alias_id,
+            "task_class": fallback_task_class,
+            "requested_carrier_tier": alias["requested_carrier_tier"],
+            "unresolved_diagnostic": alias["unresolved_diagnostic"],
+        });
+    }
     let runtime_role = dispatch_alias_runtime_roles(alias).into_iter().next();
     let Some(runtime_role) = runtime_role else {
         return serde_json::json!({
@@ -1409,7 +1419,25 @@ fn build_runtime_assignment_from_dispatch_alias_with_readiness(
             );
             map.insert(
                 "selected_tier".to_string(),
-                serde_json::Value::String(carrier_tier.clone()),
+                alias
+                    .get("concrete_tier")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Value::String(carrier_tier.clone())),
+            );
+            map.insert(
+                "selected_concrete_tier".to_string(),
+                alias
+                    .get("concrete_tier")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Value::String(carrier_tier.clone())),
+            );
+            map.insert(
+                "selected_carrier_provider".to_string(),
+                alias
+                    .get("carrier_provider")
+                    .cloned()
+                    .or_else(|| alias.get("model_provider").cloned())
+                    .unwrap_or(serde_json::Value::Null),
             );
             map.insert(
                 "selected_carrier_tier".to_string(),
@@ -1459,7 +1487,10 @@ pub(crate) fn resolve_dispatch_alias_id(
     task_class: &str,
 ) -> Option<String> {
     if !preferred_alias_id.is_empty()
-        && dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some()
+        && dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some_and(|alias| {
+            alias["unresolved"] != serde_json::Value::Bool(true)
+                && alias["enabled"] != serde_json::Value::Bool(false)
+        })
     {
         return Some(preferred_alias_id.to_string());
     }
@@ -1469,6 +1500,11 @@ pub(crate) fn resolve_dispatch_alias_id(
         .into_iter()
         .flatten()
         .find(|alias| {
+            if alias["unresolved"] == serde_json::Value::Bool(true)
+                || alias["enabled"] == serde_json::Value::Bool(false)
+            {
+                return false;
+            }
             let alias_runtime_roles = dispatch_alias_runtime_roles(alias);
             (!alias_runtime_roles.is_empty()
                 && alias_runtime_roles
@@ -1976,7 +2012,8 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         } else {
             let mut rejected_candidate = serde_json::json!({
                 "carrier_id": candidate.role["role_id"],
-                "carrier_tier": candidate.role["tier"],
+                "carrier_tier": crate::carrier_runtime_catalog::canonical_carrier_tier(&candidate.role),
+                "concrete_tier": crate::carrier_runtime_catalog::concrete_carrier_tier(&candidate.role),
                 "model_profile_id": candidate.profile["profile_id"],
                 "model_ref": candidate.profile["model_ref"],
                 "reasons": reasons,
@@ -2097,7 +2134,10 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             )
         });
     let route_profile_mapping_applied = selected_route_profile_mapping.is_some();
-    let tier = selected_role["tier"].as_str().unwrap_or_default();
+    let concrete_tier =
+        crate::carrier_runtime_catalog::concrete_carrier_tier(selected_role).unwrap_or_default();
+    let carrier_tier = crate::carrier_runtime_catalog::canonical_carrier_tier(selected_role)
+        .unwrap_or_else(|| concrete_tier.clone());
     let rate = selected_candidate.rate;
     let selected_over_budget = selected_candidate.over_budget(max_budget_units);
     let selected_rate_source_path = selected_candidate.rate_source_path.clone();
@@ -2119,7 +2159,8 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         format!("task_class={task_class}"),
         format!("conversation_role={conversation_role}"),
         format!("execution_runtime_role={execution_runtime_role}"),
-        format!("selected_tier={tier}"),
+        format!("selected_tier={concrete_tier}"),
+        format!("selected_carrier_tier={carrier_tier}"),
         format!(
             "selected_model_profile={}",
             selected_profile["profile_id"].as_str().unwrap_or_default()
@@ -2177,8 +2218,10 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         "selected_backend_id": selected_dispatch_backend,
         "selected_dispatch_backend_id": selected_dispatch_backend,
         "selected_carrier_agent_id": selected_role["role_id"],
-        "selected_tier": selected_role["tier"],
-        "selected_carrier_tier": selected_role["tier"],
+        "selected_tier": concrete_tier.clone(),
+        "selected_concrete_tier": concrete_tier,
+        "selected_carrier_tier": carrier_tier,
+        "selected_carrier_provider": selected_profile["provider"],
         "selected_runtime_role": execution_runtime_role,
         "selected_model_profile_id": selected_profile["profile_id"],
         "selected_model_ref": selected_profile["model_ref"],
@@ -2232,7 +2275,9 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "selected_carrier_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
             "selected_backend_id": selected_dispatch_backend_source_path,
             "selected_dispatch_backend_id": selected_dispatch_backend_source_path,
-            "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
+            "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].carrier_tier"),
+            "selected_concrete_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
+            "selected_carrier_provider": format!("carrier_runtime.roles[{selected_role_id}].model_provider"),
             "selected_model_profile_id": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.profile_id"),
             "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
             "selected_rate": selected_rate_source_path,

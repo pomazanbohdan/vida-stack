@@ -181,6 +181,9 @@ fn subagent_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_json
                 "model_profiles": profile_projection["model_profiles"].clone(),
                 "tier": crate::yaml_string(crate::yaml_lookup(entry, &["orchestration_tier"]))
                     .unwrap_or_else(|| backend_id.to_string()),
+                "carrier_tier": crate::yaml_string(crate::yaml_lookup(entry, &["carrier_tier"]))
+                    .or_else(|| crate::yaml_string(crate::yaml_lookup(entry, &["orchestration_tier"])))
+                    .unwrap_or_else(|| backend_id.to_string()),
                 "rate": fallback_rate,
                 "normalized_cost_units": profile_projection["model_profiles"]
                     .as_object()
@@ -372,6 +375,11 @@ pub(crate) fn carrier_policy_revalidation(
     assignment: &serde_json::Value,
 ) -> serde_json::Value {
     let selected_carrier = carrier_policy_string(assignment, "selected_carrier_id");
+    let selected_carrier_tier = carrier_policy_string(assignment, "selected_carrier_tier");
+    let selected_concrete_tier = carrier_policy_string(assignment, "selected_concrete_tier")
+        .or_else(|| carrier_policy_string(assignment, "selected_tier"));
+    let selected_provider = carrier_policy_string(assignment, "selected_carrier_provider")
+        .or_else(|| carrier_policy_string(assignment, "selected_model_provider"));
     let selected_backend = carrier_policy_string(assignment, "selected_backend_id");
     let selected_profile = carrier_policy_string(assignment, "selected_model_profile_id");
     let selected_model = carrier_policy_string(assignment, "selected_model_ref");
@@ -561,6 +569,41 @@ pub(crate) fn carrier_policy_revalidation(
         &mut mismatches,
         &mut reasons,
     );
+    if selected_carrier_tier.is_some() {
+        compare_required_scalar(
+            "selected_carrier_tier",
+            selected_carrier_tier.as_deref(),
+            crate::carrier_runtime_catalog::canonical_carrier_tier(carrier).as_deref(),
+            "selected carrier tier differs from current carrier policy",
+            "selected carrier tier is missing from the assignment",
+            &mut mismatches,
+            &mut reasons,
+        );
+    }
+    if selected_concrete_tier.is_some() {
+        compare_required_scalar(
+            "selected_concrete_tier",
+            selected_concrete_tier.as_deref(),
+            crate::carrier_runtime_catalog::concrete_carrier_tier(carrier).as_deref(),
+            "selected concrete tier differs from current carrier policy",
+            "selected concrete tier is missing from the assignment",
+            &mut mismatches,
+            &mut reasons,
+        );
+    }
+    if selected_provider.is_some() {
+        compare_required_scalar(
+            "selected_carrier_provider",
+            selected_provider.as_deref(),
+            profile["provider"]
+                .as_str()
+                .or_else(|| carrier["model_provider"].as_str()),
+            "selected carrier provider differs from current carrier policy",
+            "selected carrier provider is missing from the assignment",
+            &mut mismatches,
+            &mut reasons,
+        );
+    }
     if policy_list_is_restrictive(profile, "runtime_roles") {
         match selected_runtime_role.as_deref() {
             Some(selected_runtime_role)
