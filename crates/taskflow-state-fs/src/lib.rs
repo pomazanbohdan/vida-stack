@@ -1,7 +1,10 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{DependencyEdge, TaskRecord};
@@ -52,6 +55,7 @@ fn take_partial_write_injection() -> bool {
 impl FileOperationalJournal {
     pub fn create(path: impl AsRef<Path>) -> Result<Self, TaskflowStateError> {
         let path = path.as_ref().to_path_buf();
+        reject_symlink(&path)?;
         if path.exists() {
             return Self::open(path);
         }
@@ -66,18 +70,20 @@ impl FileOperationalJournal {
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, TaskflowStateError> {
         let path = path.as_ref().to_path_buf();
+        reject_symlink(&path)?;
         let payload = fs::read(&path).map_err(storage_error)?;
         let journal = match decode_journal_payload(&payload, "primary") {
             Ok(journal) => journal,
             Err(primary_error) => {
                 let backup_path = path.with_extension("bak");
+                reject_symlink(&backup_path)?;
                 let backup_payload = fs::read(&backup_path).map_err(|backup_error| {
                     TaskflowStateError::PayloadDecode(format!(
                         "{primary_error}; filesystem recovery backup unavailable: {backup_error}"
                     ))
                 })?;
                 let journal = decode_journal_payload(&backup_payload, "recovery backup")?;
-                fs::copy(&backup_path, &path).map_err(storage_error)?;
+                atomic_write(&path, &backup_payload)?;
                 journal
             }
         };
@@ -137,18 +143,22 @@ impl FileOperationalJournal {
         let payload = serde_json::to_vec_pretty(&self.journal).map_err(|error| {
             TaskflowStateError::Storage(format!("filesystem journal serialization: {error}"))
         })?;
+        reject_symlink(&self.path)?;
+        let backup_path = self.backup_path();
+        reject_symlink(&backup_path)?;
         if self.path.exists() {
-            fs::copy(&self.path, self.backup_path()).map_err(storage_error)?;
+            let current_payload = fs::read(&self.path).map_err(storage_error)?;
+            atomic_write(&backup_path, &current_payload)?;
         }
         #[cfg(test)]
         if take_partial_write_injection() {
             let partial_len = (payload.len() / 2).max(1);
-            fs::write(&self.path, &payload[..partial_len]).map_err(storage_error)?;
+            atomic_write(&self.path, &payload[..partial_len])?;
             return Err(TaskflowStateError::Storage(
                 "injected partial write interruption".to_string(),
             ));
         }
-        fs::write(&self.path, payload).map_err(storage_error)
+        atomic_write(&self.path, &payload)
     }
 
     fn persist_after<T>(
@@ -179,6 +189,62 @@ impl FileOperationalJournal {
             },
         }
     }
+}
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn reject_symlink(path: &Path) -> Result<(), TaskflowStateError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(TaskflowStateError::Storage(
+            format!("refusing filesystem journal symlink: {}", path.display()),
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(storage_error(error)),
+    }
+}
+
+fn atomic_write(path: &Path, payload: &[u8]) -> Result<(), TaskflowStateError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        TaskflowStateError::Storage(format!(
+            "filesystem journal path has no file name: {}",
+            path.display()
+        ))
+    })?;
+
+    for _ in 0..100 {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            sequence
+        ));
+        let mut temp = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(storage_error(error)),
+        };
+        let result = (|| {
+            temp.write_all(payload).map_err(storage_error)?;
+            temp.sync_all().map_err(storage_error)?;
+            fs::rename(&temp_path, path).map_err(storage_error)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        return result;
+    }
+
+    Err(TaskflowStateError::Storage(format!(
+        "could not allocate temporary journal file for {}",
+        path.display()
+    )))
 }
 
 fn decode_journal_payload(
@@ -394,8 +460,8 @@ pub fn read_snapshot_into_memory(
 #[cfg(test)]
 mod tests {
     use super::{
-        FileOperationalJournal, TaskSnapshot, read_snapshot, read_snapshot_into_memory,
-        restore_in_memory_store, snapshot_from_store, write_snapshot, write_store_snapshot,
+        read_snapshot, read_snapshot_into_memory, restore_in_memory_store, snapshot_from_store,
+        write_snapshot, write_store_snapshot, FileOperationalJournal, TaskSnapshot,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -410,7 +476,7 @@ mod tests {
         JournalProjectionFailure, OperationalJournal, TaskStore, TaskflowStateError,
     };
     use vida_test_support::state_conformance::{
-        StateAdapterFactory, run_state_adapter_conformance,
+        run_state_adapter_conformance, StateAdapterFactory,
     };
 
     fn temp_snapshot_path() -> std::path::PathBuf {
@@ -652,11 +718,9 @@ mod tests {
         super::arm_partial_write_injection();
         operation(&mut journal);
 
-        assert!(
-            journal
-                .persistence_error()
-                .is_some_and(|error| error.contains("injected partial write interruption"))
-        );
+        assert!(journal
+            .persistence_error()
+            .is_some_and(|error| error.contains("injected partial write interruption")));
         assert!(journal.ensure_persistence_healthy().is_err());
 
         drop(journal);
@@ -705,5 +769,64 @@ mod tests {
                 replay_hash: "hash".to_string(),
             });
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_journal_rejects_primary_symlinks_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let victim = temp_snapshot_path().with_extension("victim");
+        let journal_path = temp_snapshot_path().with_extension("journal.json");
+        fs::write(&victim, b"unchanged").expect("victim should be writable");
+        symlink(&victim, &journal_path).expect("journal symlink should be created");
+
+        let error = FileOperationalJournal::create(&journal_path)
+            .expect_err("journal symlink should fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("refusing filesystem journal symlink"));
+        assert_eq!(
+            fs::read(&victim).expect("victim should remain readable"),
+            b"unchanged"
+        );
+        assert!(fs::symlink_metadata(&journal_path)
+            .expect("journal symlink should remain")
+            .file_type()
+            .is_symlink());
+        fs::remove_file(journal_path).expect("journal symlink should be removed");
+        fs::remove_file(victim).expect("victim should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_journal_recovery_rejects_backup_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let journal_path = temp_snapshot_path().with_extension("journal.json");
+        let backup_path = journal_path.with_extension("bak");
+        let victim = temp_snapshot_path().with_extension("victim");
+        fs::write(&journal_path, b"invalid journal").expect("primary should be writable");
+        fs::write(&victim, b"unchanged").expect("victim should be writable");
+        symlink(&victim, &backup_path).expect("backup symlink should be created");
+
+        let error = FileOperationalJournal::open(&journal_path)
+            .expect_err("backup symlink should fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("refusing filesystem journal symlink"));
+        assert_eq!(
+            fs::read(&journal_path).expect("primary should remain readable"),
+            b"invalid journal"
+        );
+        assert_eq!(
+            fs::read(&victim).expect("victim should remain readable"),
+            b"unchanged"
+        );
+        fs::remove_file(journal_path).expect("primary should be removed");
+        fs::remove_file(backup_path).expect("backup symlink should be removed");
+        fs::remove_file(victim).expect("victim should be removed");
     }
 }
