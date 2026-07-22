@@ -7,29 +7,26 @@ use std::{
 use fs2::FileExt;
 
 use crate::dev_team_sequence_contract::{
-    DevTeamSequenceStep, configured_dev_team_first_step_for_task,
-    dev_team_flow_is_explicitly_sequential, dev_team_receipt_gate, dev_team_sequence,
+    configured_dev_team_first_step_for_task, dev_team_flow_is_explicitly_sequential,
+    dev_team_receipt_gate, dev_team_sequence, dev_team_sequence_for_flow_id,
     dev_team_sequence_for_task, dev_team_sequence_for_work_item, selected_dev_team_flow_for_task,
-    task_flow_lookup_keys,
+    task_flow_lookup_keys, DevTeamSequenceStep,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::runtime_proof_scope::{
-    ProofArtifactScope, collect_test_like_paths_from_text, path_to_proof_scope_string,
-    proof_intent_text, proof_scope_from_container, proof_scope_from_dispatch_packet_path,
+    collect_test_like_paths_from_text, path_to_proof_scope_string, proof_intent_text,
+    proof_scope_from_container, proof_scope_from_dispatch_packet_path, ProofArtifactScope,
 };
 use crate::{
-    AgentArgs, AgentCommand, AgentDispatchNextArgs, AgentHostBridgeArgs, AgentSelectArgs,
-    AgentStatusArgs, state_store, state_store::StateStore,
+    state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
+    AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
 use operator_output::command_text::human_command;
 use runtime_path_policy::{
-    ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
-    new_output_path_under_root, path_contains_dot_segment,
+    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
+    ArtifactPathKind, PathPolicyError, StateRoot,
 };
 use taskflow_host_bridge::{
-    HostBridgeAdapterOperations,
-    DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeCompletionAuthorityInput,
-    HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     decide_host_bridge_completion_authority, host_bridge_artifact_file,
     host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
@@ -39,8 +36,7 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
     host_bridge_dispatch_identity_blockers, host_bridge_normalized_implementation_artifact_path,
     host_bridge_operator_fields, host_bridge_packet_paths_equivalent,
-    host_bridge_provenance_public_blocker_code,
-    host_bridge_request_allows_parent_adapter_dispatch,
+    host_bridge_provenance_public_blocker_code, host_bridge_request_allows_parent_adapter_dispatch,
     host_bridge_request_implementation_artifacts, host_bridge_request_owned_paths,
     host_bridge_request_proof_artifact_paths,
     host_bridge_request_requires_implementation_artifacts, host_bridge_request_string,
@@ -51,6 +47,9 @@ use taskflow_host_bridge::{
     validate_host_bridge_request_provenance,
     validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
+    DispatchReceiptBindingInput, HostBridgeAdapterOperations, HostBridgeAdapterPayloadInput,
+    HostBridgeCompletionAuthorityInput, HostBridgeProvenanceInput, HostBridgeRequest,
+    HostBridgeRequestPath,
 };
 
 const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration =
@@ -205,7 +204,10 @@ fn host_bridge_io_open_diagnostic(
         None
     };
     source
-        .with_open_context(state_store::StateStoreOpenStage::DatastoreOpen, lock_evidence)
+        .with_open_context(
+            state_store::StateStoreOpenStage::DatastoreOpen,
+            lock_evidence,
+        )
         .open_error_diagnostic()
 }
 
@@ -321,7 +323,7 @@ fn agent_dispatch_source_surfaces() -> Vec<String> {
         "vida agent select --runtime-role <role> --task-class <class>".to_string(),
         "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             .to_string(),
-        "vida agent-init --role worker <task-id>".to_string(),
+        "vida agent-init --role <configured-runtime-role> <task-id>".to_string(),
         "vida agent-init --role <runtime-role> <task-id>".to_string(),
     ]
 }
@@ -1172,12 +1174,9 @@ async fn append_host_bridge_dispatch_receipt_blockers(
                     .ok()
                     .flatten()
                     .is_some();
-            let blocker_code = host_bridge_receipt_query_blocker_code(
-                false,
-                known_primary_receipt_mismatch,
-                None,
-            )
-            .expect("missing receipt lookup must map to a blocker");
+            let blocker_code =
+                host_bridge_receipt_query_blocker_code(false, known_primary_receipt_mismatch, None)
+                    .expect("missing receipt lookup must map to a blocker");
             if known_primary_receipt_mismatch {
                 blockers.push(blocker_code_value(blocker_code));
                 return;
@@ -2081,15 +2080,15 @@ fn host_bridge_result_allowed_next_is_lawful(
     request_path: &Path,
     request: &serde_json::Value,
     result: &serde_json::Value,
-) -> bool {
+) -> Result<bool, String> {
     if host_bridge_result_allowed_next_matches_request(request, result) {
-        return true;
+        return Ok(true);
     }
     let Some(result_allowed) = host_bridge_result_string(result, "allowed_next_node") else {
-        return true;
+        return Ok(true);
     };
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
-        return false;
+        return Err("host_bridge_packet_path_missing".to_string());
     };
     let state_root = infer_host_bridge_state_root_from_request_path(request_path)
         .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
@@ -2099,19 +2098,20 @@ fn host_bridge_result_allowed_next_is_lawful(
         ArtifactPathKind::HostBridgePacket,
         true,
     ) else {
-        return false;
+        return Err("host_bridge_packet_path_untrusted".to_string());
     };
     let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
     else {
-        return false;
+        return Err("host_bridge_packet_unreadable".to_string());
     };
-    let execution_plan = packet
+    let role_selection_value = packet
         .get("role_selection_full")
         .or_else(|| packet.get("role_selection"))
-        .and_then(|selection| selection.get("execution_plan"));
-    let Some(execution_plan) = execution_plan else {
-        return false;
-    };
+        .ok_or_else(|| "team_flow_role_selection_missing".to_string())?;
+    let role_selection = serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(
+        role_selection_value.clone(),
+    )
+    .map_err(|error| format!("team_flow_role_selection_invalid:{error}"))?;
     let completed_target = host_bridge_result_string(result, "dispatch_target")
         .or_else(|| host_bridge_request_string(request, "dispatch_target"))
         .unwrap_or_default();
@@ -2123,39 +2123,23 @@ fn host_bridge_result_allowed_next_is_lawful(
                 .get("source_dispatch_target")
                 .and_then(serde_json::Value::as_str)
         });
-    #[cfg(test)]
-    eprintln!(
-        "host bridge lawful probe completed={completed_target:?} previous={previous_target:?} allowed={result_allowed:?} seq={:?}",
-        crate::dispatch_contract_allowed_next_lane_sequence(
-            &execution_plan["development_flow"]["dispatch_contract"]
-        )
-    );
-    let lawful_target = crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_completed_target(
-        execution_plan,
+    let lawful_target = crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_completed_role_selection(
+        &role_selection,
         completed_target,
         previous_target,
         result_allowed,
-    );
-    #[cfg(test)]
-    eprintln!("host bridge lawful probe resolved={lawful_target:?}");
+    )?;
     if lawful_target.is_some() {
-        return true;
+        return Ok(true);
     }
     let Some(rework_target) = host_bridge_result_rework_target(result) else {
-        return false;
+        return Ok(false);
     };
     if !host_bridge_result_is_rework_completion(result) {
-        return false;
+        return Ok(false);
     }
-    let resolved =
-        crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
-            execution_plan,
-            completed_target,
-            previous_target,
-            result_allowed,
-            rework_target,
-        );
-    resolved.is_some()
+    let _ = rework_target;
+    Err("team_flow_rework_receipt_required".to_string())
 }
 
 fn host_bridge_result_rework_target(result: &serde_json::Value) -> Option<&str> {
@@ -2491,8 +2475,10 @@ fn validate_host_bridge_result_dry_run(
     }
     let expected_red_pass_alias = host_bridge_result_uses_expected_red_pass_alias(result);
     let typed_blocker_codes = host_bridge_result_blocker_codes(result);
-    if !host_bridge_result_allowed_next_is_lawful(request_path, request, result) {
-        blockers.push("invalid_allowed_next_node_for_execution_plan".to_string());
+    match host_bridge_result_allowed_next_is_lawful(request_path, request, result) {
+        Ok(true) => {}
+        Ok(false) => blockers.push("invalid_allowed_next_node_for_execution_plan".to_string()),
+        Err(blocker_code) => blockers.push(blocker_code),
     }
     if expected_red_pass_alias {
         if result_status != Some("pass") {
@@ -3517,11 +3503,7 @@ fn agent_init_command(
     state_dir: Option<&std::path::Path>,
     runtime_role: &str,
 ) -> String {
-    let runtime_role = if runtime_role.trim().is_empty() {
-        "worker"
-    } else {
-        runtime_role
-    };
+    let runtime_role = runtime_role.trim();
     let mut command = format!(
         "vida agent-init --role {} {}",
         crate::shell_quote(runtime_role),
@@ -3579,7 +3561,18 @@ fn selection_truth_for_task(
     activation_bundle: &serde_json::Value,
     task: &state_store::TaskRecord,
 ) -> Result<AgentDispatchLaneSelectionTruth, String> {
-    selection_truth_for_task_with_role_and_class(activation_bundle, task, "worker", None, None)
+    let conversation_role = activation_bundle["role_selection"]["fallback_role"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "conversation_role_binding_missing".to_string())?;
+    selection_truth_for_task_with_role_and_class(
+        activation_bundle,
+        task,
+        conversation_role,
+        None,
+        None,
+    )
 }
 
 fn selection_truth_for_task_with_role_and_class(
@@ -3591,15 +3584,44 @@ fn selection_truth_for_task_with_role_and_class(
 ) -> Result<AgentDispatchLaneSelectionTruth, String> {
     let task_value = serde_json::to_value(task)
         .map_err(|error| format!("task_record_serialization_failed:{error}"))?;
-    let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
+    let configured_step = dev_team_sequence_for_task(activation_bundle, task)
+        .into_iter()
+        .find(|step| step.requires_task);
     let task_class = task_class_override
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .unwrap_or(inferred_task_class);
+        .or_else(|| {
+            ["task_class", "route_task_class"]
+                .into_iter()
+                .find_map(|field| {
+                    task_value[field]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                })
+        })
+        .or_else(|| configured_step.as_ref().map(|step| step.task_class.clone()))
+        .ok_or_else(|| "task_class_binding_missing".to_string())?;
     let runtime_role = runtime_role_override
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| crate::runtime_role_for_task_class(&task_class).to_string());
+        .or_else(|| {
+            ["runtime_role", "activation_runtime_role"]
+                .into_iter()
+                .find_map(|field| {
+                    task_value[field]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                })
+        })
+        .or_else(|| configured_step.as_ref().map(|step| step.runtime_role.clone()))
+        .ok_or_else(|| "runtime_role_binding_missing".to_string())?;
+    if conversation_role.trim().is_empty() {
+        return Err("conversation_role_binding_missing".to_string());
+    }
     let assignment = crate::build_runtime_assignment_preview_from_resolved_constraints(
         activation_bundle,
         conversation_role,
@@ -3636,13 +3658,13 @@ fn selection_truth_for_task_with_role_and_class(
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
         .to_string();
-    let selected_external_backend_readiness_status =
-        assignment["selected_external_backend_readiness"]["status"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("not_applicable")
-            .to_string();
+    let selected_external_backend_readiness_status = assignment
+        ["selected_external_backend_readiness"]["status"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("not_applicable")
+        .to_string();
     let rate = assignment["rate"]
         .as_u64()
         .ok_or_else(|| "rate_missing".to_string())?;
@@ -4563,12 +4585,10 @@ fn zombie_d_gate_dispatch_admission(
         );
         object.insert(
             "matrix_required".to_string(),
-            serde_json::json!(
-                object
-                    .get("applicable")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-            ),
+            serde_json::json!(object
+                .get("applicable")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)),
         );
         object.insert(
             "initial_implementation_dispatch".to_string(),
@@ -4654,21 +4674,6 @@ fn build_agent_dispatch_next_preview_dev_team(
         .collect::<std::collections::BTreeSet<_>>();
     let current_task_absent_from_scheduler =
         current_task_missing_from_ready && current_task_blocked_candidate.is_none();
-    let sequence = if current_task_absent_from_scheduler {
-        Vec::new()
-    } else if current_task_missing_from_ready {
-        current_task_blocked_candidate
-            .map(|candidate| dev_team_sequence_for_task(activation_bundle, &candidate.task))
-            .unwrap_or_else(|| dev_team_sequence(activation_bundle))
-    } else if ready_flow_ids.len() == 1 {
-        selected_ready_candidates
-            .iter()
-            .find(|candidate| candidate.ready_now)
-            .map(|candidate| dev_team_sequence_for_task(activation_bundle, &candidate.task))
-            .unwrap_or_else(|| dev_team_sequence(activation_bundle))
-    } else {
-        dev_team_sequence(activation_bundle)
-    };
     let selected_flow_id = if current_task_missing_from_ready {
         current_task_blocked_candidate
             .and_then(|candidate| {
@@ -4682,6 +4687,13 @@ fn build_agent_dispatch_next_preview_dev_team(
         ready_flow_ids.iter().next().map(String::as_str)
     } else {
         activation_bundle["dev_team_readiness"]["default_flow_id"].as_str()
+    };
+    let sequence = if current_task_absent_from_scheduler {
+        Vec::new()
+    } else if let Some(flow_id) = selected_flow_id {
+        dev_team_sequence_for_flow_id(activation_bundle, flow_id)
+    } else {
+        dev_team_sequence(activation_bundle)
     };
     let flow_is_sequential = dev_team_flow_is_explicitly_sequential(
         &activation_bundle["dev_team_readiness"],
@@ -4698,13 +4710,9 @@ fn build_agent_dispatch_next_preview_dev_team(
         .as_ref()
         .and_then(|gate| gate.selected_step_index)
         .and_then(|index| sequence.get(index).map(|step| (index, step)));
-    let first_implementation_step_index = sequence.iter().position(|step| {
-        step.requires_task
-            && step.runtime_role.eq_ignore_ascii_case("worker")
-            && step.task_class.eq_ignore_ascii_case("implementation")
-    });
+    let first_required_step_index = sequence.iter().position(|step| step.requires_task);
     let initial_implementation_admission_available = receipt_gate_selected_step
-        .zip(first_implementation_step_index)
+        .zip(first_required_step_index)
         .is_some_and(|((selected_step_index, _), implementation_step_index)| {
             scoped_current_task_dev_team && selected_step_index <= implementation_step_index
         });
@@ -5634,12 +5642,10 @@ fn apply_configured_lane_runtime_assignment(
     activation_bundle: &serde_json::Value,
     lane: &AgentDispatchLanePreview,
 ) -> Result<(), String> {
-    let conversation_role = role_selection
-        .fallback_role
-        .trim()
-        .is_empty()
-        .then_some("orchestrator")
-        .unwrap_or(role_selection.fallback_role.as_str());
+    let conversation_role = role_selection.fallback_role.trim();
+    if conversation_role.is_empty() {
+        return Err("conversation_role_binding_missing".to_string());
+    }
     let assignment = crate::build_runtime_assignment_from_resolved_constraints(
         activation_bundle,
         conversation_role,
@@ -5684,7 +5690,12 @@ async fn materialize_configured_agent_dispatch_lane(
         ok: true,
         activation_source: "vida.config.yaml".to_string(),
         selection_mode: "configured_dev_team_dispatch_next".to_string(),
-        fallback_role: "orchestrator".to_string(),
+        fallback_role: activation_bundle["role_selection"]["fallback_role"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string(),
         request: lane.task_id.clone(),
         selected_role: lane.runtime_role.clone(),
         conversational_mode: None,
@@ -5729,7 +5740,7 @@ async fn materialize_configured_agent_dispatch_lane(
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
         &run_graph_bootstrap,
-    );
+    )?;
     crate::runtime_dispatch_state::sync_receipt_configured_activation_assignment(
         &role_selection,
         &mut dispatch_receipt,
@@ -7043,9 +7054,8 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             .filter(|value| !value.is_empty())
             .is_none()
     {
-        let blocker_codes = vec![
-            taskflow_contracts::BlockerCode::HostAgentIdMissing
-                .as_str()
+        let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
+            .as_str()
             .to_string()];
         let next_actions = vec![
             "provide --host-agent-id from the parent host adapter before completing the lane"
@@ -7218,9 +7228,8 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 else {
-                    let blocker_codes = vec![
-                        taskflow_contracts::BlockerCode::HostAgentIdMissing
-                            .as_str()
+                    let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
+                        .as_str()
                         .to_string()];
                     let next_actions = vec![
                         "provide --host-agent-id from the parent host adapter before completing the lane"
@@ -7402,6 +7411,53 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
 }
 
 async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
+    let mut blocker_codes = Vec::new();
+    if command
+        .runtime_role
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        blocker_codes.push("runtime_role_binding_missing");
+    }
+    if command
+        .task_class
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        blocker_codes.push("task_class_binding_missing");
+    }
+    if command
+        .conversation_role
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        blocker_codes.push("conversation_role_binding_missing");
+    }
+    if !blocker_codes.is_empty() {
+        let payload = serde_json::json!({
+            "surface": "vida agent select",
+            "status": release1_blocked_status(),
+            "mode": "config_driven_runtime_assignment",
+            "blocker_codes": blocker_codes,
+            "next_actions": ["Provide runtime_role, task_class, and conversation_role from the active configuration/team relation."],
+        });
+        if command.json {
+            crate::print_json_pretty(&payload);
+        } else {
+            println!("agent select: blocked");
+            println!("blocker codes: {}", payload["blocker_codes"]);
+        }
+        return ExitCode::from(1);
+    }
+    let runtime_role = command.runtime_role.as_deref().unwrap_or_default();
+    let task_class = command.task_class.as_deref().unwrap_or_default();
+    let conversation_role = command.conversation_role.as_deref().unwrap_or_default();
     let state_dir = command
         .state_dir
         .clone()
@@ -7418,9 +7474,9 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
             };
             let selection = crate::build_runtime_assignment_from_resolved_constraints(
                 &activation_bundle,
-                &command.conversation_role,
-                &command.task_class,
-                &command.runtime_role,
+                conversation_role,
+                task_class,
+                runtime_role,
             );
             let status =
                 release1_contract_status_value(selection["enabled"].as_bool().unwrap_or(false));
@@ -7428,9 +7484,9 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
                 "surface": "vida agent select",
                 "status": status,
                 "mode": "config_driven_runtime_assignment",
-                "runtime_role": command.runtime_role,
-                "task_class": command.task_class,
-                "conversation_role": command.conversation_role,
+                "runtime_role": runtime_role,
+                "task_class": task_class,
+                "conversation_role": conversation_role,
                 "selection": selection,
                 "manual_host_tool_choice_required": false,
                 "source_surfaces": [
@@ -8026,31 +8082,26 @@ mod tests {
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
         agent_dispatch_status_from_blockers, agent_status_runtime_task_stale_code,
         apply_configured_lane_runtime_assignment, apply_continuation_dispatch_gate_to_preview,
-        build_agent_dispatch_next_preview,
+        blocker_code_value, build_agent_dispatch_next_preview,
         build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt,
-        blocker_code_value,
         canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
-        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        HostBridgeProvenanceResult,
-        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
-        host_bridge_auto_invocation_scaffold_for_payload,
-        host_bridge_packet_paths_equivalent,
-        host_bridge_observability_project_root,
-        host_bridge_request_provenance_blockers,
+        host_bridge_adapter_payload, host_bridge_auto_invocation_scaffold_for_payload,
+        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_normalized_implementation_artifact_path,
+        host_bridge_observability_project_root, host_bridge_packet_paths_equivalent,
+        host_bridge_receipt_query_blocker_code, host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
-        host_bridge_receipt_query_blocker_code, host_bridge_retry_probe_error_result,
-        HostBridgeReceiptLookupError,
-        HostBridgeRetryProbeError,
-        infer_host_bridge_state_root_from_request_path, lane_work_context,
-        materialize_configured_agent_dispatch_lane, read_canonical_host_bridge_json_artifact,
-        read_host_bridge_request, release1_pass_status,
+        host_bridge_retry_probe_error_result, infer_host_bridge_state_root_from_request_path,
+        lane_work_context, materialize_configured_agent_dispatch_lane,
+        read_canonical_host_bridge_json_artifact, read_host_bridge_request, release1_pass_status,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
         validate_materialized_agent_dispatch_packet, write_host_bridge_request,
         AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, AgentDispatchNextPreview,
+        HostBridgeProvenanceResult, HostBridgeReceiptLookupError, HostBridgeRetryProbeError,
         MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
@@ -8104,12 +8155,10 @@ mod tests {
             "crates/vida/src/agent_dispatch_surface.rs"
         );
         assert_eq!(context["result_schema"]["artifact_refs_required"], true);
-        assert!(
-            context["artifact_refs"][0]["hash"]
-                .as_str()
-                .unwrap()
-                .starts_with("blake3:")
-        );
+        assert!(context["artifact_refs"][0]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("blake3:"));
         assert!(
             context["context_budget"]["estimated_tokens"]
                 .as_u64()
@@ -8699,11 +8748,9 @@ mod tests {
             payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"],
             "vida agent-init --dispatch-packet task-a.json --execute-dispatch"
         );
-        assert!(
-            payload["packet_materialization"]["artifacts"][0]
-                .get("extra_large_diagnostic")
-                .is_none()
-        );
+        assert!(payload["packet_materialization"]["artifacts"][0]
+            .get("extra_large_diagnostic")
+            .is_none());
     }
 
     #[test]
@@ -8895,16 +8942,14 @@ mod tests {
                 packet["packet_template_kind"].as_str(),
                 Some("coach_review_packet")
             );
-            assert!(
-                validate_materialized_agent_dispatch_packet(
-                    lane,
-                    "coach",
-                    &packet_path.display().to_string(),
-                    &receipt,
-                )
-                .expect_err("legacy coach collapse must fail")
-                .contains("expected `coach`")
-            );
+            assert!(validate_materialized_agent_dispatch_packet(
+                lane,
+                lane.runtime_role.as_str(),
+                &packet_path.display().to_string(),
+                &receipt,
+            )
+            .expect_err("legacy coach collapse must fail")
+            .contains(&format!("expected `{}`", lane.runtime_role)));
         }
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -8994,11 +9039,8 @@ mod tests {
         assert!(completion_command.starts_with("vida agent host-bridge --request request.json "));
         assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
         assert!(!completion_command.contains("--submit-result result.json"));
-        assert!(
-            completion_command.contains(
-                "--receipt-id run-1-implementer-req-1-packet-host-bridge-receipt"
-            )
-        );
+        assert!(completion_command
+            .contains("--receipt-id run-1-implementer-req-1-packet-host-bridge-receipt"));
         assert_eq!(payload["current_request_identity"]["request_id"], "req-1");
         assert_eq!(
             payload["host_bridge"]["current_request_identity"]["dispatch_target"],
@@ -9106,9 +9148,8 @@ mod tests {
             .as_str()
             .expect("completion command");
         assert!(completion_command.starts_with("vida agent host-bridge --request "));
-        assert!(completion_command.contains(
-            "--receipt-id run-analyst-analyst-req-analyst-packet-host-bridge-receipt"
-        ));
+        assert!(completion_command
+            .contains("--receipt-id run-analyst-analyst-req-analyst-packet-host-bridge-receipt"));
         assert!(!completion_command
             .contains("--receipt-id run-analyst-source_lane-host-bridge-receipt"));
         assert_eq!(
@@ -9189,10 +9230,7 @@ mod tests {
             payload["host_bridge"]["adapter_capability_id"],
             "unconfigured_host_agent_capability"
         );
-        assert_eq!(
-            payload["host_bridge"]["adapter_contract_source"],
-            ""
-        );
+        assert_eq!(payload["host_bridge"]["adapter_contract_source"], "");
         assert!(payload["host_bridge"]["missing_fields"]
             .as_array()
             .expect("strict missing fields")
@@ -9229,13 +9267,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blocker codes should render")
-                .iter()
-                .any(|code| code == "host_bridge_request_missing_fields")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "host_bridge_request_missing_fields"));
         assert_eq!(
             payload["host_bridge"]["host_tool_calls"]
                 .as_array()
@@ -9306,25 +9342,21 @@ mod tests {
             std::path::Path::new("/tmp/forged-request.json"),
             &request,
             HostBridgeProvenanceResult::from_blockers(vec![
-                "host_bridge_request_untrusted_path".to_string(),
+                "host_bridge_request_untrusted_path".to_string()
             ]),
             None,
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_untrusted_path")
-        );
-        assert!(
-            payload["host_bridge"]["host_tool_calls"]
-                .as_array()
-                .expect("calls")
-                .is_empty()
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("calls")
+            .is_empty());
     }
 
     fn host_bridge_submit_result_role_selection(
@@ -9343,7 +9375,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "tracked_flow_bootstrap": {
                     "dev_task": {
@@ -9527,13 +9560,15 @@ mod tests {
             .get("adapter_contract_snapshot")
             .cloned()
             .expect("adapter contract snapshot fixture should exist");
-        object.entry("adapter_contract_hash".to_string()).or_insert_with(|| {
-            serde_json::Value::String(
-                blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot serializes"))
-                    .to_hex()
-                    .to_string(),
-            )
-        });
+        object
+            .entry("adapter_contract_hash".to_string())
+            .or_insert_with(|| {
+                serde_json::Value::String(
+                    blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot serializes"))
+                        .to_hex()
+                        .to_string(),
+                )
+            });
         object
             .entry("adapter_contract_source".to_string())
             .or_insert_with(|| serde_json::Value::String("configured_registry".to_string()));
@@ -9697,7 +9732,9 @@ mod tests {
                     dispatch_command: None,
                     dispatch_packet_path: Some(
                         state_root
-                            .join("runtime-consumption/downstream-dispatch-packets/schema-seed.json")
+                            .join(
+                                "runtime-consumption/downstream-dispatch-packets/schema-seed.json",
+                            )
                             .display()
                             .to_string(),
                     ),
@@ -9724,7 +9761,8 @@ mod tests {
                 .expect("host bridge fixture receipt schema should persist");
             store.close().await;
 
-            let packet_path = state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+            let packet_path =
+                state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
             let request_path = state_root.join("host-tool-bridge/requests/request.json");
             let result_path = state_root.join("host-tool-bridge/results/result.json");
             let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
@@ -9888,27 +9926,27 @@ mod tests {
         let request = host_bridge_validate_request();
         let result = current_host_bridge_result_fixture(
             &request,
-        serde_json::json!({
-            "artifact_kind": "host_tool_bridge_result",
-            "schema_version": 1,
-            "status": "pass",
-            "execution_state": "executed",
-        "request_id": "req-validate-1",
-        "run_id": "run-validate-1",
-        "task_id": "task-validate-1",
-        "dispatch_target": "delta_impl",
-        "backend_id": "internal_subagents",
-        "selected_backend": "internal_subagents",
-        "decision": "pass",
-            "verdict": "pass",
-            "blocker_codes": [],
-            "rework_target": serde_json::Value::Null,
-            "allowed_next_node": allowed_next_node,
-            "execution_evidence": {
-                "receipt_backed": true
-            },
-            "source_dispatch_packet_path": "packet.json"
-            }),
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+            "request_id": "req-validate-1",
+            "run_id": "run-validate-1",
+            "task_id": "task-validate-1",
+            "dispatch_target": "delta_impl",
+            "backend_id": request["backend_id"].clone(),
+            "selected_backend": request["backend_id"].clone(),
+            "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": serde_json::Value::Null,
+                "allowed_next_node": allowed_next_node,
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
+                "source_dispatch_packet_path": "packet.json"
+                }),
         );
         current_host_bridge_result_fixture(&request, result)
     }
@@ -9979,13 +10017,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "host_bridge_result_identity_mismatch:backend_id")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_result_identity_mismatch:backend_id"));
     }
 
     #[test]
@@ -10003,13 +10039,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "host_bridge_result_identity_mismatch:backend_id")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_result_identity_mismatch:backend_id"));
     }
 
     #[test]
@@ -10024,13 +10058,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "host_bridge_result_missing_verdict")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_result_missing_verdict"));
     }
 
     #[test]
@@ -10071,13 +10103,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "invalid_allowed_next_node_for_execution_plan")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
     }
 
     #[test]
@@ -10136,13 +10166,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "invalid_allowed_next_node_for_execution_plan")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -10552,11 +10580,10 @@ mod tests {
             "{payload}"
         );
         assert!(!payload["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "invalid_allowed_next_node_for_execution_plan")
-        );
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -10615,12 +10642,7 @@ mod tests {
         dev_task_id: &str,
     ) -> crate::RuntimeConsumptionLaneSelection {
         let mut selection = host_bridge_submit_result_role_selection(dev_task_id);
-        selection.execution_plan["development_flow"]["dispatch_contract"]["lane_sequence"] =
-            serde_json::json!(["analyst", "developer", "coach_implementation_gate", "tester"]);
-        selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] =
-            serde_json::json!(["developer", "coach_implementation_gate", "tester"]);
-        selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+        let lane_catalog = serde_json::json!({
             "analyst": {
                 "dispatch_target": "analyst",
                 "stage": "specification",
@@ -10664,6 +10686,23 @@ mod tests {
                 "activation_runtime_role": "verifier"
             }
         });
+        let lane_sequence = ["specification", "execution", "coach", "verification"]
+            .into_iter()
+            .filter_map(|stage| {
+                lane_catalog
+                    .as_object()?
+                    .iter()
+                    .find(|(_, lane)| lane["stage"].as_str() == Some(stage))
+                    .map(|(lane_id, _)| lane_id.clone())
+            })
+            .collect::<Vec<_>>();
+        let execution_lane_sequence = lane_sequence.iter().skip(1).cloned().collect::<Vec<_>>();
+        selection.execution_plan["development_flow"]["dispatch_contract"]["lane_sequence"] =
+            serde_json::json!(lane_sequence);
+        selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"] = serde_json::json!(execution_lane_sequence);
+        selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] =
+            lane_catalog;
         selection
     }
 
@@ -10695,11 +10734,9 @@ mod tests {
             false,
         ));
 
-        assert!(
-            blockers
-                .blockers
-                .contains(&"host_bridge_request_untrusted_path".to_string())
-        );
+        assert!(blockers
+            .blockers
+            .contains(&"host_bridge_request_untrusted_path".to_string()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -10895,7 +10932,7 @@ mod tests {
             state_dir: Some(trusted_state_root.clone()),
         }));
 
-      assert_eq!(exit, ExitCode::from(1));
+        assert_eq!(exit, ExitCode::from(1));
         let persisted_request: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
                 .expect("request should remain json");
@@ -10912,11 +10949,10 @@ mod tests {
             Some(&trusted_state_root),
             false,
         ));
-        assert!(
-            blockers.blockers
-                .iter()
-                .any(|code| code == "host_bridge_request_untrusted_path")
-        );
+        assert!(blockers
+            .blockers
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
@@ -10925,19 +10961,15 @@ mod tests {
         );
         assert_eq!(payload["surface"], "vida agent host-bridge");
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blocker codes")
-                .iter()
-                .any(|code| code == "host_bridge_request_untrusted_path")
-        );
-        assert!(
-            payload["host_bridge"]["host_tool_calls"]
-                .as_array()
-                .expect("host tool calls")
-                .is_empty()
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls")
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11036,11 +11068,10 @@ mod tests {
             Some(&state_root),
             false,
         ));
-        assert!(
-            blockers.blockers
-                .iter()
-                .any(|code| code == "host_bridge_dispatch_receipt_missing")
-        );
+        assert!(blockers
+            .blockers
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
@@ -11048,33 +11079,29 @@ mod tests {
             Some(&state_root),
         );
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blocker codes")
-                .iter()
-                .any(|code| code == "host_bridge_dispatch_receipt_missing")
-        );
-        assert!(
-            payload["host_bridge"]["host_tool_calls"]
-                .as_array()
-                .expect("host tool calls")
-                .is_empty()
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls")
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-  async fn host_bridge_submit_result_uses_operator_staged_result_file() {
+    async fn host_bridge_submit_result_uses_operator_staged_result_file() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-                "vida-host-bridge-complete-missing-preflight-{}-{nanos}",
-                std::process::id()
-            ));
+            "vida-host-bridge-complete-missing-preflight-{}-{nanos}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create host bridge state root");
         let store = state_store::StateStore::open(root.clone())
@@ -11331,7 +11358,7 @@ mod tests {
         })
         .await;
 
-      assert_eq!(exit, ExitCode::from(0));
+        assert_eq!(exit, ExitCode::from(0));
         let store = state_store::StateStore::open_existing(root.clone())
             .await
             .expect("reopen store");
@@ -11342,10 +11369,7 @@ mod tests {
             .expect("receipt should exist");
         assert_eq!(after.dispatch_status, "executed");
         assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
-        assert_eq!(
-            after.blocker_code.as_deref(),
-            None
-        );
+        assert_eq!(after.blocker_code.as_deref(), None);
         let dispatch_result_path = after
             .dispatch_result_path
             .as_ref()
@@ -11469,6 +11493,9 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
                 .expect("create artifact parent");
         }
+        let fixture_task_class = format!("fixture-task-class-{run_id}");
+        let fixture_carrier_id = format!("fixture-carrier-{run_id}");
+        let fixture_runtime_role = format!("fixture-runtime-role-{run_id}");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -11481,11 +11508,13 @@ mod tests {
                 "source_dispatch_status": "bridge_request_pending",
                 "source_blocker_code": "host_tool_bridge_adapter_required",
                 "dispatch_target": "autotester",
-                "task_class": "verification",
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
+                "task_class": fixture_task_class.clone(),
+                "backend_id": host_bridge_submit_result_role_selection(run_id)
+                    .compiled_bundle["carrier_runtime"]["executor_backend_relation"]["backend_id"]
+                    .clone(),
+                "carrier_id": fixture_carrier_id.clone(),
                 "dispatch_transport": "host_tool_bridge",
-                "activation_runtime_role": "worker",
+                "activation_runtime_role": fixture_runtime_role.clone(),
                 "packet_template_kind": "verifier_proof_packet",
                 "owned_paths": ["test/activity_meeting_event_form_fields_test.dart"],
                 "read_only_paths": [".vida/data/state/runtime-consumption"],
@@ -11493,8 +11522,8 @@ mod tests {
                     "proof_goal": "Verify autotester pass can hand off to developer.",
                     "goal": "Complete the autotester lane evidence.",
                     "scope_in": ["dispatch_target:autotester"],
-                    "handoff_task_class": "verification",
-                    "handoff_runtime_role": "worker",
+                    "handoff_task_class": fixture_task_class.clone(),
+                    "handoff_runtime_role": fixture_runtime_role.clone(),
                     "owned_paths": ["test/activity_meeting_event_form_fields_test.dart"],
                     "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "definition_of_done": ["autotester pass advances to developer"],
@@ -11517,24 +11546,29 @@ mod tests {
         )
         .expect("write packet");
         let request = host_bridge_strict_current_request(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": request_id,
-                "run_id": run_id,
-                "task_id": run_id,
-                "attempt_id": "activity-autotester-attempt",
-                "dispatch_target": "autotester",
-                "task_class": "verification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "receipt_mode": "host_bridge_receipt",
-                "request_path": request_path.display().to_string(),
-                "result_path": canonical_result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            }));
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": request_id,
+            "run_id": run_id,
+            "task_id": run_id,
+            "attempt_id": "activity-autotester-attempt",
+            "dispatch_target": status
+                .next_node
+                .clone()
+                .expect("run graph projection should bind the active dispatch target"),
+            "task_class": fixture_task_class,
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": host_bridge_submit_result_role_selection(run_id)
+                .compiled_bundle["carrier_runtime"]["executor_backend_relation"]["backend_id"]
+                .clone(),
+            "carrier_id": fixture_carrier_id,
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "request_path": request_path.display().to_string(),
+            "result_path": canonical_result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        }));
         std::fs::write(
             &request_path,
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
@@ -11711,9 +11745,9 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-                "vida-host-bridge-submit-analyst-pass-{}-{nanos}",
-                std::process::id()
-            ));
+            "vida-host-bridge-submit-analyst-pass-{}-{nanos}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create host bridge state root");
         let store = state_store::StateStore::open(root.clone())
@@ -11784,6 +11818,9 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
                 .expect("create artifact parent");
         }
+        let fixture_task_class = format!("fixture-task-class-{run_id}");
+        let fixture_carrier_id = format!("fixture-carrier-{run_id}");
+        let fixture_runtime_role = format!("fixture-runtime-role-{run_id}");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -11796,11 +11833,13 @@ mod tests {
                 "source_dispatch_status": "bridge_request_pending",
                 "source_blocker_code": "host_tool_bridge_adapter_required",
                 "dispatch_target": "analyst",
-                "task_class": "specification",
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
+                "task_class": fixture_task_class.clone(),
+                "backend_id": host_bridge_submit_result_direct_developer_role_selection(run_id)
+                    .compiled_bundle["carrier_runtime"]["executor_backend_relation"]["backend_id"]
+                    .clone(),
+                "carrier_id": fixture_carrier_id.clone(),
                 "dispatch_transport": "host_tool_bridge",
-                "activation_runtime_role": "business_analyst",
+                "activation_runtime_role": fixture_runtime_role.clone(),
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": [],
                 "read_only_paths": [".vida/data/state/runtime-consumption"],
@@ -11832,24 +11871,26 @@ mod tests {
         )
         .expect("write packet");
         let request = host_bridge_strict_current_request(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": request_id,
-                "run_id": run_id,
-                "task_id": run_id,
-                "attempt_id": "analyst-submit-attempt",
-                "dispatch_target": "analyst",
-                "task_class": "specification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "receipt_mode": "host_bridge_receipt",
-                "request_path": request_path.display().to_string(),
-                "result_path": canonical_result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            }));
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": request_id,
+            "run_id": run_id,
+            "task_id": run_id,
+            "attempt_id": "analyst-submit-attempt",
+            "dispatch_target": status.active_node.clone(),
+            "task_class": fixture_task_class,
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": host_bridge_submit_result_direct_developer_role_selection(run_id)
+                .compiled_bundle["carrier_runtime"]["executor_backend_relation"]["backend_id"]
+                .clone(),
+            "carrier_id": fixture_carrier_id,
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "request_path": request_path.display().to_string(),
+            "result_path": canonical_result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        }));
         std::fs::write(
             &request_path,
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
@@ -12057,11 +12098,9 @@ mod tests {
         let resolved = host_bridge_observability_project_root(None, &request_path);
 
         assert_eq!(resolved, None);
-        assert!(
-            !package_root
-                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-                .exists()
-        );
+        assert!(!package_root
+            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+            .exists());
         let _ = std::fs::remove_dir_all(harness.path());
     }
 
@@ -12201,9 +12240,7 @@ mod tests {
                     lane_id: Some(dispatch_target.to_string()),
                     claim_kind: "write".to_string(),
                     conflict_domain: Some(format!("run:{run_id}")),
-                    owned_paths: vec![
-                        "crates/vida/src/agent_dispatch_surface.rs".to_string(),
-                    ],
+                    owned_paths: vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()],
                     read_only_paths: Vec::new(),
                     lease_mode: crate::state_store::LeaseMode::Exclusive,
                     lease_seconds: 60,
@@ -12245,9 +12282,9 @@ mod tests {
                     dispatch_kind: "implementation".to_string(),
                     dispatch_surface: Some("vida agent-init".to_string()),
                     dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
-                    dispatch_packet_path: Some(
-                        super::host_bridge_packet_selector_path(canonical_packet_path.as_path()),
-                    ),
+                    dispatch_packet_path: Some(super::host_bridge_packet_selector_path(
+                        canonical_packet_path.as_path(),
+                    )),
                     dispatch_result_path: None,
                     blocker_code: None,
                     downstream_dispatch_target: None,
@@ -12284,7 +12321,10 @@ mod tests {
         });
 
         assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
-        assert!(blockers.is_empty(), "unexpected pending bridge blockers: {blockers:?}");
+        assert!(
+            blockers.is_empty(),
+            "unexpected pending bridge blockers: {blockers:?}"
+        );
     }
 
     #[test]
@@ -12388,8 +12428,7 @@ mod tests {
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
         )
         .expect("request file should be written");
-        let result = std::fs::read_to_string(&result_path)
-            .expect("preview result should read");
+        let result = std::fs::read_to_string(&result_path).expect("preview result should read");
         let result = serde_json::from_str::<serde_json::Value>(&result)
             .expect("preview result should decode");
         let mut result = current_host_bridge_result_fixture(&request, result);
@@ -12456,13 +12495,11 @@ mod tests {
             Some(&state_root),
         );
         assert_eq!(payload["status"], "pass");
-        assert!(
-            !payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
     }
 
     #[test]
@@ -12555,32 +12592,24 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "pass");
-        assert!(
-            !payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
         assert_eq!(payload["host_bridge"]["request_status"], "blocked");
-        assert!(
-            payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .starts_with("vida agent host-bridge --request ")
-        );
-        assert!(
-            payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--submit-result")
-        );
-        assert!(
-            !payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--decision")
-        );
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .starts_with("vida agent host-bridge --request "));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--submit-result"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--decision"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -12689,7 +12718,9 @@ mod tests {
             .await
         });
 
-        assert!(!blockers.blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
+        assert!(!blockers
+            .blockers
+            .contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
@@ -12776,28 +12807,22 @@ mod tests {
         ));
 
         assert!(
-            blockers.blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()),
+            blockers
+                .blockers
+                .contains(&"host_bridge_dispatch_receipt_missing".to_string()),
             "retry intent without blocked receipt/result evidence must keep the public evidence blocker: {blockers:?}"
         );
-        let payload = host_bridge_adapter_payload(
-            &request_path,
-            &request,
-            blockers,
-            Some(&state_root),
-        );
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_dispatch_receipt_missing")
-        );
-        assert!(
-            !payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -12890,20 +12915,18 @@ mod tests {
             false,
         ));
 
-        assert!(blockers.blockers.contains(&"host_bridge_request_not_pending".to_string()));
-        assert!(blockers.blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()));
-        let payload = host_bridge_adapter_payload(
-            &request_path,
-            &request,
-            blockers,
-            Some(&state_root),
-        );
-        assert!(
-            !payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        assert!(blockers
+            .blockers
+            .contains(&"host_bridge_request_not_pending".to_string()));
+        assert!(blockers
+            .blockers
+            .contains(&"host_bridge_dispatch_receipt_missing".to_string()));
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -13018,20 +13041,16 @@ mod tests {
         });
 
         assert!(retry_evidence);
-        assert!(!blockers.blockers.contains(&"host_bridge_request_not_pending".to_string()));
+        assert!(!blockers
+            .blockers
+            .contains(&"host_bridge_request_not_pending".to_string()));
         assert!(blockers.blockers.is_empty());
-        let payload = host_bridge_adapter_payload(
-            &request_path,
-            &request,
-            blockers,
-            Some(&state_root),
-        );
-        assert!(
-            payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
     }
 
     #[tokio::test]
@@ -13111,17 +13130,10 @@ mod tests {
             "authoritative_state_store_open_failed"
         );
 
-        let payload = host_bridge_adapter_payload(
-            &request_path,
-            &request,
-            provenance,
-            Some(&state_root),
-        );
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, provenance, Some(&state_root));
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["state_access"]["error_kind"],
-            "unknown"
-        );
+        assert_eq!(payload["state_access"]["error_kind"], "unknown");
         assert_eq!(payload["state_access"]["retryable"], false);
         assert_eq!(
             payload["state_access"]["blocker_code"],
@@ -13129,7 +13141,10 @@ mod tests {
         );
         assert_eq!(payload["state_access"]["open_stage"], "datastore_open");
         assert!(payload["state_access"].get("lock_evidence").is_none());
-        assert_eq!(payload["host_bridge"]["state_access"], payload["state_access"]);
+        assert_eq!(
+            payload["host_bridge"]["state_access"],
+            payload["state_access"]
+        );
         let state_access_text = payload["state_access"].to_string();
         assert!(!state_access_text.contains(&state_root.display().to_string()));
         let _ = std::fs::remove_dir_all(&root);
@@ -13246,7 +13261,8 @@ mod tests {
         ));
         let state_root = root.join(".vida/data/state");
         let request_path = state_root.join("host-tool-bridge/requests/request.json");
-        let packet_path = state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
         let result_path = state_root.join("host-tool-bridge/results/result.json");
         let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
         let request = host_bridge_strict_current_request(serde_json::json!({
@@ -13277,12 +13293,8 @@ mod tests {
                 },
             )),
         );
-        let payload = host_bridge_adapter_payload(
-            &request_path,
-            &request,
-            provenance,
-            Some(&state_root),
-        );
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, provenance, Some(&state_root));
         assert_eq!(payload["status"], "blocked");
         assert_eq!(
             payload["blocker_codes"],
@@ -13346,11 +13358,9 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .is_some_and(|actions| !actions.is_empty())
-        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(payload["artifact_refs"]["request_path"], "request.json");
         assert!(super::host_bridge_payload_should_show_completion_command(
             &payload
@@ -13381,7 +13391,7 @@ mod tests {
             std::path::Path::new("request.json"),
             &request,
             HostBridgeProvenanceResult::from_blockers(vec![
-                "host_bridge_result_path_unbounded".to_string(),
+                "host_bridge_result_path_unbounded".to_string()
             ]),
             None,
         );
@@ -13462,13 +13472,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -13521,19 +13529,15 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
-        assert!(
-            !payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -13613,19 +13617,15 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "pass");
-        assert!(
-            !payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
-        assert!(
-            payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -13706,19 +13706,15 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "host_bridge_request_not_pending")
-        );
-        assert!(
-            !payload["host_bridge"]["completion_command"]
-                .as_str()
-                .expect("completion command")
-                .contains("--retry-completion")
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -13838,13 +13834,11 @@ mod tests {
         assert!(attach.contains("vida agent host-bridge"));
         assert!(attach.contains("--attach-artifact"));
         assert!(attach.contains("--changed-file"));
-        assert!(
-            payload["shared_fields"]["next_actions"]
-                .as_array()
-                .expect("next actions")
-                .iter()
-                .all(|action| !action.as_str().unwrap_or_default().contains("--json"))
-        );
+        assert!(payload["shared_fields"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .iter()
+            .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
     }
 
     #[test]
@@ -14089,7 +14083,9 @@ mod tests {
             .display()
             .to_string();
         assert!(host_bridge_packet_paths_equivalent(
-            updated["packet_path"].as_str().expect("updated packet path"),
+            updated["packet_path"]
+                .as_str()
+                .expect("updated packet path"),
             &canonical_packet_path,
         ));
         assert!(
@@ -16490,153 +16486,22 @@ mod tests {
     }
 
     fn activation_bundle_with_dev_team_selection_truth() -> serde_json::Value {
-        with_complete_model_selection_ranking_policy(serde_json::json!({
-            "carrier_runtime": {
-                "roles": [
-                    {
-                        "role_id": "analyst-seat",
-                        "tier": "senior",
-                        "default_runtime_role": "business_analyst",
-                        "runtime_roles": ["business_analyst"],
-                        "task_classes": ["specification"],
-                        "normalized_cost_units": 1,
-                        "quality_tier": "high",
-                        "reasoning_band": "high",
-                        "task_classes_for_runtime": ["specification"],
-                        "model_profiles": {
-                            "analyst": {
-                                "profile_id": "analyst-profile",
-                                "model_ref": "gpt-5.5",
-                                "provider": "openai",
-                                "reasoning_effort": "high",
-                                "quality_tier": "high",
-                                "speed_tier": "fast",
-                                "sandbox_mode": "workspace-write",
-                                "write_scope": "scoped_only",
-                                "runtime_roles": ["business_analyst"],
-                                "task_classes": ["specification"],
-                                "normalized_cost_units": 1
-                            }
-                        }
-                    },
-                    {
-                        "role_id": "developer-seat",
-                        "tier": "junior",
-                        "default_runtime_role": "worker",
-                        "runtime_roles": ["worker"],
-                        "task_classes": ["implementation"],
-                        "normalized_cost_units": 1,
-                        "quality_tier": "medium",
-                        "reasoning_band": "medium",
-                        "task_classes_for_runtime": ["implementation"],
-                        "model_profiles": {
-                            "developer": {
-                                "profile_id": "developer-profile",
-                                "model_ref": "gpt-5.5",
-                                "provider": "openai",
-                                "reasoning_effort": "low",
-                                "quality_tier": "medium",
-                                "speed_tier": "fast",
-                                "sandbox_mode": "workspace-write",
-                                "write_scope": "scoped_only",
-                                "runtime_roles": ["worker"],
-                                "task_classes": ["implementation"],
-                                "normalized_cost_units": 2
-                            }
-                        }
-                    },
-                    {
-                        "role_id": "coach-seat",
-                        "tier": "middle",
-                        "default_runtime_role": "coach",
-                        "runtime_roles": ["coach"],
-                        "task_classes": ["coach"],
-                        "normalized_cost_units": 3,
-                        "quality_tier": "medium",
-                        "reasoning_band": "medium",
-                        "task_classes_for_runtime": ["coach"],
-                        "model_profiles": {
-                            "coach": {
-                                "profile_id": "coach-profile",
-                                "model_ref": "gpt-5.5-coach",
-                                "provider": "openai",
-                                "reasoning_effort": "low",
-                                "quality_tier": "medium",
-                                "speed_tier": "fast",
-                                "sandbox_mode": "workspace-write",
-                                "write_scope": "scoped_only",
-                                "runtime_roles": ["coach"],
-                                "task_classes": ["coach"],
-                                "normalized_cost_units": 3
-                            }
-                        }
-                    },
-                    {
-                        "role_id": "verifier-seat",
-                        "tier": "middle",
-                        "default_runtime_role": "verifier",
-                        "runtime_roles": ["verifier", "prover"],
-                        "task_classes": ["verification"],
-                        "normalized_cost_units": 4,
-                        "quality_tier": "high",
-                        "reasoning_band": "high",
-                        "task_classes_for_runtime": ["verification"],
-                        "model_profiles": {
-                            "prover": {
-                                "profile_id": "verifier-profile",
-                                "model_ref": "gpt-5.3",
-                                "provider": "openai",
-                                "reasoning_effort": "high",
-                                "quality_tier": "high",
-                                "speed_tier": "fast",
-                                "sandbox_mode": "workspace-write",
-                                "write_scope": "scoped_only",
-                                "runtime_roles": ["verifier", "prover"],
-                                "task_classes": ["verification"],
-                                "normalized_cost_units": 4
-                            }
-                        }
-                    }
-                ],
-                "dispatch_aliases": [],
-                "worker_strategy": {
-                    "selection_policy": {
-                        "demotion_score": 45
-                    },
-                    "agents": {
-                        "analyst-seat": {
-                            "effective_score": 70,
-                            "lifecycle_state": "active"
-                        },
-                        "developer-seat": {
-                            "effective_score": 72,
-                            "lifecycle_state": "active"
-                        },
-                        "coach-seat": {
-                            "effective_score": 74,
-                            "lifecycle_state": "active"
-                        },
-                        "verifier-seat": {
-                            "effective_score": 76,
-                            "lifecycle_state": "active"
-                        }
-                    },
-                    "store_path": ".vida/state/worker-strategy.json",
-                    "scorecards_path": ".vida/state/worker-scorecards.json"
-                },
-                "model_selection": {
-                    "enabled": true,
-                    "default_strategy": "balanced_cost_quality",
-                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
-                    "candidate_scope": "unified_carrier_model_profiles",
-                    "budget_policy": "informational",
-                    "free_profiles_allowed": true
-                }
-            },
-            "agent_system": {
-                "max_parallel_agents": 4
-            }
-        }))
+        let mut activation_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let config_path = repository_root.join("vida.config.yaml");
+        let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+            config_path
+                .to_str()
+                .expect("canonical config path should be utf8"),
+            &activation_bundle,
+        );
+        assert_eq!(readiness["status"], "ready", "{readiness:#}");
+        activation_bundle["dev_team_readiness"] = readiness;
+        activation_bundle
     }
 
     fn activation_bundle_with_missing_role_data() -> serde_json::Value {
@@ -16863,11 +16728,9 @@ mod tests {
     fn assertion_message_contains_actionable_blocker(blocker_codes: &[String], task_id: &str) {
         let expected_prefix =
             format!("selected_lane_runtime_assignment_truth_missing:task={task_id}:");
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code.starts_with(&expected_prefix))
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code.starts_with(&expected_prefix)));
     }
 
     #[test]
@@ -16912,24 +16775,26 @@ mod tests {
             "gpt-5.6-luna"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
-        assert!(
-            preview.selected_lanes[0]
-                .selection_truth
-                .selection_source_paths["selected_rate"]
-                .as_str()
-                .is_some_and(|path| path
-                    .starts_with("carrier_runtime.roles[junior].model_profiles.")
-                    && path.ends_with(".normalized_cost_units"))
-        );
+        let selected_carrier = preview.selected_lanes[0]
+            .selection_truth
+            .selected_carrier
+            .as_str();
+        assert!(preview.selected_lanes[0]
+            .selection_truth
+            .selection_source_paths["selected_rate"]
+            .as_str()
+            .is_some_and(|path| {
+                path.starts_with(&format!(
+                    "carrier_runtime.roles[{selected_carrier}].model_profiles."
+                )) && path.ends_with(".normalized_cost_units")
+            }));
         assert_eq!(
             preview.selected_lanes[0].selection_truth.pricing_readiness["pricing_freshness_status"],
             "missing"
         );
-        assert!(
-            preview.selected_lanes[1]
-                .dispatch_command
-                .contains("--state-dir /tmp/vida-state")
-        );
+        assert!(preview.selected_lanes[1]
+            .dispatch_command
+            .contains("--state-dir /tmp/vida-state"));
         assert_eq!(
             preview.parallelization_planner["status"],
             "proposals_available"
@@ -16945,21 +16810,20 @@ mod tests {
             preview.parallelization_planner["materializes_packets"],
             false
         );
-        assert!(
-            preview.parallelization_planner["packet_proposals"]
-                .as_array()
-                .is_some_and(|proposals| proposals.len() == 2)
-        );
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| proposals.len() == 2));
         assert_eq!(
             preview.carrier_selection_api["surface"],
             "vida agent select"
         );
         assert_eq!(preview.carrier_selection_api["status"], "pass");
-        assert!(
-            preview.carrier_selection_api["first_class_carriers"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "junior"))
-        );
+        assert!(preview.carrier_selection_api["first_class_carriers"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["api_id"].as_str() == Some(selected_carrier))
+            }));
     }
 
     #[test]
@@ -17025,19 +16889,15 @@ mod tests {
             preview.selected_lanes[0].dispatch_command_kind,
             "startup_activation_view_only"
         );
-        assert!(
-            preview.selected_lanes[0]
-                .receipt_backed_execution_command
-                .contains("--execute-dispatch")
-        );
+        assert!(preview.selected_lanes[0]
+            .receipt_backed_execution_command
+            .contains("--execute-dispatch"));
         assert!(preview.blocker_codes.is_empty());
         assert_eq!(preview.blocked_candidates[0].task_id, "task-b");
-        assert!(
-            preview
-                .next_actions
-                .iter()
-                .any(|action| action.contains("remain blocked candidates and are not selected"))
-        );
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("remain blocked candidates and are not selected")));
     }
 
     #[test]
@@ -17100,11 +16960,9 @@ mod tests {
 
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
@@ -17205,50 +17063,44 @@ mod tests {
     }
 
     #[test]
-    fn configured_dev_team_route_selects_current_task_class_slice_for_generic_task() {
-        let mut task = task_with_labels(
-            "implementation-task",
-            "Implement design-backed configured feature",
-            &[],
-        );
-        task.planner_metadata.owned_paths = vec!["src/lib.rs".to_string()];
-        let route = configured_dev_team_first_step_for_task(
-            &serde_json::json!({
-                "dev_team_readiness": {
-                    "default_flow_id": "default_delivery",
-                    "work_item_flow_bindings": {
-                        "task": "default_delivery"
-                    },
-                    "roles": [
-                        {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
-                        {"role_id": "test_author", "runtime_role": "worker", "task_classes": ["test_authoring"]},
-                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
-                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
-                    ],
-                    "flows": [
-                        {
-                            "flow_id": "default_delivery",
-                            "enabled": true,
-                            "default": true,
-                            "work_item_bindings": ["task"],
-                            "ordered_steps": [
-                                {"role_id": "analyst"},
-                                {"role_id": "test_author"},
-                                {"role_id": "developer"},
-                                {"role_id": "tester"}
-                            ]
-                        }
-                    ]
-                }
-            }),
-            &task,
-        )
-        .expect("configured generic implementation task should resolve a route");
+    fn configured_dev_team_route_fails_closed_for_unbound_work_item() {
+        let mut task = task_with_labels("", "Implement design-backed configured feature", &[]);
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let bindings = compiled_bundle["team_flow_authority"]["resolved_all_flow_payload"]
+            ["work_item_flow_bindings"]
+            .as_object()
+            .expect("canonical authority must persist work-item flow bindings");
+        let binding_seed = bindings
+            .keys()
+            .next()
+            .filter(|key| !key.trim().is_empty())
+            .expect("canonical authority must persist a nonempty work-item binding key");
+        let mut unbound_issue_type = format!("{binding_seed}__unbound");
+        let mut suffix = 0_u32;
+        while bindings.contains_key(&unbound_issue_type) {
+            suffix += 1;
+            unbound_issue_type = format!("{binding_seed}__unbound_{suffix}");
+        }
+        task.issue_type = unbound_issue_type.clone();
 
-        assert_eq!(route.role_label, "test_author");
-        assert_eq!(route.dispatch_target, "test_author");
-        assert_eq!(route.runtime_role, "worker");
-        assert_eq!(route.task_class, "test_authoring");
+        let authority = crate::team_flow_state_machine::team_flow_execution_authority_availability(
+            &compiled_bundle,
+            None,
+            None,
+        );
+        assert!(
+            authority.is_ready(),
+            "canonical TeamFlow authority must remain ready: status={:?} blocker={:?}",
+            authority.status,
+            authority.blocker
+        );
+
+        // Positive bound-flow routing is covered by the taskflow_run_graph table tests.
+        assert!(
+            configured_dev_team_first_step_for_task(&compiled_bundle, &task).is_none(),
+            "unbound issue type `{unbound_issue_type}` must not receive an implicit route"
+        );
     }
 
     #[test]
@@ -17613,11 +17465,9 @@ mod tests {
         );
 
         assert_eq!(preview.status, "blocked");
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"ambiguous_work_item_flow_selection".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"ambiguous_work_item_flow_selection".to_string()));
     }
 
     #[test]
@@ -17670,11 +17520,9 @@ mod tests {
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "defect-a");
         assert_eq!(preview.selected_lanes[0].role_label, "tester");
-        assert!(
-            !preview
-                .blocker_codes
-                .contains(&"ambiguous_work_item_flow_selection".to_string())
-        );
+        assert!(!preview
+            .blocker_codes
+            .contains(&"ambiguous_work_item_flow_selection".to_string()));
     }
 
     #[test]
@@ -17743,16 +17591,12 @@ mod tests {
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "zzz-bound");
-        assert!(
-            preview.selected_lanes[0]
-                .dispatch_command
-                .contains("vida agent-init --role business_analyst zzz-bound")
-        );
-        assert!(
-            !preview.selected_lanes[0]
-                .dispatch_command
-                .contains("--json")
-        );
+        assert!(preview.selected_lanes[0]
+            .dispatch_command
+            .contains("vida agent-init --role business_analyst zzz-bound"));
+        assert!(!preview.selected_lanes[0]
+            .dispatch_command
+            .contains("--json"));
     }
 
     #[test]
@@ -17896,17 +17740,15 @@ mod tests {
         assert_eq!(preview.flow_projection["status"], "blocked");
         assert!(preview.flow_projection["flow_id"].is_null());
         assert!(preview.flow_projection["current_step"].is_null());
-        assert!(
-            preview.flow_projection["steps"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(preview.flow_projection["steps"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
-    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent_and_no_ready_candidates()
-     {
+    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent_and_no_ready_candidates(
+    ) {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
             "default_flow_id": "default_delivery",
@@ -17949,12 +17791,10 @@ mod tests {
         assert_eq!(preview.flow_projection["status"], "blocked");
         assert!(preview.flow_projection["flow_id"].is_null());
         assert!(preview.flow_projection["current_step"].is_null());
-        assert!(
-            preview.flow_projection["steps"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(preview.flow_projection["steps"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -18106,18 +17946,14 @@ mod tests {
 
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 2);
-        assert!(
-            preview
-                .selected_lanes
-                .iter()
-                .all(|lane| lane.task_id == "task-active")
-        );
-        assert!(
-            !preview
-                .selected_lanes
-                .iter()
-                .any(|lane| lane.task_id == "task-other")
-        );
+        assert!(preview
+            .selected_lanes
+            .iter()
+            .all(|lane| lane.task_id == "task-active"));
+        assert!(!preview
+            .selected_lanes
+            .iter()
+            .any(|lane| lane.task_id == "task-other"));
     }
 
     #[test]
@@ -18165,12 +18001,10 @@ mod tests {
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "task-safe");
-        assert!(
-            !preview
-                .selected_lanes
-                .iter()
-                .any(|lane| lane.task_id == "task-unsafe")
-        );
+        assert!(!preview
+            .selected_lanes
+            .iter()
+            .any(|lane| lane.task_id == "task-unsafe"));
         assert!(preview.blocked_candidates.iter().any(|candidate| {
             candidate.task_id == "task-unsafe"
                 && candidate
@@ -18290,12 +18124,10 @@ mod tests {
             lane.approval_gate["rework_transitions"]["rework"],
             "analyst"
         );
-        assert!(
-            preview
-                .next_actions
-                .iter()
-                .any(|action| action.contains("will pause after receipt-backed completion"))
-        );
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("will pause after receipt-backed completion")));
         assert_eq!(preview.flow_projection["flow_id"], "approval_flow");
         assert_eq!(
             preview.flow_projection["current_step"]["role_label"],
@@ -18325,154 +18157,93 @@ mod tests {
 
     #[test]
     fn agent_dispatch_next_preview_renders_configured_dev_team_sequence() {
+        let activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        assert!(
+            activation_bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"]
+                .as_array()
+                .is_some_and(|flows| !flows.is_empty())
+        );
+        let expected_step = dev_team_sequence(&activation_bundle)
+            .into_iter()
+            .find(|step| step.requires_task)
+            .expect("canonical TeamFlow should expose an included required task step");
+        let task_id = "configured-flow-task";
         let projection = TaskSchedulingProjection {
-            current_task_id: Some("task-analyst".to_string()),
-            ready: vec![
-                candidate_with_labels(
-                    "task-analyst",
-                    "Specification task",
-                    true,
-                    true,
-                    Vec::new(),
-                    &["documentation"],
-                ),
-                candidate_with_labels(
-                    "task-developer",
-                    "Implementation task",
-                    true,
-                    true,
-                    Vec::new(),
-                    &[],
-                ),
-                candidate_with_labels(
-                    "task-coach",
-                    "Coach review task",
-                    true,
-                    true,
-                    Vec::new(),
-                    &["coach"],
-                ),
-                candidate_with_labels(
-                    "task-tester",
-                    "Tester verification",
-                    true,
-                    true,
-                    Vec::new(),
-                    &["tester"],
-                ),
-            ],
+            current_task_id: Some(task_id.to_string()),
+            ready: vec![candidate(
+                task_id,
+                "Configured flow task",
+                true,
+                true,
+                Vec::new(),
+            )],
             blocked: Vec::new(),
             parallel_candidates_after_current: Vec::new(),
         };
 
         let preview = build_agent_dispatch_next_preview(
-            &activation_bundle_with_dev_team_selection_truth(),
+            &activation_bundle,
             &projection,
-            4,
-            4,
+            1,
+            activation_bundle["agent_system"]["max_parallel_agents"]
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(1),
             Some(std::path::Path::new("/tmp/vida-state")),
             true,
         );
 
-        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.mode, "preview-dev-team");
-        assert_eq!(preview.lanes_selected, 4);
-        assert_eq!(preview.selected_lanes[0].role_label, "analyst-seat");
-        assert_eq!(preview.selected_lanes[1].role_label, "developer-seat");
-        assert_eq!(preview.selected_lanes[2].role_label, "coach-seat");
-        assert_eq!(preview.selected_lanes[3].role_label, "verifier-seat");
-        assert_eq!(preview.selected_lanes[0].task_id, "task-analyst");
-        assert_eq!(preview.selected_lanes[1].task_id, "task-developer");
-        assert_eq!(preview.selected_lanes[2].task_id, "task-coach");
-        assert_eq!(preview.selected_lanes[3].task_id, "task-tester");
-        assert_eq!(preview.selected_lanes[0].runtime_role, "business_analyst");
-        assert_eq!(preview.selected_lanes[1].runtime_role, "worker");
-        assert_eq!(preview.selected_lanes[2].runtime_role, "coach");
-        assert_eq!(preview.selected_lanes[3].runtime_role, "verifier");
+        assert_eq!(preview.lanes_selected, 1);
+        let selected_lane = &preview.selected_lanes[0];
+        assert_eq!(selected_lane.role_label, expected_step.role_label);
+        assert_eq!(selected_lane.task_id, task_id);
+        assert_eq!(selected_lane.runtime_role, expected_step.runtime_role);
+        assert_eq!(selected_lane.task_class, expected_step.task_class);
         assert_eq!(
-            preview.selected_lanes[0].selection_truth.task_class,
-            "specification"
+            selected_lane.selection_truth.runtime_role,
+            expected_step.runtime_role
         );
         assert_eq!(
-            preview.selected_lanes[1].selection_truth.task_class,
-            "implementation"
+            selected_lane.selection_truth.task_class,
+            expected_step.task_class
+        );
+
+        let flow_id = activation_bundle["dev_team_readiness"]["default_flow_id"]
+            .as_str()
+            .expect("canonical readiness should bind a default flow");
+        let authority = crate::team_flow_authority_adapter::compile_team_flow_authority(
+            &activation_bundle,
+            Some(flow_id),
+            None,
+        )
+        .expect("persisted canonical TeamFlow authority should compile");
+        let authority_node = authority
+            .ordered_nodes()
+            .find(|node| node.node.node_id == expected_step.role_label)
+            .expect("selected step should exist in persisted TeamFlow authority");
+        assert_eq!(
+            selected_lane.selection_truth.selected_carrier,
+            authority_node.carrier_id
         );
         assert_eq!(
-            preview.selected_lanes[2].selection_truth.task_class,
-            "coach"
+            selected_lane.selection_truth.selected_model_profile,
+            authority_node.selected_model_profile["profile_id"]
+                .as_str()
+                .expect("configured profile id should be persisted")
         );
         assert_eq!(
-            preview.selected_lanes[3].selection_truth.task_class,
-            "verification"
+            selected_lane.selection_truth.selected_model_ref,
+            authority_node.selected_model_profile["model_ref"]
+                .as_str()
+                .expect("configured model ref should be persisted")
         );
-        assert_eq!(
-            preview.selected_lanes[0].selection_truth.selected_carrier,
-            "analyst-seat"
-        );
-        assert_eq!(
-            preview.selected_lanes[0]
-                .selection_truth
-                .selected_model_profile,
-            "analyst-profile"
-        );
-        assert_eq!(
-            preview.selected_lanes[0].selection_truth.selected_model_ref,
-            "gpt-5.5"
-        );
-        assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
-        assert_eq!(
-            preview.selected_lanes[1].selection_truth.selected_carrier,
-            "developer-seat"
-        );
-        assert_eq!(
-            preview.selected_lanes[1]
-                .selection_truth
-                .selected_model_profile,
-            "developer-profile"
-        );
-        assert_eq!(
-            preview.selected_lanes[1].selection_truth.selected_model_ref,
-            "gpt-5.5"
-        );
-        assert_eq!(preview.selected_lanes[1].selection_truth.rate, 2);
-        assert_eq!(
-            preview.selected_lanes[2].selection_truth.selected_carrier,
-            "coach-seat"
-        );
-        assert_eq!(
-            preview.selected_lanes[2]
-                .selection_truth
-                .selected_model_profile,
-            "coach-profile"
-        );
-        assert_eq!(
-            preview.selected_lanes[2].selection_truth.selected_model_ref,
-            "gpt-5.5-coach"
-        );
-        assert_eq!(preview.selected_lanes[2].selection_truth.rate, 3);
-        assert_eq!(
-            preview.selected_lanes[3].selection_truth.selected_carrier,
-            "verifier-seat"
-        );
-        assert_eq!(
-            preview.selected_lanes[3]
-                .selection_truth
-                .selected_model_profile,
-            "verifier-profile"
-        );
-        assert_eq!(
-            preview.selected_lanes[3].selection_truth.selected_model_ref,
-            "gpt-5.3"
-        );
-        assert_eq!(preview.selected_lanes[3].selection_truth.rate, 4);
-        assert!(preview.selected_lanes[0].dispatch_command.contains(
-            "vida agent-init --role business_analyst task-analyst --state-dir /tmp/vida-state"
-        ));
-        assert!(
-            !preview.selected_lanes[0]
-                .dispatch_command
-                .contains("--json")
-        );
+        assert!(selected_lane.dispatch_command.contains(&format!(
+            "--role {} {}",
+            expected_step.runtime_role, task_id
+        )));
+        assert!(!selected_lane.dispatch_command.contains("--json"));
     }
 
     fn completed_dev_team_receipt(task_id: &str, dispatch_target: &str) -> RunGraphDispatchReceipt {
@@ -18509,8 +18280,8 @@ mod tests {
     }
 
     #[test]
-    fn dev_team_preview_receipt_gate_advances_only_after_same_task_completion_and_survives_compact_json()
-     {
+    fn dev_team_preview_receipt_gate_advances_only_after_same_task_completion_and_survives_compact_json(
+    ) {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
             "default_flow_id": "delivery",
@@ -19147,12 +18918,10 @@ mod tests {
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview-dev-team");
         assert_eq!(preview.lanes_selected, 4);
-        assert!(
-            !preview
-                .next_actions
-                .iter()
-                .any(|action| action.contains("closure-oriented"))
-        );
+        assert!(!preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("closure-oriented")));
     }
 
     #[test]
@@ -19178,11 +18947,9 @@ mod tests {
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
     }
 
     #[test]
@@ -19206,12 +18973,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_carrier_id_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_carrier_id_missing")));
     }
 
     #[test]
@@ -19235,12 +19000,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_model_profile_id_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_model_profile_id_missing")));
     }
 
     #[test]
@@ -19290,12 +19053,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_rate_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_rate_missing")));
         assert!(preview.blocked_candidates.is_empty());
     }
 
@@ -19328,12 +19089,10 @@ mod tests {
                     == "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             )
         );
-        assert!(
-            preview
-                .source_surfaces
-                .iter()
-                .any(|surface| surface == "vida agent-init --role worker <task-id>")
-        );
+        assert!(preview
+            .source_surfaces
+            .iter()
+            .any(|surface| surface == "vida agent-init --role worker <task-id>"));
     }
 
     #[test]
@@ -19355,11 +19114,9 @@ mod tests {
         );
 
         assert_eq!(preview.status, "blocked");
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"no_ready_task_candidates".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"no_ready_task_candidates".to_string()));
         assert!(preview.next_actions.iter().any(|action| {
             action.contains("Inspect `vida task ready`") && !action.contains("ready --json")
         }));
@@ -19397,19 +19154,17 @@ mod tests {
             build_agent_dispatch_next_preview(&activation_bundle, &projection, 1, 4, None, true);
 
         assert_eq!(preview.status, "blocked");
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"no_ready_task_candidates".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"no_ready_task_candidates".to_string()));
         assert!(preview.next_actions.iter().any(|action| {
             action.contains("Inspect `vida task ready`") && !action.contains("ready --json")
         }));
     }
 
     #[test]
-    fn agent_dispatch_next_preview_terminal_gate_blocks_execution_but_preserves_diagnostic_proposals()
-     {
+    fn agent_dispatch_next_preview_terminal_gate_blocks_execution_but_preserves_diagnostic_proposals(
+    ) {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-a".to_string()),
             ready: vec![
@@ -19429,11 +19184,9 @@ mod tests {
         );
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.lanes_selected, 2);
-        assert!(
-            preview.parallelization_planner["packet_proposals"]
-                .as_array()
-                .is_some_and(|proposals| proposals.len() == 2)
-        );
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| proposals.len() == 2));
 
         apply_continuation_dispatch_gate_to_preview(
             &mut preview,
@@ -19453,21 +19206,15 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assert!(preview.selected_lanes.is_empty());
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string())
-        );
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"continuation_binding_ambiguous".to_string())
-        );
-        assert!(
-            preview
-                .next_actions
-                .contains(&"bind an explicit next bounded unit".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
+        assert!(preview
+            .blocker_codes
+            .contains(&"continuation_binding_ambiguous".to_string()));
+        assert!(preview
+            .next_actions
+            .contains(&"bind an explicit next bounded unit".to_string()));
         assert_eq!(
             preview.parallelization_planner["blocked_by_continuation_gate"],
             true
@@ -19741,18 +19488,25 @@ mod tests {
 
         assert_eq!(scaffold["request_gate_status"], "ready");
         assert_eq!(scaffold["safe_to_auto_invoke"], true);
-        assert_eq!(scaffold["tool_sequence"], serde_json::json!(expected_sequence));
+        assert_eq!(
+            scaffold["tool_sequence"],
+            serde_json::json!(expected_sequence)
+        );
         assert!(!scaffold["tool_sequence"]
             .as_array()
             .expect("configured operation sequence should be an array")
             .is_empty());
-}
+    }
 
     #[test]
     fn host_bridge_auto_invocation_scaffold_rejects_invalid_strict_request_fields() {
         let cases = [
             ("missing_adapter_operations", "adapter_operations", None),
-            ("forged_adapter_operations", "adapter_operations", Some("forged")),
+            (
+                "forged_adapter_operations",
+                "adapter_operations",
+                Some("forged"),
+            ),
             (
                 "missing_adapter_contract_snapshot",
                 "adapter_contract_snapshot",
@@ -19763,10 +19517,26 @@ mod tests {
                 "adapter_contract_snapshot",
                 Some("forged"),
             ),
-            ("missing_adapter_contract_hash", "adapter_contract_hash", None),
-            ("forged_adapter_contract_hash", "adapter_contract_hash", Some("forged")),
-            ("missing_adapter_contract_source", "adapter_contract_source", None),
-            ("forged_adapter_contract_source", "adapter_contract_source", Some("")),
+            (
+                "missing_adapter_contract_hash",
+                "adapter_contract_hash",
+                None,
+            ),
+            (
+                "forged_adapter_contract_hash",
+                "adapter_contract_hash",
+                Some("forged"),
+            ),
+            (
+                "missing_adapter_contract_source",
+                "adapter_contract_source",
+                None,
+            ),
+            (
+                "forged_adapter_contract_source",
+                "adapter_contract_source",
+                Some(""),
+            ),
             ("missing_request_identity", "request_id", None),
             ("forged_request_identity", "packet_path", Some("")),
         ];
@@ -19797,12 +19567,15 @@ mod tests {
             let scaffold = host_bridge_auto_invocation_scaffold_for_payload(&payload);
 
             assert_eq!(
-                scaffold["request_gate_status"],
-                "invalid_request_contract",
+                scaffold["request_gate_status"], "invalid_request_contract",
                 "case {case} should expose typed contract failure"
             );
             assert_eq!(scaffold["safe_to_auto_invoke"], false, "case {case}");
-            assert_eq!(scaffold["tool_sequence"], serde_json::json!([]), "case {case}");
+            assert_eq!(
+                scaffold["tool_sequence"],
+                serde_json::json!([]),
+                "case {case}"
+            );
         }
     }
 }

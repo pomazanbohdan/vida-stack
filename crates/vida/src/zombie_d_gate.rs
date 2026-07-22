@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::Path};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::state_store::TaskRecord;
 
@@ -67,10 +67,7 @@ pub(crate) fn project_policy(dev_team: &serde_yaml::Value, blockers: &mut Vec<St
         gate.and_then(|value| crate::yaml_lookup(value, &["required_categories"])),
         &LEGACY_REQUIRED_CATEGORIES,
     );
-    let required_categories = LEGACY_REQUIRED_CATEGORIES
-        .iter()
-        .map(|value| value.to_string())
-        .collect::<Vec<_>>();
+    let required_categories = configured_required_categories.clone();
     let task_classes = string_list_or_default(
         gate.and_then(|value| crate::yaml_lookup(value, &["applies_to", "task_classes"])),
         &DEFAULT_TASK_CLASSES,
@@ -87,8 +84,9 @@ pub(crate) fn project_policy(dev_team: &serde_yaml::Value, blockers: &mut Vec<St
     if gate_id.trim().is_empty() {
         config_blockers.push("invalid_zombie_d_gate_id".to_string());
     }
-    if !valid_required_categories(&configured_required_categories) {
+    if let Err(blocker) = validate_required_categories(&configured_required_categories) {
         config_blockers.push("invalid_zombie_d_required_categories".to_string());
+        config_blockers.push(blocker.to_string());
     }
     if task_classes.is_empty() {
         config_blockers.push("empty_zombie_d_task_classes".to_string());
@@ -106,6 +104,7 @@ pub(crate) fn project_policy(dev_team: &serde_yaml::Value, blockers: &mut Vec<St
         "enabled": enabled,
         "gate_id": gate_id,
         "required_categories": required_categories,
+        "required_categories_profile": required_categories_profile(&configured_required_categories),
         "optional_categories": OPTIONAL_CATEGORIES,
         "migration": {
             "legacy_categories": LEGACY_REQUIRED_CATEGORIES,
@@ -241,6 +240,20 @@ pub(crate) fn close_block_payload(task: &TaskRecord, result: &Value) -> Option<V
 
 fn policy_from_projection(value: Option<&Value>) -> ZombieDPolicy {
     let value = value.unwrap_or(&Value::Null);
+    let configured_required_categories = value.get("required_categories");
+    let required_categories = configured_required_categories
+        .map(|configured| string_array(Some(configured)))
+        .unwrap_or_else(legacy_required_categories);
+    let mut config_blockers = string_array(value.get("blockers"));
+    if configured_required_categories.is_some() {
+        if let Err(blocker) = validate_required_categories(&required_categories) {
+            push_unique(
+                &mut config_blockers,
+                "invalid_zombie_d_required_categories".to_string(),
+            );
+            push_unique(&mut config_blockers, blocker.to_string());
+        }
+    }
     ZombieDPolicy {
         enabled: value
             .get("enabled")
@@ -251,21 +264,7 @@ fn policy_from_projection(value: Option<&Value>) -> ZombieDPolicy {
             .and_then(Value::as_str)
             .unwrap_or(GATE_ID)
             .to_string(),
-        required_categories: {
-            let configured = string_array(value.get("required_categories"));
-            let legacy = configured
-                .into_iter()
-                .filter(|category| LEGACY_REQUIRED_CATEGORIES.contains(&category.as_str()))
-                .collect::<Vec<_>>();
-            if legacy.is_empty() {
-                LEGACY_REQUIRED_CATEGORIES
-                    .iter()
-                    .map(|value| value.to_string())
-                    .collect()
-            } else {
-                legacy
-            }
-        },
+        required_categories,
         optional_categories: {
             let configured = string_array(value.get("optional_categories"));
             if configured.is_empty() {
@@ -284,7 +283,7 @@ fn policy_from_projection(value: Option<&Value>) -> ZombieDPolicy {
         enforcement_points: lower_string_array(value.get("enforcement_points"))
             .into_iter()
             .collect(),
-        config_blockers: string_array(value.get("blockers")),
+        config_blockers,
     }
 }
 
@@ -524,17 +523,68 @@ fn validate_matrix(
     }
 }
 
-fn valid_required_categories(categories: &[String]) -> bool {
-    categories
-        == LEGACY_REQUIRED_CATEGORIES
-            .iter()
-            .map(|value| value.to_string())
-            .collect::<Vec<_>>()
-        || categories
-            == CANONICAL_REQUIRED_CATEGORIES
-                .iter()
-                .map(|value| value.to_string())
-                .collect::<Vec<_>>()
+fn legacy_required_categories() -> Vec<String> {
+    LEGACY_REQUIRED_CATEGORIES
+        .iter()
+        .map(|value| value.to_string())
+        .collect()
+}
+
+fn required_categories_profile(categories: &[String]) -> &'static str {
+    match validate_required_categories(categories) {
+        Ok("legacy") => "legacy",
+        Ok("canonical") => "canonical",
+        _ => "invalid",
+    }
+}
+
+fn validate_required_categories(categories: &[String]) -> Result<&'static str, &'static str> {
+    let mut seen = BTreeSet::new();
+    if categories
+        .iter()
+        .any(|category| !seen.insert(category.as_str()))
+    {
+        return Err("duplicate_zombie_d_required_category");
+    }
+    if categories
+        .iter()
+        .any(|category| !CANONICAL_REQUIRED_CATEGORIES.contains(&category.as_str()))
+    {
+        return Err("unknown_zombie_d_required_category");
+    }
+    let legacy = LEGACY_REQUIRED_CATEGORIES
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    if categories == legacy {
+        return Ok("legacy");
+    }
+    let canonical = CANONICAL_REQUIRED_CATEGORIES
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    if categories == canonical {
+        return Ok("canonical");
+    }
+    let legacy_set = legacy.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let canonical_set = canonical
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let category_set = categories
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if category_set == legacy_set || category_set == canonical_set {
+        return Err("invalid_zombie_d_required_category_order");
+    }
+    Err("invalid_zombie_d_required_categories_profile")
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn required_categories_for_task(policy: &ZombieDPolicy, task: &TaskRecord) -> Vec<String> {
@@ -740,11 +790,15 @@ mod tests {
     }
 
     fn readiness(enabled: bool) -> Value {
+        readiness_with_required(enabled, &LEGACY_REQUIRED_CATEGORIES)
+    }
+
+    fn readiness_with_required(enabled: bool, required_categories: &[&str]) -> Value {
         json!({
             "zombie_d_gate": {
                 "enabled": enabled,
                 "gate_id": GATE_ID,
-                "required_categories": LEGACY_REQUIRED_CATEGORIES,
+                "required_categories": required_categories,
                 "applies_to": {"task_classes": DEFAULT_TASK_CLASSES, "path_tokens": DEFAULT_PATH_TOKENS},
                 "enforcement_points": DEFAULT_ENFORCEMENT_POINTS,
                 "status": "ready",
@@ -813,11 +867,9 @@ mod tests {
         let result =
             evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "dispatch");
         assert_eq!(result["status"], "blocked");
-        assert!(
-            result["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing"))
-        );
+        assert!(result["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing")));
     }
 
     #[test]
@@ -859,11 +911,9 @@ mod tests {
         let result =
             evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         assert_eq!(result["status"], "blocked");
-        assert!(
-            result["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_invalid"))
-        );
+        assert!(result["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_invalid")));
     }
 
     #[test]
@@ -876,11 +926,9 @@ mod tests {
         let result =
             evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         let blockers = string_array(result.get("blocker_codes"));
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "zombie_d_matrix_metadata_missing")
-        );
+        assert!(blockers
+            .iter()
+            .any(|code| code == "zombie_d_matrix_metadata_missing"));
         for category in OPTIONAL_CATEGORIES {
             assert!(
                 blockers
@@ -925,11 +973,9 @@ mod tests {
         );
         let result =
             evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
-        assert!(
-            string_array(result.get("blocker_codes"))
-                .iter()
-                .any(|code| code == "zombie_d_na_reason_missing:P")
-        );
+        assert!(string_array(result.get("blocker_codes"))
+            .iter()
+            .any(|code| code == "zombie_d_na_reason_missing:P"));
     }
 
     #[test]
@@ -938,11 +984,9 @@ mod tests {
         let result =
             evaluate_from_readiness(&readiness(false), &task, Some("implementation"), "dispatch");
         assert_eq!(result["status"], "disabled");
-        assert!(
-            result["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.is_empty())
-        );
+        assert!(result["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.is_empty()));
     }
 
     #[test]
@@ -953,6 +997,11 @@ mod tests {
         assert_eq!(omitted_projection["enabled"], true);
         assert_eq!(omitted_projection["default_enabled"], true);
         assert_eq!(omitted_projection["configured"], false);
+        assert_eq!(
+            omitted_projection["required_categories"],
+            json!(["Z", "O", "M", "B", "I", "E", "S"])
+        );
+        assert_eq!(omitted_projection["required_categories_profile"], "legacy");
         assert!(omitted_blockers.is_empty());
 
         let disabled: serde_yaml::Value =
@@ -966,7 +1015,18 @@ mod tests {
 
     #[test]
     fn project_policy_accepts_legacy_categories_and_advertises_rpc_migration() {
-        for configured in ["[Z, O, M, B, I, E, S]", "[Z, O, M, B, I, E, S, R, P, C]"] {
+        for (configured, expected_profile, expected) in [
+            (
+                "[Z, O, M, B, I, E, S]",
+                "legacy",
+                json!(["Z", "O", "M", "B", "I", "E", "S"]),
+            ),
+            (
+                "[Z, O, M, B, I, E, S, R, P, C]",
+                "canonical",
+                json!(["Z", "O", "M", "B", "I", "E", "S", "R", "P", "C"]),
+            ),
+        ] {
             let config: serde_yaml::Value = serde_yaml::from_str(&format!(
                 "zombie_d_gate:\n  required_categories: {configured}\n"
             ))
@@ -975,12 +1035,74 @@ mod tests {
             let projection = project_policy(&config, &mut blockers);
             assert!(blockers.is_empty());
             assert_eq!(projection["status"], "ready");
-            assert_eq!(
-                projection["required_categories"],
-                json!(["Z", "O", "M", "B", "I", "E", "S"])
-            );
+            assert_eq!(projection["required_categories"], expected);
+            assert_eq!(projection["required_categories_profile"], expected_profile);
             assert_eq!(projection["migration"]["legacy_profile_accepted"], true);
             assert_eq!(projection["optional_categories"], json!(["R", "P", "C"]));
         }
+    }
+
+    #[test]
+    fn invalid_required_category_order_subset_and_duplicate_fail_closed_with_typed_blockers() {
+        for (configured, expected_blocker) in [
+            (
+                "[O, Z, M, B, I, E, S]",
+                "invalid_zombie_d_required_category_order",
+            ),
+            (
+                "[Z, O, M, B, I, E, S, R, P]",
+                "invalid_zombie_d_required_categories_profile",
+            ),
+            (
+                "[Z, O, M, B, I, E, S, S]",
+                "duplicate_zombie_d_required_category",
+            ),
+        ] {
+            let config: serde_yaml::Value = serde_yaml::from_str(&format!(
+                "zombie_d_gate:\n  required_categories: {configured}\n"
+            ))
+            .expect("invalid configured YAML");
+            let mut blockers = Vec::new();
+            let projection = project_policy(&config, &mut blockers);
+            assert_eq!(projection["status"], "blocked");
+            assert!(blockers.iter().any(|blocker| blocker == expected_blocker));
+            assert_eq!(projection["required_categories_profile"], "invalid");
+            let task = task(None, &[], &["crates/vida/tests/runtime.rs"]);
+            let evaluated = evaluate_from_readiness(
+                &json!({"zombie_d_gate": projection}),
+                &task,
+                Some("implementation"),
+                "dispatch",
+            );
+            assert_eq!(evaluated["status"], "blocked");
+            assert!(string_array(evaluated.get("blocker_codes"))
+                .iter()
+                .any(|blocker| blocker == expected_blocker));
+        }
+    }
+
+    #[test]
+    fn canonical_projection_evaluation_requires_and_accepts_rpc_categories() {
+        let notes = rpc_matrix_note("pass");
+        let task = task(
+            Some(&notes),
+            &["replay", "persistence", "cross-surface"],
+            &["crates/vida/tests/runtime.rs"],
+        );
+        let result = evaluate_from_readiness(
+            &readiness_with_required(true, &CANONICAL_REQUIRED_CATEGORIES),
+            &task,
+            Some("implementation"),
+            "closure",
+        );
+        assert_eq!(result["status"], "pass");
+        assert_eq!(
+            result["artifact_refs"]["required_categories"],
+            json!(["Z", "O", "M", "B", "I", "E", "S", "R", "P", "C"])
+        );
+        assert_eq!(
+            result["artifact_refs"]["applicable_categories"],
+            json!(["R", "P", "C"])
+        );
     }
 }

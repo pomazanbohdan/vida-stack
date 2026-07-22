@@ -117,9 +117,9 @@ fn generic_runtime_protocol_migration_fixture_project_without_vida_stack_docs_ca
     );
     assert_eq!(task["status"], "pass");
     assert!(has_parent_dependency(&task["task"], "fixture-root"));
-    assert_eq!(
-        task["task"]["work_item_kind"]["default_flow_binding"],
-        "default_delivery"
+    assert!(
+        task["task"]["work_item_kind"]["default_flow_binding"].is_null(),
+        "generic task taxonomy must not project an execution-authority flow id"
     );
     let source_repo = task["task"]["source_repo"]
         .as_str()
@@ -131,9 +131,9 @@ fn generic_runtime_protocol_migration_fixture_project_without_vida_stack_docs_ca
 
     let ready = run_json(&project_root, &state_dir, &["task", "ready", "--json"]);
     let ready_task = task_row_by_id(&ready, "fixture-task");
-    assert_eq!(
-        ready_task["work_item_kind"]["default_flow_binding"],
-        "default_delivery"
+    assert!(
+        ready_task["work_item_kind"]["default_flow_binding"].is_null(),
+        "ready task taxonomy must not project an execution-authority flow id"
     );
     let list = run_json(
         &project_root,

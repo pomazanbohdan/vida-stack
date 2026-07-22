@@ -1,4 +1,4 @@
-use crate::{RuntimeConsumptionLaneSelection, StateStore, runtime_consumption_run_id};
+use crate::{runtime_consumption_run_id, RuntimeConsumptionLaneSelection, StateStore};
 
 pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
     store: &StateStore,
@@ -209,8 +209,8 @@ mod tests {
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
 
     #[tokio::test]
-    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails()
-     {
+    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -279,7 +279,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["implementation".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::Value::Null,
             reason: "test".to_string(),
         };
@@ -288,11 +289,9 @@ mod tests {
             build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;
         assert_eq!(bootstrap["status"], "blocked");
         assert_eq!(bootstrap["handoff_ready"], false);
-        assert!(
-            bootstrap["fallback_reason"]
-                .as_str()
-                .is_some_and(|value| value.contains("seed_failed"))
-        );
+        assert!(bootstrap["fallback_reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("seed_failed")));
 
         assert_eq!(bootstrap["latest_status"]["status"], "blocked");
         assert_eq!(bootstrap["latest_status"]["recovery_ready"], false);

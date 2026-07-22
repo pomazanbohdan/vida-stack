@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::release1_contracts::{BlockerCode, blocker_code_str};
+use crate::release1_contracts::{blocker_code_str, BlockerCode};
 
 fn looks_like_runtime_root_session_write_guard_candidate(value: &serde_json::Value) -> bool {
     matches!(
@@ -395,8 +395,8 @@ fn runtime_root_session_write_guard_from_snapshot(
     if looks_like_runtime_root_session_write_guard_candidate(direct_guard) {
         return Some(direct_guard.clone());
     }
-    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["orchestration_contract"]
-        ["root_session_write_guard"];
+    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
+        ["orchestration_contract"]["root_session_write_guard"];
     if looks_like_runtime_root_session_write_guard_candidate(execution_plan_contract_guard) {
         return Some(execution_plan_contract_guard.clone());
     }

@@ -2930,6 +2930,7 @@ mod tests {
         write_runtime_dispatch_packet, RuntimeDispatchPacketContext,
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
+    use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use clap::CommandFactory;
@@ -3923,44 +3924,56 @@ mod tests {
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
-        let runtime_assignment = if executor_backend == "junior" {
-            json!({
-                "selected_carrier_id": "junior",
-                "selected_backend_id": "internal_subagents",
-                "selected_dispatch_backend_id": "internal_subagents",
-                "selected_model_profile_id": "codex_gpt56_luna_high_write",
-                "selected_model_ref": "gpt-5.6-luna",
-                "selected_reasoning_effort": "high",
-                "selected_runtime_role": "worker",
-                "task_class": "implementation"
+        let compiled_bundle = canonical_compiled_bundle();
+        let aliases = compiled_bundle["carrier_runtime"]["dispatch_aliases"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let selected_alias = aliases.iter().find(|alias| {
+            ["role_id", "alias_id", "carrier_tier", "template_role_id"]
+                .iter()
+                .filter_map(|key| alias[*key].as_str())
+                .any(|value| value == executor_backend)
+        });
+        let task_class = selected_alias
+            .and_then(|alias| alias["task_classes"].as_array())
+            .and_then(|classes| classes.iter().find_map(serde_json::Value::as_str))
+            .unwrap_or_default();
+        let runtime_assignment = selected_alias
+            .and_then(|alias| alias["role_id"].as_str())
+            .map(|alias_id| {
+                crate::runtime_assignment_builder::build_runtime_assignment_from_dispatch_alias(
+                    &compiled_bundle,
+                    alias_id,
+                    task_class,
+                )
             })
-        } else {
-            serde_json::Value::Null
-        };
+            .unwrap_or(serde_json::Value::Null);
+        let backend_admissibility_matrix = aliases
+            .iter()
+            .filter_map(|alias| {
+                let backend_id = alias["role_id"].as_str()?;
+                let backend_class = alias["backend_class"].as_str()?;
+                let classes = alias["task_classes"].as_array()?;
+                let lane_admissibility = classes
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|task_class| (task_class.to_string(), serde_json::Value::Bool(true)))
+                    .collect::<serde_json::Map<_, _>>();
+                Some(json!({
+                    "backend_id": backend_id,
+                    "backend_class": backend_class,
+                    "lane_admissibility": lane_admissibility
+                }))
+            })
+            .collect::<Vec<_>>();
         json!({
-            "backend_admissibility_matrix": [
-                {
-                    "backend_id": "junior",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                },
-                {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "implementation": true
-                    }
-                }
-            ],
+            "backend_admissibility_matrix": backend_admissibility_matrix,
             "development_flow": {
                 "implementer": {
-                    "executor_backend": if executor_backend == "junior" {
-                        "internal_subagents"
-                    } else {
-                        executor_backend
-                    }
+                    "executor_backend": runtime_assignment["selected_backend_id"]
+                        .as_str()
+                        .unwrap_or(executor_backend)
                 }
             },
             "runtime_assignment": runtime_assignment
@@ -3984,7 +3997,7 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle: canonical_compiled_bundle(),
             execution_plan: agent_lane_test_execution_plan("internal_subagents"),
             reason: "test".to_string(),
         };
@@ -4589,15 +4602,12 @@ mod tests {
                 .expect("fixture should select a host CLI system");
                 let selected_cli_entry = crate::yaml_lookup(
                     &config_value,
-                    &[
-                        "host_environment",
-                        "systems",
-                        selected_cli_system.as_str(),
-                    ],
+                    &["host_environment", "systems", selected_cli_system.as_str()],
                 )
                 .expect("selected host CLI entry should exist");
-                let host_bridge_entry = crate::yaml_lookup(selected_cli_entry, &["host_tool_bridge"])
-                    .expect("selected host CLI should configure host bridge");
+                let host_bridge_entry =
+                    crate::yaml_lookup(selected_cli_entry, &["host_tool_bridge"])
+                        .expect("selected host CLI should configure host bridge");
                 let runtime_assignment = crate::yaml_lookup(
                     &config_value,
                     &[
@@ -4610,11 +4620,9 @@ mod tests {
                 .and_then(serde_yaml::Value::as_sequence)
                 .and_then(|attempts| attempts.first())
                 .expect("implementation runtime assignment should exist");
-                let selected_backend = crate::yaml_string(crate::yaml_lookup(
-                    runtime_assignment,
-                    &["carrier_id"],
-                ))
-                .expect("implementation runtime assignment should select backend");
+                let selected_backend =
+                    crate::yaml_string(crate::yaml_lookup(runtime_assignment, &["carrier_id"]))
+                        .expect("implementation runtime assignment should select backend");
                 let selected_model_profile_id = crate::yaml_string(crate::yaml_lookup(
                     runtime_assignment,
                     &["model_profile_id"],
@@ -4644,26 +4652,20 @@ mod tests {
                     &["model_profiles", selected_model_profile_id.as_str()],
                 )
                 .expect("configured carrier should expose selected model profile");
-                let selected_model_ref = crate::yaml_string(crate::yaml_lookup(
-                    selected_profile_entry,
-                    &["model_ref"],
-                ))
-                .expect("selected model profile should configure model reference");
+                let selected_model_ref =
+                    crate::yaml_string(crate::yaml_lookup(selected_profile_entry, &["model_ref"]))
+                        .expect("selected model profile should configure model reference");
                 let selected_reasoning_effort = crate::yaml_string(crate::yaml_lookup(
                     selected_profile_entry,
                     &["reasoning_effort"],
                 ))
                 .expect("selected model profile should configure reasoning effort");
-                let activation_runtime_role = crate::yaml_string(crate::yaml_lookup(
-                    runtime_assignment,
-                    &["runtime_role"],
-                ))
-                .expect("implementation runtime assignment should select runtime role");
-                let task_class = crate::yaml_string(crate::yaml_lookup(
-                    runtime_assignment,
-                    &["task_class"],
-                ))
-                .expect("implementation runtime assignment should select task class");
+                let activation_runtime_role =
+                    crate::yaml_string(crate::yaml_lookup(runtime_assignment, &["runtime_role"]))
+                        .expect("implementation runtime assignment should select runtime role");
+                let task_class =
+                    crate::yaml_string(crate::yaml_lookup(runtime_assignment, &["task_class"]))
+                        .expect("implementation runtime assignment should select task class");
                 let execution_boundary = crate::yaml_string(crate::yaml_lookup(
                     selected_cli_entry,
                     &["execution_boundary"],
@@ -4674,26 +4676,20 @@ mod tests {
                     &["dispatch_transport"],
                 ))
                 .expect("selected host CLI should configure dispatch transport");
-                let receipt_mode = crate::yaml_string(crate::yaml_lookup(
-                    selected_cli_entry,
-                    &["receipt_mode"],
-                ))
-                .expect("selected host CLI should configure receipt mode");
-                let adapter_kind = crate::yaml_string(crate::yaml_lookup(
-                    host_bridge_entry,
-                    &["adapter_kind"],
-                ))
-                .expect("host bridge should configure adapter kind");
+                let receipt_mode =
+                    crate::yaml_string(crate::yaml_lookup(selected_cli_entry, &["receipt_mode"]))
+                        .expect("selected host CLI should configure receipt mode");
+                let adapter_kind =
+                    crate::yaml_string(crate::yaml_lookup(host_bridge_entry, &["adapter_kind"]))
+                        .expect("host bridge should configure adapter kind");
                 let adapter_capability_id = crate::yaml_string(crate::yaml_lookup(
                     host_bridge_entry,
                     &["adapter_capability_id"],
                 ))
                 .expect("host bridge should configure adapter capability");
-                let invocation_mode = crate::yaml_string(crate::yaml_lookup(
-                    host_bridge_entry,
-                    &["invocation_mode"],
-                ))
-                .expect("host bridge should configure invocation mode");
+                let invocation_mode =
+                    crate::yaml_string(crate::yaml_lookup(host_bridge_entry, &["invocation_mode"]))
+                        .expect("host bridge should configure invocation mode");
                 let mut lane_admissibility = serde_json::Map::new();
                 lane_admissibility.insert(task_class.clone(), json!(true));
                 let role_selection_execution_plan = json!({
@@ -4789,7 +4785,7 @@ mod tests {
                 "implementation".to_string(),
                 "crates/vida/src/init_surfaces.rs".to_string(),
             ],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle: canonical_compiled_bundle(),
             execution_plan: role_selection_execution_plan,
             reason: "test".to_string(),
         };
@@ -6982,6 +6978,12 @@ fn resume_inputs_from_downstream_packet_without_store(
     .map_err(|error| {
         format!("Failed to decode role_selection from downstream dispatch packet: {error}")
     })?;
+    if role_selection.compiled_bundle.is_null() {
+        return Err(
+            "persisted_role_selection_compiled_bundle_missing: store-backed rehydrate is required before execution"
+                .to_string(),
+        );
+    }
     let downstream_dispatch_ready = packet
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
@@ -7112,7 +7114,7 @@ fn downstream_packet_runtime_assignment_field(
                 .and_then(|value| {
                     serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
                 })?;
-            if let Some(value) =
+            if let Ok(Some(value)) =
                 super::runtime_dispatch_downstream_packets::configured_lane_contract_field(
                     &role_selection,
                     &dispatch_target,
@@ -7147,20 +7149,21 @@ fn downstream_packet_runtime_assignment_field(
             let flow_key = active_packet
                 .get("handoff_task_class")
                 .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
                 .or_else(|| {
                     active_packet
                         .get("handoff_runtime_role")
                         .and_then(serde_json::Value::as_str)
-                        .and_then(|role| match role.trim() {
-                            "verifier" | "prover" => Some("verification"),
-                            "coach" => Some("coach"),
-                            "business_analyst" => Some("specification"),
-                            "solution_architect" => Some("architecture"),
-                            "worker" => Some("implementation"),
-                            _ => None,
+                        .and_then(|role| {
+                            crate::dev_team_sequence_contract::configured_task_class_for_runtime_role(
+                                &role_selection.compiled_bundle,
+                                None,
+                                role,
+                            )
+                            .ok()
                         })
-                })?
-                .trim();
+                })
+                .map(|value| value.trim().to_string())?;
             role_selection
                 .execution_plan
                 .pointer(&format!(
@@ -7206,6 +7209,12 @@ fn resume_inputs_from_dispatch_packet_without_store(
             .unwrap_or(serde_json::Value::Null),
     )
     .map_err(|error| format!("Failed to decode role_selection from dispatch packet: {error}"))?;
+    if role_selection.compiled_bundle.is_null() {
+        return Err(
+            "persisted_role_selection_compiled_bundle_missing: store-backed rehydrate is required before execution"
+                .to_string(),
+        );
+    }
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
@@ -7355,9 +7364,7 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
                 "receipt_path",
             ] {
                 if expected_value.get(field) != actual_value.get(field) {
-                    return Err(format!(
-                        "host_bridge_result_identity_mismatch:{field}"
-                    ));
+                    return Err(format!("host_bridge_result_identity_mismatch:{field}"));
                 }
             }
             return Err("host_bridge_receipt_identity_mismatch".to_string());
@@ -8456,14 +8463,38 @@ fn agent_init_role_selection(
         })
 }
 
-fn task_class_for_runtime_role(runtime_role: &str) -> &'static str {
-    match runtime_role {
-        "solution_architect" => "architecture",
-        "verifier" | "prover" => "verification",
-        "coach" => "coach",
-        "business_analyst" => "specification",
-        _ => "implementation",
+fn runtime_assignment_blocked(blocker: String) -> serde_json::Value {
+    serde_json::json!({
+        "enabled": false,
+        "blocker_code": blocker,
+        "reason": "configured TeamFlow task-class resolution failed",
+    })
+}
+
+fn configured_task_class_for_agent_init_selection(
+    selection: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
+    selected_role: &str,
+    dispatch_target: &str,
+) -> Result<String, String> {
+    let role_selection = agent_init_role_selection(selection);
+    let compiled_bundle = role_selection
+        .as_ref()
+        .map(|value| &value.compiled_bundle)
+        .filter(|value| !value.is_null())
+        .unwrap_or(activation_bundle);
+    if !dispatch_target.trim().is_empty() {
+        return crate::dev_team_sequence_contract::configured_task_class_for_dispatch_target(
+            compiled_bundle,
+            None,
+            dispatch_target,
+        );
     }
+    crate::dev_team_sequence_contract::configured_task_class_for_runtime_role(
+        compiled_bundle,
+        None,
+        selected_role,
+    )
 }
 
 fn explicit_mode_runtime_assignment(
@@ -8473,14 +8504,25 @@ fn explicit_mode_runtime_assignment(
     let Some(selected_role) = selection
         .get("selected_role")
         .and_then(serde_json::Value::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return serde_json::Value::Null;
     };
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
+    let task_class = match configured_task_class_for_agent_init_selection(
+        selection,
+        activation_bundle,
+        selected_role,
+        dispatch_target,
+    ) {
+        Ok(task_class) => task_class,
+        Err(blocker) => return runtime_assignment_blocked(blocker),
+    };
     crate::build_runtime_assignment_from_resolved_constraints(
         activation_bundle,
         "orchestrator",
-        task_class_for_runtime_role(selected_role),
+        &task_class,
         selected_role,
     )
 }
@@ -8559,17 +8601,6 @@ fn agent_init_effective_activation_bundle(
     }
 }
 
-fn task_class_for_dispatch_target(dispatch_target: &str, selected_role: &str) -> &'static str {
-    match dispatch_target {
-        "specification" | "analysis" => "specification",
-        "coach" => "coach",
-        "verification" => "verification",
-        "execution_preparation" => "architecture",
-        "implementer" | "" => task_class_for_runtime_role(selected_role),
-        _ => task_class_for_runtime_role(selected_role),
-    }
-}
-
 fn rebuilt_embedded_runtime_assignment(
     selection: &serde_json::Value,
     role_selection: &super::RuntimeConsumptionLaneSelection,
@@ -8578,14 +8609,23 @@ fn rebuilt_embedded_runtime_assignment(
     let selected_role = selection
         .get("selected_role")
         .and_then(serde_json::Value::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(role_selection.selected_role.as_str());
     let dispatch_target = agent_init_selection_dispatch_target(selection);
-    let task_class = task_class_for_dispatch_target(dispatch_target, selected_role);
+    let task_class = match configured_task_class_for_agent_init_selection(
+        selection,
+        &role_selection.compiled_bundle,
+        selected_role,
+        dispatch_target,
+    ) {
+        Ok(task_class) => task_class,
+        Err(blocker) => return runtime_assignment_blocked(blocker),
+    };
     crate::build_runtime_assignment_from_resolved_constraints(
         activation_bundle,
         &role_selection.selected_role,
-        task_class,
+        &task_class,
         selected_role,
     )
 }
@@ -9158,6 +9198,7 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
 mod agent_init_surface_tests {
     use super::*;
     use crate::run;
+    use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::RuntimeConsumptionLaneSelection;
@@ -9194,7 +9235,7 @@ mod agent_init_surface_tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle: canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "implementer": {

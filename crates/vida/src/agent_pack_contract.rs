@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) const RUNTIME_PACKS_PROJECTION: &str = ".vida/project/agent-extensions/packs.yaml";
@@ -19,83 +19,65 @@ pub(crate) fn canonical_role_alias_source(role_id: &str) -> Option<&'static str>
     None
 }
 
-pub(crate) fn known_pack_role(role_id: &str) -> bool {
-    matches!(
-        canonical_dev_team_role_id(role_id).as_str(),
-        "specifier"
-            | "coder"
-            | "reviewer_test_gate"
-            | "reviewer_implementation_gate"
-            | "reviewer_validator"
-            | "cleaner_review_gate"
-            | "cleaner"
-            | "refactorer"
-            | "architect"
-            | "hardender"
-            | "qa_tester"
-            | "adversarial_reviewer"
-            | "prover"
-            | "release_closure"
-            | "test_author"
-    )
+#[derive(Debug, Clone, Default)]
+struct ConfiguredPackRoleContract {
+    runtime_role: Option<String>,
+    task_class: Option<String>,
 }
 
-pub(crate) fn default_runtime_role_for_canonical_role(role_id: &str) -> Option<&'static str> {
-    match canonical_dev_team_role_id(role_id).as_str() {
-        "specifier" => Some("business_analyst"),
-        "coder" | "cleaner" | "refactorer" | "test_author" => Some("worker"),
-        "reviewer_test_gate" | "reviewer_implementation_gate" | "reviewer_validator" => {
-            Some("coach")
-        }
-        "adversarial_reviewer" => Some("coach"),
-        "cleaner_review_gate" | "qa_tester" | "hardender" => Some("verifier"),
-        "architect" => Some("solution_architect"),
-        "prover" | "release_closure" => Some("prover"),
-        _ => None,
-    }
-}
-
-pub(crate) fn default_task_class_for_canonical_role(role_id: &str) -> Option<&'static str> {
-    match canonical_dev_team_role_id(role_id).as_str() {
-        "specifier" => Some("specification"),
-        "coder" | "cleaner" => Some("implementation"),
-        "refactorer" => Some("refactor"),
-        "architect" => Some("architecture"),
-        "hardender" | "cleaner_review_gate" => Some("quality_gate"),
-        "reviewer_test_gate" | "reviewer_implementation_gate" => Some("review"),
-        "adversarial_reviewer" => Some("review"),
-        "reviewer_validator" => Some("validation"),
-        "qa_tester" => Some("verification"),
-        "prover" | "release_closure" => Some("release_readiness"),
-        "test_author" => Some("test_authoring"),
-        _ => None,
-    }
+fn configured_dev_team_role_contracts(
+    overlay: &serde_yaml::Value,
+) -> BTreeMap<String, ConfiguredPackRoleContract> {
+    let Some(roles) =
+        crate::yaml_lookup(overlay, &["dev_team", "roles"]).and_then(serde_yaml::Value::as_mapping)
+    else {
+        return BTreeMap::new();
+    };
+    roles
+        .iter()
+        .filter_map(|(role_id, contract)| {
+            let role_id = role_id.as_str().map(canonical_dev_team_role_id)?;
+            if role_id.is_empty() {
+                return None;
+            }
+            let runtime_role = crate::yaml_string(crate::yaml_lookup(contract, &["runtime_role"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let task_class_values =
+                crate::yaml_string_list(crate::yaml_lookup(contract, &["task_classes"]));
+            let task_class = if task_class_values.len() == 1 {
+                task_class_values.into_iter().next()
+            } else {
+                crate::yaml_string(crate::yaml_lookup(contract, &["task_class"]))
+            }
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+            Some((
+                role_id,
+                ConfiguredPackRoleContract {
+                    runtime_role,
+                    task_class,
+                },
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn default_worktree_policy_for_step(
-    role_id: &str,
+    _role_id: &str,
     task_class: &str,
     receive_mode: &str,
 ) -> &'static str {
-    let role_id = canonical_dev_team_role_id(role_id);
-    if role_id == "hardender" && receive_mode == "batch" {
+    if task_class == "quality_gate" && receive_mode == "batch" {
         return "isolated_per_lane";
     }
-    match role_id.as_str() {
-        "coder" | "cleaner" | "refactorer" | "test_author" => "isolated_per_task",
-        "hardender" if matches!(task_class, "implementation" | "refactor") => "isolated_per_task",
-        "specifier"
-        | "architect"
-        | "reviewer_test_gate"
-        | "reviewer_implementation_gate"
-        | "reviewer_validator"
-        | "adversarial_reviewer"
-        | "cleaner_review_gate"
-        | "qa_tester"
-        | "prover"
-        | "release_closure"
-        | "hardender" => "current",
-        _ => "current",
+    if matches!(
+        task_class,
+        "implementation" | "delivery_task" | "execution_block" | "refactor" | "test_authoring"
+    ) {
+        "isolated_per_task"
+    } else {
+        "current"
     }
 }
 
@@ -155,7 +137,7 @@ pub(crate) fn load_pack_registry_from_overlay(
             blocker_codes: vec!["pack_registry_missing_packs".to_string()],
         };
     };
-    let configured_roles = configured_dev_team_canonical_roles(overlay);
+    let configured_role_contracts = configured_dev_team_role_contracts(overlay);
     let registry_refs = registry_refs(root, overlay);
     let mut seen_pack_ids = BTreeSet::new();
     let packs = rows
@@ -166,7 +148,7 @@ pub(crate) fn load_pack_registry_from_overlay(
                 row,
                 index,
                 &configured_path,
-                &configured_roles,
+                &configured_role_contracts,
                 &registry_refs,
                 &mut blocker_codes,
             )?;
@@ -226,7 +208,7 @@ fn compile_pack_row(
     row: &serde_yaml::Value,
     index: usize,
     configured_path: &str,
-    configured_roles: &BTreeSet<String>,
+    configured_role_contracts: &BTreeMap<String, ConfiguredPackRoleContract>,
     registry_refs: &RegistryRefs,
     registry_blockers: &mut Vec<String>,
 ) -> Option<serde_json::Value> {
@@ -264,7 +246,7 @@ fn compile_pack_row(
         &pack_id,
         row,
         terminal_proof_target.as_deref(),
-        configured_roles,
+        configured_role_contracts,
         registry_refs,
         &mut blocker_codes,
     );
@@ -318,7 +300,7 @@ fn compile_pack_steps(
     pack_id: &str,
     pack: &serde_yaml::Value,
     pack_terminal_proof_target: Option<&str>,
-    configured_roles: &BTreeSet<String>,
+    configured_role_contracts: &BTreeMap<String, ConfiguredPackRoleContract>,
     registry_refs: &RegistryRefs,
     blocker_codes: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
@@ -346,16 +328,15 @@ fn compile_pack_steps(
                 ));
             }
             let canonical_role_id = canonical_dev_team_role_id(&configured_role_id);
-            if !known_pack_role(&canonical_role_id)
-                && !configured_roles.contains(&canonical_role_id)
-            {
+            let configured_role_contract = configured_role_contracts.get(&canonical_role_id);
+            if configured_role_contract.is_none() {
                 blocker_codes.push(format!(
                     "unknown_pack_step_role:{pack_id}:{configured_role_id}"
                 ));
             }
             let runtime_role = crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"]))
                 .or_else(|| {
-                    default_runtime_role_for_canonical_role(&canonical_role_id).map(str::to_string)
+                    configured_role_contract.and_then(|contract| contract.runtime_role.clone())
                 })
                 .unwrap_or_default();
             if runtime_role.is_empty() {
@@ -363,7 +344,7 @@ fn compile_pack_steps(
             }
             let task_class = crate::yaml_string(crate::yaml_lookup(step, &["task_class"]))
                 .or_else(|| {
-                    default_task_class_for_canonical_role(&canonical_role_id).map(str::to_string)
+                    configured_role_contract.and_then(|contract| contract.task_class.clone())
                 })
                 .unwrap_or_default();
             if task_class.is_empty() {
@@ -502,16 +483,6 @@ pub(crate) fn role_contract_from_yaml(value: &serde_yaml::Value) -> serde_json::
     } else {
         serde_json::Value::Object(object)
     }
-}
-
-fn configured_dev_team_canonical_roles(overlay: &serde_yaml::Value) -> BTreeSet<String> {
-    crate::yaml_lookup(overlay, &["dev_team", "roles"])
-        .and_then(serde_yaml::Value::as_mapping)
-        .into_iter()
-        .flat_map(|mapping| mapping.keys())
-        .filter_map(serde_yaml::Value::as_str)
-        .map(canonical_dev_team_role_id)
-        .collect()
 }
 
 struct RegistryRefs {
@@ -701,26 +672,32 @@ mod tests {
 
         let registry = load_pack_registry_from_overlay(root.path(), &overlay);
 
-        assert!(
-            registry
-                .blocker_codes
-                .iter()
-                .any(|code| code.contains("missing_pack_step_terminal_proof_target:bad_pack"))
-        );
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code.contains("missing_pack_step_terminal_proof_target:bad_pack")));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "unknown_pack_step_role:bad_pack:coder"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "missing_pack_step_runtime_role:bad_pack:0"));
     }
 
     #[test]
     fn pack_steps_get_default_worktree_policy() {
         assert_eq!(
-            default_worktree_policy_for_step("coder", "implementation", "single"),
+            default_worktree_policy_for_step("configured_writer", "implementation", "single"),
             "isolated_per_task"
         );
         assert_eq!(
-            default_worktree_policy_for_step("qa_tester", "verification", "task"),
+            default_worktree_policy_for_step("configured_verifier", "verification", "task"),
             "current"
         );
         assert_eq!(
-            default_worktree_policy_for_step("hardender", "quality_gate", "batch"),
+            default_worktree_policy_for_step("configured_gate", "quality_gate", "batch"),
             "isolated_per_lane"
         );
     }
@@ -765,30 +742,22 @@ mod tests {
 
         let registry = load_pack_registry_from_overlay(root.path(), &overlay);
 
-        assert!(
-            registry
-                .blocker_codes
-                .iter()
-                .any(|code| code == "pack_aliases_not_supported:bad-pack")
-        );
-        assert!(
-            registry
-                .blocker_codes
-                .iter()
-                .any(|code| code == "unknown_pack_flow_id:bad-pack:missing-flow")
-        );
-        assert!(
-            registry
-                .blocker_codes
-                .iter()
-                .any(|code| code == "non_canonical_pack_step_role:bad-pack:developer-role")
-        );
-        assert!(
-            registry
-                .blocker_codes
-                .iter()
-                .any(|code| code == "missing_pack_step_command_ref:bad-pack:0")
-        );
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "pack_aliases_not_supported:bad-pack"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "unknown_pack_flow_id:bad-pack:missing-flow"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "non_canonical_pack_step_role:bad-pack:developer-role"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "missing_pack_step_command_ref:bad-pack:0"));
     }
 
     #[test]
@@ -827,7 +796,7 @@ mod tests {
         .expect("dispatch alias registry should write");
         let overlay: serde_yaml::Value =
             serde_yaml::from_str(
-                "agent_extensions:\n  registries:\n    packs: packs.yaml\n    flows: flows.yaml\n    commands: commands.yaml\n    dispatch_aliases: dispatch-aliases.yaml\n",
+                "dev_team:\n  roles:\n    coder:\n      runtime_role: worker\n      task_classes: [implementation]\nagent_extensions:\n  registries:\n    packs: packs.yaml\n    flows: flows.yaml\n    commands: commands.yaml\n    dispatch_aliases: dispatch-aliases.yaml\n",
             )
             .expect("overlay");
 

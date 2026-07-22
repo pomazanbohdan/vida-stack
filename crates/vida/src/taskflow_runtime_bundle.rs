@@ -4,13 +4,13 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
-    DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
     build_project_activator_view, doctor_launcher_summary_for_root,
     latest_final_runtime_consumption_snapshot_path,
     latest_recorded_final_runtime_consumption_snapshot_path,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
     runtime_consumption_state::latest_admissible_retrieval_trust_signal,
-    surface_render::operator_command_map,
+    surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
+    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
 };
 
 use super::activation_status::{activation_status_is_pending, canonical_activation_status};
@@ -1979,12 +1979,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        TaskflowConsumeBundlePayload, activation_status_is_pending, activation_truth_project_root,
-        blocking_runtime_bundle, build_project_protocol_projections, bundle_project_root,
+        activation_status_is_pending, activation_truth_project_root, blocking_runtime_bundle,
+        build_project_protocol_projections, bundle_project_root,
         cache_contract_consistency_blockers, canonical_project_protocol_projection_status,
         init_view_activation_is_pending, retrieval_optional_context_boundary_blockers,
         retrieval_trust_evidence_blockers, runtime_bundle_retrieval_trust_evidence,
-        taskflow_consume_bundle_check,
+        taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
     };
     use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 
@@ -1996,12 +1996,14 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let counter = PROJECTION_FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-runtime-bundle-projection-{}-{}-{}",
             std::process::id(),
             nanos,
             counter
-        ))
+        ));
+        crate::test_cli_support::canonical_team_flow_test_project_root(&root);
+        root
     }
 
     #[test]
@@ -2165,16 +2167,12 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_cache_key_input:startup_bundle_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:startup_bundle_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"));
     }
 
     #[test]
@@ -2195,16 +2193,12 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_cache_key_input:startup_bundle_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:startup_bundle_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"));
     }
 
     #[test]
@@ -2216,11 +2210,9 @@ mod tests {
         assert!(blockers.iter().any(
             |row| row == "missing_retrieval_optional_boundary_entry:non_promoted_project_docs"
         ));
-        assert!(
-            blockers.iter().any(
-                |row| row == "missing_retrieval_optional_boundary_entry:broad_repo_manual_scan"
-            )
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_optional_boundary_entry:broad_repo_manual_scan"));
     }
 
     #[test]
@@ -2363,11 +2355,9 @@ mod tests {
             .expect("bootstrap commands should be an array");
         assert!(commands.iter().any(|command| command == "init"));
         assert!(commands.iter().any(|command| command == "boot"));
-        assert!(
-            commands
-                .iter()
-                .any(|command| command == "orchestrator-init")
-        );
+        assert!(commands
+            .iter()
+            .any(|command| command == "orchestrator-init"));
         assert_eq!(bootstrap["lane_scope"], "shared");
     }
 
@@ -2458,16 +2448,12 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_cache_key_input:protocol_binding_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_invalidation_tuple_key:startup_bundle_revision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_cache_key_input:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_invalidation_tuple_key:startup_bundle_revision"));
     }
 
     #[test]
@@ -2494,21 +2480,15 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "cache_key_mismatch:protocol_binding_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalidation_tuple_mismatch:framework_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalidation_tuple_mismatch:startup_bundle_revision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "cache_key_mismatch:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:framework_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:startup_bundle_revision"));
     }
 
     #[test]
@@ -2538,21 +2518,15 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_metadata_tuple_key:protocol_binding_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_cache_key_input:protocol_binding_revision")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_invalidation_tuple_key:protocol_binding_revision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_metadata_tuple_key:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:protocol_binding_revision"));
     }
 
     #[test]
@@ -2576,11 +2550,9 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_cache_key_input:source_version_tuple")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:source_version_tuple"));
     }
 
     #[test]
@@ -2606,16 +2578,12 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_cache_key_inputs_keys")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_invalidation_tuple_keys")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_inputs_keys"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_keys"));
     }
 
     #[test]
@@ -2651,11 +2619,9 @@ mod tests {
         });
 
         let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_metadata_tuple_keys")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_metadata_tuple_keys"));
     }
 
     #[test]
@@ -2671,11 +2637,9 @@ mod tests {
         });
 
         let blockers = taskflow_consume_bundle_check(&payload).blockers;
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_control_core_keys")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_control_core_keys"));
     }
 
     #[test]
@@ -2713,11 +2677,9 @@ mod tests {
         });
 
         let blockers = taskflow_consume_bundle_check(&payload).blockers;
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "invalid_protocol_binding_registry_keys")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_protocol_binding_registry_keys"));
     }
 
     #[test]
@@ -2844,11 +2806,9 @@ mod tests {
         });
 
         let blockers = taskflow_consume_bundle_check(&payload).blockers;
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_protocol_binding_receipt")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_protocol_binding_receipt"));
     }
 
     #[test]
@@ -2865,11 +2825,9 @@ mod tests {
             }
         });
         let blockers = retrieval_trust_evidence_blockers(&contract);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation"));
     }
 
     #[test]
@@ -2887,26 +2845,18 @@ mod tests {
             }
         });
         let blockers = retrieval_trust_evidence_blockers(&contract);
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_retrieval_trust_evidence_citation")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_retrieval_trust_evidence_acl")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_retrieval_trust_evidence_source_registry_ref")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation")
-        );
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_citation"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_acl"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_source_registry_ref"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation"));
     }
 
     #[test]
@@ -3270,8 +3220,8 @@ mod tests {
     }
 
     #[test]
-    fn bundle_project_root_blocks_activation_source_config_fallback_when_state_root_non_project_bound()
-     {
+    fn bundle_project_root_blocks_activation_source_config_fallback_when_state_root_non_project_bound(
+    ) {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let unique = SystemTime::now()

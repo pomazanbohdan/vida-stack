@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use time::format_description::well_known::Rfc3339;
 
-use super::{StateStore, block_on_state_store};
+use super::{block_on_state_store, StateStore};
 use crate::state_store::RunGraphDispatchReceiptSummary;
 
 pub(crate) fn runtime_consumption_snapshot_path_string(path: &Path) -> String {
@@ -1083,12 +1083,7 @@ fn runtime_consumption_snapshot_entries_newest_first(
 #[cfg(test)]
 mod tests {
     use super::{
-        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
-        RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
-        RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
-        RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
-        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX, RuntimeConsumptionSummary,
-        RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopStage, append_runtime_reflex_loop_record,
+        append_runtime_reflex_loop_record,
         apply_runtime_consumption_final_dispatch_receipt_blocker,
         latest_admissible_retrieval_trust_signal,
         latest_final_runtime_consumption_dispatch_receipt_summary,
@@ -1100,7 +1095,13 @@ mod tests {
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         runtime_consumption_snapshot_has_release_admission_evidence,
         runtime_consumption_snapshot_path_string, runtime_reflex_loop_record,
-        runtime_reflex_loop_summary, write_runtime_consumption_snapshot,
+        runtime_reflex_loop_summary, write_runtime_consumption_snapshot, RuntimeConsumptionSummary,
+        RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopStage,
+        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+        RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+        RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
     use crate::state_store::{
         RunGraphDispatchReceiptSummary, RunGraphStatus, TaskExecutionSemantics,
@@ -1310,8 +1311,8 @@ mod tests {
     }
 
     #[test]
-    fn latest_final_runtime_consumption_dispatch_receipt_summary_rejects_forged_snapshot_without_persisted_receipt()
-     {
+    fn latest_final_runtime_consumption_dispatch_receipt_summary_rejects_forged_snapshot_without_persisted_receipt(
+    ) {
         let root = std::env::temp_dir().join(format!(
             "vida-final-runtime-consumption-forged-receipt-{}-{}",
             std::process::id(),
@@ -1405,36 +1406,30 @@ mod tests {
             Some("bundle"),
             Some("/tmp/project/runtime-consumption/bundle-3.json"),
         );
-        assert!(
-            latest_admissible_retrieval_trust_signal(
-                &non_final_runtime_consumption,
-                Some("/tmp/project/runtime-consumption/final-2.json"),
-                Some("protocol-binding-receipt-2"),
-            )
-            .is_some()
-        );
+        assert!(latest_admissible_retrieval_trust_signal(
+            &non_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .is_some());
 
         let stale_final_runtime_consumption = sample_runtime_consumption_summary(
             Some("final"),
             Some("/tmp/project/runtime-consumption/final-2.json"),
         );
-        assert!(
-            latest_admissible_retrieval_trust_signal(
-                &stale_final_runtime_consumption,
-                Some("/tmp/project/runtime-consumption/final-1.json"),
-                Some("protocol-binding-receipt-2"),
-            )
-            .is_some()
-        );
+        assert!(latest_admissible_retrieval_trust_signal(
+            &stale_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-1.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .is_some());
 
-        assert!(
-            latest_admissible_retrieval_trust_signal(
-                &stale_final_runtime_consumption,
-                Some("/tmp/project/runtime-consumption/final-2.json"),
-                None,
-            )
-            .is_none()
-        );
+        assert!(latest_admissible_retrieval_trust_signal(
+            &stale_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+            None,
+        )
+        .is_none());
     }
 
     #[test]
@@ -1890,10 +1885,8 @@ mod tests {
         )
         .expect("final snapshot should be writable");
 
-        assert!(
-            !release_admission_operator_evidence_incomplete(&root)
-                .expect("release-admission evidence check should succeed")
-        );
+        assert!(!release_admission_operator_evidence_incomplete(&root)
+            .expect("release-admission evidence check should succeed"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1939,10 +1932,8 @@ mod tests {
         )
         .expect("final snapshot should be writable");
 
-        assert!(
-            release_admission_operator_evidence_incomplete(&root)
-                .expect("release-admission evidence check should succeed")
-        );
+        assert!(release_admission_operator_evidence_incomplete(&root)
+            .expect("release-admission evidence check should succeed"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2009,10 +2000,8 @@ mod tests {
         )
         .expect("newer incomplete final snapshot should be writable");
 
-        assert!(
-            release_admission_operator_evidence_incomplete(&root)
-                .expect("release-admission evidence check should succeed")
-        );
+        assert!(release_admission_operator_evidence_incomplete(&root)
+            .expect("release-admission evidence check should succeed"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2071,8 +2060,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_final_dispatch_receipt_blocker_code_stays_fail_closed_for_latest_run_mismatch()
-     {
+    fn runtime_consumption_final_dispatch_receipt_blocker_code_stays_fail_closed_for_latest_run_mismatch(
+    ) {
         let summary = RunGraphDispatchReceiptSummary {
             run_id: "run-latest".to_string(),
             dispatch_target: "implementer".to_string(),

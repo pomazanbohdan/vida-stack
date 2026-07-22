@@ -1287,24 +1287,21 @@ pub(crate) struct AgentDispatchNextArgs {
 pub(crate) struct AgentSelectArgs {
     #[arg(
         long = "runtime-role",
-        default_value = "worker",
         help = "Runtime role to select a carrier for, for example worker, coach, tester, or reviewer"
     )]
-    pub(crate) runtime_role: String,
+    pub(crate) runtime_role: Option<String>,
 
     #[arg(
         long = "task-class",
-        default_value = "implementation",
         help = "Task class used for carrier/model eligibility, for example analysis, implementation, or verification"
     )]
-    pub(crate) task_class: String,
+    pub(crate) task_class: Option<String>,
 
     #[arg(
         long = "conversation-role",
-        default_value = "orchestrator",
         help = "Host conversation role requesting the selection"
     )]
-    pub(crate) conversation_role: String,
+    pub(crate) conversation_role: Option<String>,
 
     #[arg(
         long = "state-dir",
@@ -5344,9 +5341,23 @@ mod tests {
         let crate::AgentCommand::Select(select) = agent_args.command else {
             panic!("agent select command should parse");
         };
-        assert_eq!(select.runtime_role, "verifier");
-        assert_eq!(select.task_class, "verification");
+        assert_eq!(select.runtime_role.as_deref(), Some("verifier"));
+        assert_eq!(select.task_class.as_deref(), Some("verification"));
+        assert!(select.conversation_role.is_none());
         assert!(select.json);
+
+        let missing_select = Cli::try_parse_from(["vida", "agent", "select", "--json"]).expect(
+            "agent select without routing bindings should parse for fail-closed runtime validation",
+        );
+        let Some(super::Command::Agent(agent_args)) = missing_select.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::Select(select) = agent_args.command else {
+            panic!("agent select command should parse");
+        };
+        assert!(select.runtime_role.is_none());
+        assert!(select.task_class.is_none());
+        assert!(select.conversation_role.is_none());
 
         let host_bridge_error = Cli::try_parse_from(["vida", "agent", "host-bridge", "--help"])
             .expect_err("help should render clap display error");

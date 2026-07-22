@@ -1,6 +1,6 @@
 use crate::contract_profile_adapter::{
-    BlockerCode, blocker_code_str, boot_compatibility_is_backward_compatible,
-    canonical_blocker_codes,
+    blocker_code_str, boot_compatibility_is_backward_compatible, canonical_blocker_codes,
+    BlockerCode,
 };
 
 pub(crate) struct StatusOperatorContractInputs<'a> {
@@ -394,7 +394,7 @@ pub(crate) fn build_status_operator_contracts(
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusOperatorContractInputs, build_status_operator_contracts};
+    use super::{build_status_operator_contracts, StatusOperatorContractInputs};
     use std::fs;
 
     fn protocol_binding_summary(
@@ -531,21 +531,15 @@ mod tests {
         let blockers = contracts["blocker_codes"]
             .as_array()
             .expect("blocker_codes should be an array");
-        assert!(
-            !blockers
-                .iter()
-                .any(|value| value == "missing_retrieval_trust_source_operator_evidence")
-        );
-        assert!(
-            !blockers
-                .iter()
-                .any(|value| value == "missing_retrieval_trust_signal_operator_evidence")
-        );
-        assert!(
-            !blockers
-                .iter()
-                .any(|value| value == "missing_retrieval_trust_operator_evidence")
-        );
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_source_operator_evidence"));
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_signal_operator_evidence"));
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_operator_evidence"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -625,11 +619,9 @@ mod tests {
         let blockers = contracts["blocker_codes"]
             .as_array()
             .expect("blocker_codes should be an array");
-        assert!(
-            blockers
-                .iter()
-                .any(|value| value == "local_takeover_forbidden")
-        );
+        assert!(blockers
+            .iter()
+            .any(|value| value == "local_takeover_forbidden"));
         let next_actions = contracts["next_actions"]
             .as_array()
             .expect("next_actions should be an array");
@@ -723,16 +715,12 @@ mod tests {
         let blockers = contracts["blocker_codes"]
             .as_array()
             .expect("blocker_codes should be an array");
-        assert!(
-            blockers
-                .iter()
-                .any(|value| value == "continuation_binding_ambiguous")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|value| value == "continuation_binding_mismatch")
-        );
+        assert!(blockers
+            .iter()
+            .any(|value| value == "continuation_binding_ambiguous"));
+        assert!(blockers
+            .iter()
+            .any(|value| value == "continuation_binding_mismatch"));
         let next_actions = contracts["next_actions"]
             .as_array()
             .expect("next_actions should be an array");
@@ -818,11 +806,9 @@ mod tests {
         let blockers = contracts["blocker_codes"]
             .as_array()
             .expect("blocker_codes should be an array");
-        assert!(
-            blockers
-                .iter()
-                .any(|value| value == "closed_task_active_run_projection_mismatch")
-        );
+        assert!(blockers
+            .iter()
+            .any(|value| value == "closed_task_active_run_projection_mismatch"));
         let next_actions = contracts["next_actions"]
             .as_array()
             .expect("next_actions should be an array");
@@ -922,11 +908,9 @@ mod tests {
         let blockers = contracts["blocker_codes"]
             .as_array()
             .expect("blocker_codes should be an array");
-        assert!(
-            blockers
-                .iter()
-                .any(|value| value == "conflict_domain_collision")
-        );
+        assert!(blockers
+            .iter()
+            .any(|value| value == "conflict_domain_collision"));
         assert_eq!(
             contracts["artifact_refs"]["operator_session_projection"]["claim_conflict_count"],
             1

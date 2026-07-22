@@ -1196,13 +1196,11 @@ mod tests {
             .expect("empty acquire should pass");
 
         assert!(reservations.is_empty());
-        assert!(
-            store
-                .active_scheduler_dispatch_reservations()
-                .await
-                .expect("read active reservations")
-                .is_empty()
-        );
+        assert!(store
+            .active_scheduler_dispatch_reservations()
+            .await
+            .expect("read active reservations")
+            .is_empty());
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1290,20 +1288,16 @@ mod tests {
 
         assert_eq!(acquired.len(), 2);
         for reservation_id in ["reservation-1", "reservation-2"] {
-            assert!(
-                store
-                    .scheduler_dispatch_reservation(reservation_id)
-                    .await
-                    .expect("read reservation")
-                    .is_some()
-            );
-            assert!(
-                store
-                    .scheduler_dispatch_reservation_authority(reservation_id)
-                    .await
-                    .expect("read authority")
-                    .is_some()
-            );
+            assert!(store
+                .scheduler_dispatch_reservation(reservation_id)
+                .await
+                .expect("read reservation")
+                .is_some());
+            assert!(store
+                .scheduler_dispatch_reservation_authority(reservation_id)
+                .await
+                .expect("read authority")
+                .is_some());
         }
         drop(store);
         let _ = fs::remove_dir_all(root);
@@ -1326,13 +1320,11 @@ mod tests {
             .expect_err("in-transaction fault should roll back every write");
 
         for reservation_id in ["reservation-1", "reservation-2"] {
-            assert!(
-                store
-                    .scheduler_dispatch_reservation(reservation_id)
-                    .await
-                    .expect("read reservation")
-                    .is_none()
-            );
+            assert!(store
+                .scheduler_dispatch_reservation(reservation_id)
+                .await
+                .expect("read reservation")
+                .is_none());
             match store
                 .scheduler_dispatch_reservation_authority(reservation_id)
                 .await
@@ -1426,11 +1418,9 @@ mod tests {
             .acquire_scheduler_dispatch_reservations(&[])
             .await
             .expect_err("missing canonical task must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains(RESERVATION_AUTHORITY_BACKFILL_TASK_MISSING)
-        );
+        assert!(error
+            .to_string()
+            .contains(RESERVATION_AUTHORITY_BACKFILL_TASK_MISSING));
         assert!(error.to_string().contains(RESTORE_RESERVATION_TASK_ACTION));
         let evidence = store
             .scheduler_dispatch_reservation_evidence("reservation-1")
@@ -1477,11 +1467,9 @@ mod tests {
             .await
             .expect_err("duplicate reservation id should block overwrite");
 
-        assert!(
-            error
-                .to_string()
-                .contains("scheduler_reservation_id_already_active:reservation-1:task-1")
-        );
+        assert!(error
+            .to_string()
+            .contains("scheduler_reservation_id_already_active:reservation-1:task-1"));
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1509,11 +1497,9 @@ mod tests {
             .await
             .expect_err("duplicate task should block");
 
-        assert!(
-            error
-                .to_string()
-                .contains("scheduler_task_already_reserved:task-1:reservation-1")
-        );
+        assert!(error
+            .to_string()
+            .contains("scheduler_task_already_reserved:task-1:reservation-1"));
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1542,11 +1528,9 @@ mod tests {
             .await
             .expect_err("conflict domain should block");
 
-        assert!(
-            error
-                .to_string()
-                .contains("scheduler_conflict_domain_reserved:domain-a:reservation-1")
-        );
+        assert!(error
+            .to_string()
+            .contains("scheduler_conflict_domain_reserved:domain-a:reservation-1"));
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1566,18 +1550,14 @@ mod tests {
             .await
             .expect_err("request domain cannot override task authority");
 
-        assert!(
-            error
-                .to_string()
-                .contains("scheduler_reservation_task_identity_mismatch:task-1:conflict_domain")
-        );
-        assert!(
-            store
-                .scheduler_dispatch_reservation("reservation-1")
-                .await
-                .expect("read reservation")
-                .is_none()
-        );
+        assert!(error
+            .to_string()
+            .contains("scheduler_reservation_task_identity_mismatch:task-1:conflict_domain"));
+        assert!(store
+            .scheduler_dispatch_reservation("reservation-1")
+            .await
+            .expect("read reservation")
+            .is_none());
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1786,11 +1766,9 @@ mod tests {
             .await
             .expect_err("candidate must collide with the second active reservation");
 
-        assert!(
-            error.to_string().contains(
-                "scheduler_active_reservation_collision:reservation-2:owned_path_collision"
-            )
-        );
+        assert!(error
+            .to_string()
+            .contains("scheduler_active_reservation_collision:reservation-2:owned_path_collision"));
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1818,20 +1796,16 @@ mod tests {
         assert!(reason.contains("active=0:capacity=1:batch=2:projected=2"));
         assert!(reason.contains(RETRY_SMALLER_OR_CONSISTENT_RESERVATION_BATCH_ACTION));
         assert!(!reason.contains(HOST_AGENT_CAPACITY_UNAVAILABLE));
-        assert!(
-            store
-                .scheduler_dispatch_reservation("reservation-a")
-                .await
-                .expect("read tentative A")
-                .is_none()
-        );
-        assert!(
-            store
-                .scheduler_dispatch_reservation_authority("reservation-a")
-                .await
-                .expect("read tentative A authority")
-                .is_none()
-        );
+        assert!(store
+            .scheduler_dispatch_reservation("reservation-a")
+            .await
+            .expect("read tentative A")
+            .is_none());
+        assert!(store
+            .scheduler_dispatch_reservation_authority("reservation-a")
+            .await
+            .expect("read tentative A authority")
+            .is_none());
         let evidence = store
             .scheduler_dispatch_reservation_evidence("reservation-b")
             .await
@@ -1845,18 +1819,14 @@ mod tests {
             evidence.next_actions,
             vec![RETRY_SMALLER_OR_CONSISTENT_RESERVATION_BATCH_ACTION]
         );
-        assert!(
-            evidence
-                .execute_status
-                .contains("active=0:capacity=1:batch=2:projected=2")
-        );
-        assert!(
-            store
-                .active_scheduler_dispatch_reservations()
-                .await
-                .expect("read active reservations")
-                .is_empty()
-        );
+        assert!(evidence
+            .execute_status
+            .contains("active=0:capacity=1:batch=2:projected=2"));
+        assert!(store
+            .active_scheduler_dispatch_reservations()
+            .await
+            .expect("read active reservations")
+            .is_empty());
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1878,11 +1848,9 @@ mod tests {
             .await
             .expect_err("final batch size must satisfy every request capacity");
 
-        assert!(
-            error
-                .to_string()
-                .contains("active=0:capacity=1:batch=2:projected=2")
-        );
+        assert!(error
+            .to_string()
+            .contains("active=0:capacity=1:batch=2:projected=2"));
         let evidence = store
             .scheduler_dispatch_reservation_evidence("reservation-a")
             .await
@@ -1892,13 +1860,11 @@ mod tests {
             evidence.blocker_codes,
             vec![SCHEDULER_RESERVATION_ATOMIC_BATCH_CAPACITY_EXCEEDED]
         );
-        assert!(
-            store
-                .scheduler_dispatch_reservation("reservation-b")
-                .await
-                .expect("read unprocessed B")
-                .is_none()
-        );
+        assert!(store
+            .scheduler_dispatch_reservation("reservation-b")
+            .await
+            .expect("read unprocessed B")
+            .is_none());
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
@@ -1978,11 +1944,9 @@ mod tests {
                 .await
                 .expect_err("legacy release mutation should block"),
         ] {
-            assert!(
-                error
-                    .to_string()
-                    .contains(RESERVATION_LEASE_CREDENTIALS_REQUIRED)
-            );
+            assert!(error
+                .to_string()
+                .contains(RESERVATION_LEASE_CREDENTIALS_REQUIRED));
         }
         let reservation = store
             .scheduler_dispatch_reservation("reservation-1")
@@ -2036,11 +2000,9 @@ mod tests {
                 .expect_err("wrong credentials should block release"),
         ];
         for error in errors {
-            assert!(
-                error
-                    .to_string()
-                    .contains(RESERVATION_LEASE_AUTHENTICATION_FAILED)
-            );
+            assert!(error
+                .to_string()
+                .contains(RESERVATION_LEASE_AUTHENTICATION_FAILED));
             assert!(!error.to_string().contains("token-reservation-1"));
         }
         let after = store

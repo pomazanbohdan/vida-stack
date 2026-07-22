@@ -39,7 +39,6 @@ pub struct WorkItemTaxonomyEntry {
     pub category: WorkItemCategory,
     pub parent_required: bool,
     pub flow_bindable: bool,
-    pub default_flow_binding: &'static str,
     pub source_tiers: &'static [&'static str],
 }
 
@@ -53,7 +52,6 @@ pub struct TaskWorkItemKind {
     pub category: String,
     pub parent_required: bool,
     pub flow_bindable: bool,
-    pub default_flow_binding: String,
     pub source_tiers: Vec<String>,
 }
 
@@ -92,7 +90,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::ProgramContainer,
         parent_required: false,
         flow_bindable: true,
-        default_flow_binding: "default_delivery",
         source_tiers: &["operator_request", "planning"],
     },
     WorkItemTaxonomyEntry {
@@ -101,7 +98,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Delivery,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "default_delivery",
         source_tiers: &["operator_request", "planned_delivery"],
     },
     WorkItemTaxonomyEntry {
@@ -110,7 +106,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Delivery,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "default_delivery",
         source_tiers: &["operator_request", "planned_delivery"],
     },
     WorkItemTaxonomyEntry {
@@ -119,7 +114,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Execution,
         parent_required: true,
         flow_bindable: false,
-        default_flow_binding: "execution_step",
         source_tiers: &["operator_execution", "delegated_execution"],
     },
     WorkItemTaxonomyEntry {
@@ -128,7 +122,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Defect,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "defect_repair_verified",
         source_tiers: &["runtime_status", "test_failure", "operator_report"],
     },
     WorkItemTaxonomyEntry {
@@ -137,7 +130,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Defect,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "runtime_defect_remediation",
         source_tiers: &["runtime_status", "downstream_runtime_report"],
     },
     WorkItemTaxonomyEntry {
@@ -146,7 +138,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Review,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "pr_repair_verified",
         source_tiers: &["pull_request"],
     },
     WorkItemTaxonomyEntry {
@@ -155,7 +146,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Review,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "pr_repair_verified",
         source_tiers: &["pull_request", "ci_failure"],
     },
     WorkItemTaxonomyEntry {
@@ -164,7 +154,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Architecture,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "architecture_design",
         source_tiers: &["operator_request", "architecture_review"],
     },
     WorkItemTaxonomyEntry {
@@ -173,7 +162,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Release,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "release_readiness_gate",
         source_tiers: &["release_check", "ci_failure"],
     },
     WorkItemTaxonomyEntry {
@@ -182,7 +170,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Delivery,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "service_tui_orchestration",
         source_tiers: &["operator_request", "planned_delivery"],
     },
     WorkItemTaxonomyEntry {
@@ -191,7 +178,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Operations,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "hook_enabled_internal_agent_development",
         source_tiers: &["runtime_status", "operator_request"],
     },
     WorkItemTaxonomyEntry {
@@ -200,7 +186,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Defect,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "defect_repair_verified",
         source_tiers: &["ci_failure"],
     },
     WorkItemTaxonomyEntry {
@@ -209,7 +194,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Process,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "default_delivery",
         source_tiers: &["operator_friction", "self_diagnostic"],
     },
     WorkItemTaxonomyEntry {
@@ -218,7 +202,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Process,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "default_delivery",
         source_tiers: &["documentation_review", "operator_request"],
     },
     WorkItemTaxonomyEntry {
@@ -227,7 +210,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Operations,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "runtime_defect_remediation",
         source_tiers: &["operator_friction", "runtime_status"],
     },
     WorkItemTaxonomyEntry {
@@ -236,7 +218,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Defect,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "runtime_defect_remediation",
         source_tiers: &["downstream_runtime_report", "operator_report"],
     },
     WorkItemTaxonomyEntry {
@@ -245,7 +226,6 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         category: WorkItemCategory::Operations,
         parent_required: true,
         flow_bindable: true,
-        default_flow_binding: "debug_fast",
         source_tiers: &["operator_request", "runtime_status"],
     },
 ];
@@ -322,7 +302,6 @@ pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
             category: entry.category.as_str().to_string(),
             parent_required: entry.parent_required,
             flow_bindable: entry.flow_bindable,
-            default_flow_binding: entry.default_flow_binding.to_string(),
             source_tiers: entry
                 .source_tiers
                 .iter()
@@ -338,8 +317,7 @@ pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
         provider_issue_type: None,
         category: "legacy_unknown".to_string(),
         parent_required: true,
-        flow_bindable: true,
-        default_flow_binding: "default_delivery".to_string(),
+        flow_bindable: false,
         source_tiers: vec!["legacy_issue_type".to_string()],
     }
 }
@@ -1154,12 +1132,12 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping,
-        TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
         apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
         normalize_work_item_issue_type, task_work_item_kind, work_item_contributes_to_task_stats,
         work_item_is_active_bounded_unit_candidate, work_item_is_execution_step,
         work_item_is_program_container, work_item_requires_parent, work_item_taxonomy_entry,
+        TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping,
+        TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]
@@ -1173,18 +1151,8 @@ mod tests {
                 entry.canonical_issue_type
             );
             assert!(
-                !entry.default_flow_binding.trim().is_empty(),
-                "taxonomy entry {} must bind a default flow",
-                entry.canonical_issue_type
-            );
-            assert!(
                 !entry.source_tiers.is_empty(),
                 "taxonomy entry {} must declare source tiers",
-                entry.canonical_issue_type
-            );
-            assert!(
-                !entry.flow_bindable || !entry.default_flow_binding.trim().is_empty(),
-                "flow-bindable taxonomy entry {} must bind a default flow",
                 entry.canonical_issue_type
             );
         }
@@ -1200,12 +1168,7 @@ mod tests {
             normalize_work_item_issue_type("runtime-defect"),
             "runtime_defect"
         );
-        assert_eq!(
-            work_item_taxonomy_entry("PR Repair")
-                .expect("pr repair taxonomy")
-                .default_flow_binding,
-            "pr_repair_verified"
-        );
+        assert!(work_item_taxonomy_entry("PR Repair").is_some());
         assert_eq!(
             work_item_taxonomy_entry("bug")
                 .expect("bug alias")
@@ -1273,7 +1236,6 @@ mod tests {
         assert_eq!(kind.provider_issue_type.as_deref(), Some("bug"));
         assert_eq!(kind.category, "defect");
         assert!(kind.parent_required);
-        assert_eq!(kind.default_flow_binding, "defect_repair_verified");
 
         let step = task_work_item_kind("todo");
         assert_eq!(step.canonical_issue_type, "step");

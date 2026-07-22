@@ -4,10 +4,10 @@ use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 
-use crate::QualityCommand;
 use crate::release1_operator_output::{
-    RELEASE1_OPERATOR_CONTRACT_SPEC, finalize_operator_surface_verdict,
+    finalize_operator_surface_verdict, RELEASE1_OPERATOR_CONTRACT_SPEC,
 };
+use crate::QualityCommand;
 
 const QUALITY_GATE_SURFACE: &str = "vida quality gate";
 

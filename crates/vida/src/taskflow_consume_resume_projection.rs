@@ -134,12 +134,10 @@ mod tests {
             payload["operator_contracts"]["artifact_refs"],
             payload["artifact_refs"]
         );
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action should be text")
-                .contains("vida taskflow packet repair")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("vida taskflow packet repair"));
     }
 
     #[test]

@@ -108,11 +108,9 @@ fn run_graph_specification_dispatch_convergence_smoke() {
         "dispatch.coder_lane"
     );
     assert_eq!(dispatch["dispatch_receipt"]["dispatch_target"], "coder");
-    assert!(
-        dispatch["dispatch_packet_path"]
-            .as_str()
-            .is_some_and(|path| { Path::new(path).exists() })
-    );
+    assert!(dispatch["dispatch_packet_path"]
+        .as_str()
+        .is_some_and(|path| { Path::new(path).exists() }));
 
     fs::remove_dir_all(&state_dir).expect("isolated state dir should be removed");
 }

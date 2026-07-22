@@ -157,33 +157,48 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
             "alias_id",
         ),
     });
-    let registry_authority = canonical_registries
-        .as_object()
-        .into_iter()
-        .flat_map(|registries| registries.iter())
-        .map(|(name, value)| {
-            (
-                name.clone(),
-                deterministic_content_id(&format!("agent-extension-registry/{name}"), value),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let dev_team_config = canonical_json(
-        &serde_json::to_value(
-            crate::yaml_lookup(config, &["dev_team"])
-                .cloned()
-                .unwrap_or(serde_yaml::Value::Null),
+    let dev_team_value = crate::yaml_lookup(config, &["dev_team"])
+        .cloned()
+        .unwrap_or(serde_yaml::Value::Null);
+    let dev_team_json = serde_json::to_value(dev_team_value).unwrap_or(serde_json::Value::Null);
+    let agent_system_value = serde_json::to_value(
+        crate::yaml_lookup(config, &["agent_system"])
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null),
+    )
+    .unwrap_or(serde_json::Value::Null);
+    let materialized_team_flow_authority =
+        crate::team_flow_authority_projection::materialize_team_flow_authority(
+            crate::team_flow_authority_projection::SourceInputs {
+                dev_team: dev_team_json,
+                registries: canonical_registries,
+                carrier_runtime: carrier_runtime_projection.carrier_runtime.clone(),
+                agent_system: agent_system_value.clone(),
+                catalog: serde_json::json!({
+                    "project_roles": &project_roles,
+                    "project_skills": &project_skills,
+                    "project_profiles": &project_profiles,
+                    "project_flows": &project_flows,
+                    "project_role_catalog": &project_role_map,
+                    "project_skill_catalog": &project_skill_map,
+                    "project_profile_catalog": &project_profile_map,
+                    "project_flow_catalog": &project_flow_map,
+                    "authority_catalog": serde_json::to_value(
+                        crate::yaml_lookup(config, &["dev_team", "authority_catalog"])
+                            .cloned()
+                            .unwrap_or(serde_yaml::Value::Null),
+                    )
+                    .unwrap_or(serde_json::Value::Null),
+                }),
+            },
         )
-        .unwrap_or(serde_json::Value::Null),
-    );
-    let dev_team_config_authority = deterministic_content_id("dev-team-config", &dev_team_config);
-    let team_flow_authority_id = deterministic_content_id(
-        "team-flow-authority",
-        &serde_json::json!({
-            "config": dev_team_config_authority.clone(),
-            "registries": registry_authority.clone(),
-        }),
-    );
+        .map_err(|blocker| {
+            format!(
+                "team_flow_authority_materialization_blocked:{}:{}",
+                blocker.code, blocker.path
+            )
+        })?;
+    let team_flow_authority = materialized_team_flow_authority.authority;
 
     let bundle = serde_json::json!({
         "ok": true,
@@ -204,19 +219,7 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "all_project_flow_catalog": all_project_flow_map,
         "pack_catalog": pack_catalog,
         "command_catalog": command_catalog,
-        "team_flow_authority": {
-            "schema_version": "team-flow-authority.v1",
-            "authority_id": team_flow_authority_id["id"],
-            "content_blake3": team_flow_authority_id["content_blake3"],
-            "config": dev_team_config_authority,
-            "registries": registry_authority,
-            "selected_config": dev_team_config,
-            "source_of_truth": {
-                "options": "docs/framework/templates/vida.config.yaml.template#dev_team.authority_catalog",
-                "selection": "vida.config.yaml#dev_team.authority_selection",
-                "schema": "vida/config/schemas/team-flow-authority.schema.json"
-            }
-        },
+        "team_flow_authority": team_flow_authority,
         "hook_templates": hook_templates,
         "hook_template_registry": {
             "configured_path": hook_template_projection.hook_templates_path,
@@ -251,8 +254,7 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
             ],
             "source_of_truth": "compiled_agent_extension_bundle"
         },
-        "agent_system": serde_json::to_value(crate::yaml_lookup(config, &["agent_system"]).cloned().unwrap_or(serde_yaml::Value::Null))
-            .unwrap_or(serde_json::Value::Null),
+        "agent_system": agent_system_value,
         "autonomous_execution": serde_json::to_value(crate::yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
         "carrier_runtime": carrier_runtime_projection.carrier_runtime,
@@ -296,6 +298,9 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
             validation_errors.join("; ")
         ));
     }
+
+    crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
+        .map_err(|error| format!("team_flow_authority_persisted_self_validation_failed:{error}"))?;
 
     Ok(bundle)
 }
@@ -695,6 +700,371 @@ mod tests {
     }
 
     #[test]
+    fn compiled_bundle_persists_resolved_team_flow_authority_without_raw_flow_reload() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let config = read_yaml_file_checked(&repository_root.join("vida.config.yaml"))
+            .expect("repository config should parse");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, repository_root)
+            .expect("repository bundle should compile");
+        let authority = &bundle["team_flow_authority"];
+        let config_json = serde_json::to_value(&config).expect("config should convert to JSON");
+        let selection = config_json["dev_team"]["authority_selection"]
+            .as_object()
+            .expect("authority selection should be an object");
+        let expected_config_id = selection["config_id"]
+            .as_str()
+            .expect("authority selection config id should be concrete");
+        let expected_default_flow_id = selection["default_flow_id"]
+            .as_str()
+            .expect("authority selection default flow id should be concrete");
+        let expected_flow_ids = config_json["dev_team"]["flows"]
+            .as_object()
+            .expect("configured flows should be an object")
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(authority["schema_version"], "team-flow-authority.v1");
+        assert!(authority["authority_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("team-flow-authority:")));
+        assert!(authority["config"]["content_blake3"].as_str().is_some());
+        assert_eq!(
+            authority["selected_config"]["config_id"],
+            expected_config_id
+        );
+        assert_eq!(
+            authority["selected_config"]["team_flow_enabled"],
+            config_json["dev_team"]["enabled"]
+        );
+        assert_eq!(
+            authority["selected_config"]["authority_selection"]["default_flow_id"],
+            expected_default_flow_id
+        );
+        assert!(authority["selected_config"].get("flows").is_none());
+        assert!(authority["selected_config"]
+            .get("default_flow_id")
+            .is_none());
+
+        let payload = &authority["resolved_all_flow_payload"];
+        assert_eq!(
+            payload["work_item_flow_bindings"],
+            config_json["dev_team"]["work_item_flow_bindings"]
+        );
+        let defect_eligible_flow_count = config_json["dev_team"]["flows"]
+            .as_object()
+            .expect("configured flows")
+            .values()
+            .filter(|flow| {
+                flow["work_item_bindings"]
+                    .as_array()
+                    .is_some_and(|bindings| bindings.iter().any(|binding| binding == "defect"))
+            })
+            .count();
+        assert!(defect_eligible_flow_count > 1);
+        let flows = payload["flows"]
+            .as_array()
+            .expect("resolved flow payload should contain flows");
+        let payload_flow_ids = flows
+            .iter()
+            .map(|flow| {
+                flow["flow_id"]
+                    .as_str()
+                    .expect("resolved flow id should be concrete")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        let payload_lane_count = flows
+            .iter()
+            .map(|flow| {
+                flow["lanes"]
+                    .as_array()
+                    .expect("resolved flow lanes should be an array")
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(payload_flow_ids, expected_flow_ids);
+        assert_eq!(payload["flow_count"].as_u64(), Some(flows.len() as u64));
+        assert_eq!(
+            payload["lane_count"].as_u64(),
+            Some(payload_lane_count as u64)
+        );
+        let default_flow = flows
+            .iter()
+            .find(|flow| flow["flow_id"].as_str() == Some(expected_default_flow_id))
+            .expect("configured default flow should be materialized");
+        assert_eq!(authority["lanes"], default_flow["lanes"]);
+        let flow_policy_keys = [
+            "enabled",
+            "default",
+            "flow_class",
+            "description",
+            "work_item_bindings",
+            "sequential",
+            "allow_parallel_handoffs",
+            "lifecycle_hook_templates",
+            "proof_gates",
+            "resume_transitions",
+            "rework_transitions",
+            "adapter_projection",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        for flow in flows {
+            let policy = flow["flow_policy"]
+                .as_object()
+                .expect("persisted flow policy should be an object");
+            assert_eq!(
+                policy.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                flow_policy_keys
+            );
+        }
+
+        let payload_hash = deterministic_content_id("resolved-all-flow-payload", payload);
+        assert_eq!(
+            authority["resolved_all_flow_payload_blake3"],
+            payload_hash["content_blake3"]
+        );
+        assert_eq!(
+            authority["authority_source"]["payload_blake3"],
+            payload_hash["content_blake3"]
+        );
+
+        let config_identity_id = authority["config"]["id"]
+            .as_str()
+            .filter(|id| !id.trim().is_empty())
+            .expect("authority config identity id should be concrete");
+        let registry_identities = authority["registries"]
+            .as_object()
+            .expect("authority registry identities should be an object");
+        assert_eq!(
+            registry_identities.len(),
+            crate::team_flow_authority_projection::REGISTRY_NAMES.len()
+        );
+        for flow in flows {
+            for lane in flow["lanes"]
+                .as_array()
+                .expect("resolved flow lanes should be an array")
+            {
+                let identities = lane["authority_identities"]
+                    .as_array()
+                    .expect("persisted lane authority identities should be an array");
+                assert_eq!(
+                    identities.len(),
+                    crate::team_flow_authority_projection::REGISTRY_NAMES.len() + 1
+                );
+                let config_identity = identities[0]
+                    .as_object()
+                    .expect("config authority identity should be an object");
+                assert_eq!(config_identity.len(), 3);
+                assert_eq!(config_identity["kind"], "config");
+                assert_eq!(config_identity["id"], config_identity_id);
+                assert_eq!(config_identity["source_path"], "team_flow_authority.config");
+                for (index, name) in crate::team_flow_authority_projection::REGISTRY_NAMES
+                    .iter()
+                    .enumerate()
+                {
+                    let identity = identities[index + 1]
+                        .as_object()
+                        .expect("registry authority identity should be an object");
+                    let header_identity = registry_identities
+                        .get(*name)
+                        .and_then(serde_json::Value::as_object)
+                        .expect("authority header registry identity should be an object");
+                    let source_path = format!("team_flow_authority.registries.{name}");
+                    assert_eq!(identity.len(), 3);
+                    assert_eq!(identity["kind"], format!("registry:{name}"));
+                    assert_eq!(identity["id"], header_identity["id"]);
+                    assert_eq!(identity["source_path"], source_path);
+                    assert!(identity["id"]
+                        .as_str()
+                        .is_some_and(|id| !id.trim().is_empty()));
+                    assert!(identity["source_path"]
+                        .as_str()
+                        .is_some_and(|path| !path.trim().is_empty()));
+                }
+            }
+        }
+        assert_eq!(
+            authority["authority_source"],
+            serde_json::json!({
+                "kind": "resolved_all_flow_payload",
+                "payload_path": "team_flow_authority.resolved_all_flow_payload",
+                "payload_blake3": authority["resolved_all_flow_payload_blake3"],
+                "identity_phase": "phase_2_persisted_payload",
+            })
+        );
+        assert!(authority.get("dev_team").is_none());
+    }
+
+    #[test]
+    fn compiled_bundle_derives_only_unique_work_item_flow_bindings() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let config = read_yaml_file_checked(&repository_root.join("vida.config.yaml"))
+            .expect("repository config should parse");
+        let key = |name: &str| serde_yaml::Value::String(name.to_string());
+
+        let mut unique = config.clone();
+        let unique_dev_team = unique
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping");
+        unique_dev_team.remove(key("work_item_flow_bindings"));
+        let flows = unique_dev_team
+            .get_mut(key("flows"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("flows should be a mapping");
+        let mut expected = serde_json::Map::new();
+        for (index, (flow_id, flow)) in flows.iter_mut().enumerate() {
+            let flow_id = flow_id.as_str().expect("flow id").to_string();
+            let binding = format!("unique-{index}");
+            flow.as_mapping_mut()
+                .expect("flow should be a mapping")
+                .insert(
+                    key("work_item_bindings"),
+                    serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(binding.clone())]),
+                );
+            expected.insert(binding, serde_json::Value::String(flow_id));
+        }
+        let unique_bundle =
+            build_compiled_agent_extension_bundle_for_root(&unique, repository_root)
+                .expect("unique eligibility should derive exact bindings");
+        assert_eq!(
+            unique_bundle["team_flow_authority"]["resolved_all_flow_payload"]
+                ["work_item_flow_bindings"],
+            serde_json::Value::Object(expected)
+        );
+
+        let mut ambiguous = config.clone();
+        ambiguous
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping")
+            .remove(key("work_item_flow_bindings"));
+        let error = build_compiled_agent_extension_bundle_for_root(&ambiguous, repository_root)
+            .expect_err("overlapping eligibility without explicit binding must fail");
+        assert!(error.contains("team_flow_authority_work_item_flow_binding_ambiguous"));
+
+        let mut unknown = config;
+        unknown
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|dev_team| dev_team.get_mut(key("work_item_flow_bindings")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("explicit bindings should be a mapping")
+            .insert(
+                key("defect"),
+                serde_yaml::Value::String("missing-flow".to_string()),
+            );
+        let error = build_compiled_agent_extension_bundle_for_root(&unknown, repository_root)
+            .expect_err("unknown explicit target must fail");
+        assert!(error.contains("team_flow_authority_work_item_flow_binding_target_missing"));
+    }
+
+    #[test]
+    fn compiled_bundle_normalizes_global_team_flow_enabled_policy() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let config = read_yaml_file_checked(&repository_root.join("vida.config.yaml"))
+            .expect("repository config should parse");
+        let key = |name: &str| serde_yaml::Value::String(name.to_string());
+
+        let explicit_bundle =
+            build_compiled_agent_extension_bundle_for_root(&config, repository_root)
+                .expect("explicitly enabled bundle should compile");
+
+        let mut missing = config.clone();
+        missing
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping")
+            .remove(key("enabled"));
+        let defaulted_bundle =
+            build_compiled_agent_extension_bundle_for_root(&missing, repository_root)
+                .expect("missing TeamFlow policy should use the schema default");
+        assert_eq!(
+            defaulted_bundle["team_flow_authority"]["selected_config"]["team_flow_enabled"],
+            true
+        );
+        assert_eq!(
+            defaulted_bundle["team_flow_authority"]["authority_id"],
+            explicit_bundle["team_flow_authority"]["authority_id"]
+        );
+
+        let mut disabled = config.clone();
+        disabled
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping")
+            .insert(key("enabled"), serde_yaml::Value::Bool(false));
+        let disabled_bundle =
+            build_compiled_agent_extension_bundle_for_root(&disabled, repository_root)
+                .expect("disabled TeamFlow policy should remain materializable");
+        assert_eq!(
+            disabled_bundle["team_flow_authority"]["selected_config"]["team_flow_enabled"],
+            false
+        );
+        assert_ne!(
+            disabled_bundle["team_flow_authority"]["authority_id"],
+            explicit_bundle["team_flow_authority"]["authority_id"]
+        );
+
+        let mut invalid = config;
+        invalid
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping")
+            .insert(
+                key("enabled"),
+                serde_yaml::Value::String("enabled".to_string()),
+            );
+        let error = build_compiled_agent_extension_bundle_for_root(&invalid, repository_root)
+            .expect_err("invalid TeamFlow policy must fail closed");
+        assert!(error.contains("team_flow_authority_enabled_invalid"));
+        assert!(error.contains("dev_team.enabled"));
+    }
+
+    #[test]
+    fn compiled_bundle_propagates_typed_team_flow_materialization_blocker() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let mut config = read_yaml_file_checked(&repository_root.join("vida.config.yaml"))
+            .expect("repository config should parse");
+        let key = |name: &str| serde_yaml::Value::String(name.to_string());
+        let dev_team = config
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("dev_team should be a mapping");
+        let authority_selection = dev_team
+            .get_mut(key("authority_selection"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("authority selection should be a mapping");
+        authority_selection.remove(key("config_id"));
+
+        let error = build_compiled_agent_extension_bundle_for_root(&config, repository_root)
+            .expect_err("bundle should fail closed when authority selection is incomplete");
+        assert!(error.contains("team_flow_authority_materialization_blocked"));
+        assert!(error.contains("team_flow_authority_required_field_missing"));
+        assert!(error.contains("dev_team.authority_selection.config_id"));
+    }
+
+    #[test]
     fn compiled_agent_extension_bundle_projects_config_selected_hook_templates() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let root = harness.path();
@@ -1021,6 +1391,11 @@ mod tests {
             .expect("master config template should be readable"),
         )
         .expect("master config template should parse");
+        let install_template: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(repository_root.join("install/assets/vida.config.yaml.template"))
+                .expect("install config template should be readable"),
+        )
+        .expect("install config template should parse");
         let project: serde_yaml::Value = serde_yaml::from_str(
             &fs::read_to_string(repository_root.join("vida.config.yaml"))
                 .expect("project config should be readable"),
@@ -1051,6 +1426,16 @@ mod tests {
             ("command_resolution_mode", "command_resolution_modes"),
             ("approval_enforcement_mode", "approval_enforcement_modes"),
             ("alias_conflict_policy", "alias_conflict_policies"),
+            ("node_field_source_mode", "node_field_source_modes"),
+            (
+                "dispatch_alias_resolution_mode",
+                "dispatch_alias_resolution_modes",
+            ),
+            ("carrier_relation_mode", "carrier_relation_modes"),
+            (
+                "profile_model_resolution_mode",
+                "profile_model_resolution_modes",
+            ),
         ];
         for (selection_key, catalog_key) in option_pairs {
             let selected = selection
@@ -1061,6 +1446,16 @@ mod tests {
                 .get(&serde_yaml::Value::String(catalog_key.to_string()))
                 .and_then(serde_yaml::Value::as_sequence)
                 .expect("authority catalog option lists are required");
+            let install_catalog = crate::yaml_lookup(
+                &install_template,
+                &["dev_team", "authority_catalog", catalog_key],
+            )
+            .and_then(serde_yaml::Value::as_sequence)
+            .expect("install authority catalog option lists are required");
+            assert_eq!(
+                declared, install_catalog,
+                "docs and install authority catalogs must match for {catalog_key}"
+            );
             assert!(
                 declared
                     .iter()
@@ -1075,6 +1470,32 @@ mod tests {
                 schema_values.iter().any(|value| value == selected),
                 "{selection_key}={selected} must be accepted by the schema"
             );
+            for schema_value in schema_values {
+                let schema_value = schema_value
+                    .as_str()
+                    .expect("selection schema option values must be strings");
+                assert!(
+                    declared
+                        .iter()
+                        .any(|value| value.as_str() == Some(schema_value)),
+                    "{selection_key} schema value {schema_value} must be declared by {catalog_key}"
+                );
+                assert!(
+                    install_catalog
+                        .iter()
+                        .any(|value| value.as_str() == Some(schema_value)),
+                    "{selection_key} schema value {schema_value} must be declared by install {catalog_key}"
+                );
+            }
+            for declared_value in declared {
+                let declared_value = declared_value
+                    .as_str()
+                    .expect("authority catalog option values must be strings");
+                assert!(
+                    schema_values.iter().any(|value| value == declared_value),
+                    "{catalog_key} value {declared_value} must be accepted by the schema"
+                );
+            }
         }
 
         let required_lane_fields = catalog
@@ -1558,6 +1979,63 @@ mod tests {
             .unwrap_or_else(|_| panic!("{relative_path} should parse"));
             let json = serde_json::to_value(yaml).expect("YAML should convert to JSON");
             assert_strict_team_flow_config(&json, &command_ids);
+        }
+    }
+
+    #[test]
+    fn source_dsl_authority_catalogs_are_equal_and_schema_backed() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should be nested under the repository root");
+        let config_paths = [
+            "vida.config.yaml",
+            "docs/framework/templates/vida.config.yaml.template",
+            "install/assets/vida.config.yaml.template",
+        ];
+        let catalogs = config_paths
+            .iter()
+            .map(|relative_path| {
+                let yaml: serde_yaml::Value = serde_yaml::from_str(
+                    &fs::read_to_string(repository_root.join(relative_path))
+                        .unwrap_or_else(|_| panic!("{relative_path} should be readable")),
+                )
+                .unwrap_or_else(|_| panic!("{relative_path} should parse"));
+                serde_json::to_value(yaml).expect("YAML should convert to JSON")["dev_team"]
+                    ["authority_catalog"]
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        for field in [
+            "source_flow_fields",
+            "source_flow_step_fields",
+            "approval_policy_modes",
+            "approval_policy_allowed_decisions",
+        ] {
+            for catalog in catalogs.iter().skip(1) {
+                assert_eq!(catalog[field], catalogs[0][field]);
+            }
+        }
+        let schema: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                repository_root.join("vida/config/schemas/team-flow-authority.schema.json"),
+            )
+            .expect("TeamFlow schema should be readable"),
+        )
+        .expect("TeamFlow schema should parse");
+        for field in [
+            "source_flow_fields",
+            "source_flow_step_fields",
+            "approval_policy_modes",
+            "approval_policy_allowed_decisions",
+        ] {
+            let allowed = schema["$defs"]["sourceAuthorityCatalog"]["properties"][field]["items"]
+                ["enum"]
+                .as_array()
+                .expect("source catalog schema enum");
+            for value in catalogs[0][field].as_array().expect("source catalog array") {
+                assert!(allowed.iter().any(|candidate| candidate == value));
+            }
         }
     }
 }

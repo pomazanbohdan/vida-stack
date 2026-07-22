@@ -1,31 +1,38 @@
 use std::{ffi::OsString, process::ExitCode};
 
 use super::{
-    AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
-    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, pack_surface, print_root_help, project_activator_surface,
     proof_surface, protocol_surface, quality_surface, release_surface, requirement_surface,
     run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, status_surface,
-    task_surface,
+    task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
+    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
 };
 use crate::cli::{command_metadata_by_name, command_metadata_for_command};
 use crate::root_state_binding::{
-    RuntimeStateDirGuard, bind_runtime_state_dir_for_project_bound_command,
+    bind_runtime_state_dir_for_project_bound_command,
     bind_runtime_state_dir_override_for_project_bound_command,
     normalize_runtime_state_dir_env_for_parse, preserve_runtime_state_dir_env_for_parse_only,
-    preserve_runtime_state_dir_env_for_project_bound_command,
+    preserve_runtime_state_dir_env_for_project_bound_command, RuntimeStateDirGuard,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
+    run_root_command_with_args(cli, &[]).await
+}
+
+pub(crate) async fn run_root_command_with_args(cli: Cli, raw_args: &[OsString]) -> ExitCode {
     let mut timing =
         crate::command_lifecycle_hooks::CommandTimingContext::from_env(command_label(&cli.command));
     let pre_execution_started = std::time::Instant::now();
     let _runtime_state_dir_guard = match prepare_runtime_state_dir(&cli.command) {
         Ok(guard) => guard,
         Err(error) => {
-            eprintln!("{error}");
+            if !raw_args.is_empty() {
+                crate::emit_pre_dispatch_error(raw_args, &error);
+            } else {
+                eprintln!("{error}");
+            }
             return ExitCode::from(1);
         }
     };
@@ -732,13 +739,13 @@ fn raw_args_explicit_state_dir(args: &[OsString]) -> Option<std::path::PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, command_needs_project_root_state_dir, generic_service_client_command_metrics,
+        command_needs_project_root_state_dir, generic_service_client_command_metrics,
         normalize_runtime_state_dir_env_for_parse, prepare_runtime_state_dir,
         prepare_runtime_state_dir_for_parse, state_reset_operator_payload,
-        state_reset_plain_output,
+        state_reset_plain_output, Cli,
     };
-    use crate::Command;
     use crate::temp_state::TempStateHarness;
+    use crate::Command;
     use clap::Parser;
     use std::fs;
 
@@ -757,18 +764,14 @@ mod tests {
         );
         assert!(metrics.max_transport_context_flags <= 5);
         assert_eq!(metrics.workflows.len(), 10);
-        assert!(
-            metrics
-                .workflows
-                .iter()
-                .all(|workflow| workflow.canonical_command_count <= workflow.legacy_command_count)
-        );
-        assert!(
-            metrics
-                .workflows
-                .iter()
-                .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count)
-        );
+        assert!(metrics
+            .workflows
+            .iter()
+            .all(|workflow| workflow.canonical_command_count <= workflow.legacy_command_count));
+        assert!(metrics
+            .workflows
+            .iter()
+            .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count));
     }
 
     #[test]
@@ -1640,11 +1643,9 @@ mod tests {
         let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
 
         assert!(!command_needs_project_root_state_dir(&cli.command));
-        assert!(
-            prepare_runtime_state_dir(&cli.command)
-                .expect("state dir preparation should succeed")
-                .is_none()
-        );
+        assert!(prepare_runtime_state_dir(&cli.command)
+            .expect("state dir preparation should succeed")
+            .is_none());
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 

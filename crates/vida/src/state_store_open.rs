@@ -39,10 +39,7 @@ const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
-fn contextualize_open_error(
-    error: StateStoreError,
-    stage: StateStoreOpenStage,
-) -> StateStoreError {
+fn contextualize_open_error(error: StateStoreError, stage: StateStoreOpenStage) -> StateStoreError {
     let lock_evidence = stage
         .lock_evidence()
         .filter(|_| StateStore::error_is_lock_contention(&error));
@@ -729,16 +726,14 @@ impl StateStore {
     }
 
     async fn open_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(
-            StateRootLifecycleGuard::acquire(&root)
-                .await
-                .map_err(|error| {
-                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
-                })?,
-        );
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await.map_err(
+            |error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard),
+        )?);
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         Self::open_with_lifecycle_guard(root, lifecycle_guard).await
     }
 
@@ -747,11 +742,16 @@ impl StateStore {
         lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root).map_err(|error| {
-            contextualize_open_error(StateStoreError::from(error), StateStoreOpenStage::LifecycleGuard)
+            contextualize_open_error(
+                StateStoreError::from(error),
+                StateStoreOpenStage::LifecycleGuard,
+            )
         })?;
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         lifecycle_guard
             .acquire_legacy_guard(&root)
             .await
@@ -764,16 +764,14 @@ impl StateStore {
     }
 
     async fn open_existing_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(
-            StateRootLifecycleGuard::acquire(&root)
-                .await
-                .map_err(|error| {
-                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
-                })?,
-        );
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await.map_err(
+            |error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard),
+        )?);
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
@@ -819,16 +817,14 @@ impl StateStore {
     }
 
     async fn open_existing_read_only_impl(root: PathBuf) -> Result<Self, StateStoreError> {
-        let lifecycle_guard = Arc::new(
-            StateRootLifecycleGuard::acquire(&root)
-                .await
-                .map_err(|error| {
-                    contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
-                })?,
-        );
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await.map_err(
+            |error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard),
+        )?);
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
@@ -916,13 +912,9 @@ impl StateStore {
         }
         let timeout = Self::strict_read_only_open_timeout(timeout);
         match tokio::time::timeout(timeout, async {
-            let lifecycle_guard = Arc::new(
-                StateRootLifecycleGuard::acquire(&root)
-                    .await
-                    .map_err(|error| {
-                        contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
-                    })?,
-            );
+            let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await.map_err(
+                |error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard),
+            )?);
             lifecycle_guard
                 .validate_root_identity(&root)
                 .map_err(|error| {
@@ -1001,7 +993,9 @@ impl StateStore {
     ) -> Result<Self, StateStoreError> {
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE)
             .use_db(STATE_DATABASE)
@@ -1031,7 +1025,9 @@ impl StateStore {
     ) -> Result<Self, StateStoreError> {
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE)
             .use_db(STATE_DATABASE)
@@ -1061,7 +1057,9 @@ impl StateStore {
     ) -> Result<Self, StateStoreError> {
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, false)).await?;
         db.use_ns(STATE_NAMESPACE)
             .use_db(STATE_DATABASE)
@@ -1085,7 +1083,9 @@ impl StateStore {
     ) -> Result<Self, StateStoreError> {
         lifecycle_guard
             .validate_root_identity(&root)
-            .map_err(|error| contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard))?;
+            .map_err(|error| {
+                contextualize_open_error(error, StateStoreOpenStage::LifecycleGuard)
+            })?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE)
             .use_db(STATE_DATABASE)
@@ -1237,11 +1237,9 @@ mod tests {
             .expect("open should materialize the immediate parent before acquiring its guard");
 
         assert!(root.is_dir());
-        assert!(
-            state_root_lifecycle_guard_path(&root)
-                .expect("derive lifecycle guard")
-                .exists()
-        );
+        assert!(state_root_lifecycle_guard_path(&root)
+            .expect("derive lifecycle guard")
+            .exists());
         store.close().await;
         let _ = fs::remove_dir_all(&container);
     }
@@ -1805,7 +1803,10 @@ mod tests {
     fn bounded_surrealkv_open_wrappers_preserve_stage_and_retryability() {
         let cases = [
             ("open", StateStoreOpenStage::DatastoreOpen),
-            ("check version for", StateStoreOpenStage::DatastoreCheckVersion),
+            (
+                "check version for",
+                StateStoreOpenStage::DatastoreCheckVersion,
+            ),
             ("bootstrap", StateStoreOpenStage::DatastoreBootstrap),
         ];
         for (action, stage) in cases {
@@ -1816,8 +1817,14 @@ mod tests {
             let error = contextualize_open_error(error, stage);
             let diagnostic = error.open_error_diagnostic();
             assert_eq!(diagnostic.open_stage, stage);
-            assert_eq!(diagnostic.lock_evidence, Some(StateStoreOpenLockEvidence::Datastore));
-            assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::LockContention);
+            assert_eq!(
+                diagnostic.lock_evidence,
+                Some(StateStoreOpenLockEvidence::Datastore)
+            );
+            assert_eq!(
+                diagnostic.error_kind,
+                StateStoreOpenErrorKind::LockContention
+            );
             assert!(diagnostic.retryable);
         }
     }

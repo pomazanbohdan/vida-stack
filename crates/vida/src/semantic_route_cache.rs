@@ -224,11 +224,9 @@ mod tests {
             },
         };
 
-        assert!(
-            entry
-                .selected_candidate_hint_after_hard_filters(&key, false)
-                .is_none()
-        );
+        assert!(entry
+            .selected_candidate_hint_after_hard_filters(&key, false)
+            .is_none());
         assert_eq!(
             entry
                 .selected_candidate_hint_after_hard_filters(&key, true)
@@ -267,10 +265,8 @@ mod tests {
             },
         };
 
-        assert!(
-            entry
-                .selected_candidate_hint_after_hard_filters(&key, true)
-                .is_none()
-        );
+        assert!(entry
+            .selected_candidate_hint_after_hard_filters(&key, true)
+            .is_none());
     }
 }

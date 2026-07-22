@@ -710,6 +710,32 @@ fn build_lane_envelope_with_owned_scope(
     next_actions: Vec<String>,
     owned_write_scope_hint: &[String],
 ) -> LaneEnvelope {
+    build_lane_envelope_with_owned_scope_and_rework_route(
+        summary,
+        status,
+        exception_path_metadata_path,
+        exception_path_metadata,
+        operator_session_projection,
+        blocked,
+        blocker_codes,
+        next_actions,
+        owned_write_scope_hint,
+        None,
+    )
+}
+
+fn build_lane_envelope_with_owned_scope_and_rework_route(
+    summary: crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<crate::state_store::RunGraphStatus>,
+    exception_path_metadata_path: Option<String>,
+    exception_path_metadata: Option<ExceptionTakeoverMetadata>,
+    operator_session_projection: serde_json::Value,
+    blocked: bool,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    owned_write_scope_hint: &[String],
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
+) -> LaneEnvelope {
     let run_id = summary.run_id.clone();
     let dispatch_packet_path = summary.dispatch_packet_path.clone();
     let dispatch_result_path = summary.dispatch_result_path.clone();
@@ -759,6 +785,7 @@ fn build_lane_envelope_with_owned_scope(
                 blocked,
                 &next_actions,
                 owned_write_scope_hint,
+                authorized_rework_route,
             )
         });
     let recommended_command = next_action.as_ref().map(|action| action.command.clone());
@@ -1028,6 +1055,7 @@ fn lane_blocked_next_action(
     blocked: bool,
     next_actions: &[String],
     owned_write_scope_hint: &[String],
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
 ) -> Option<LaneNextAction> {
     if !blocked {
         return None;
@@ -1035,7 +1063,7 @@ fn lane_blocked_next_action(
     if let Some(action) = pending_host_bridge_next_action(summary, status) {
         return Some(action);
     }
-    if let Some(action) = lane_authorized_rework_next_action(summary) {
+    if let Some(action) = lane_authorized_rework_next_action(summary, authorized_rework_route) {
         return Some(action);
     }
     if let Some(receipt_id) = summary
@@ -1149,13 +1177,9 @@ fn lane_blocked_next_action(
 
 fn lane_authorized_rework_next_action(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
 ) -> Option<LaneNextAction> {
-    let route = crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
-        summary.downstream_dispatch_result_path.as_deref(),
-        summary.dispatch_result_path.as_deref(),
-        summary.dispatch_packet_path.as_deref(),
-        &summary.dispatch_target,
-    )?;
+    let route = authorized_rework_route?;
     let run_id = summary.run_id.trim();
     if run_id.is_empty() {
         return None;
@@ -1172,6 +1196,53 @@ fn lane_authorized_rework_next_action(
             route.allowed_next_node
         ),
     })
+}
+
+async fn lane_authorized_rework_route(
+    store: &crate::state_store::StateStore,
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> Result<Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute>, String> {
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_context_from_receipt_fields(
+        store,
+        &status.run_id,
+        &status.task_id,
+        summary.downstream_dispatch_result_path.as_deref(),
+        summary.dispatch_result_path.as_deref(),
+        summary.dispatch_packet_path.as_deref(),
+        &summary.dispatch_target,
+    )
+    .await
+    .map(|context| context.map(|context| context.route))
+    .map_err(|blocker| blocker.to_string())
+}
+
+async fn lane_rework_route_for_envelope(
+    store: &crate::state_store::StateStore,
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    truth: &mut LaneShowTruth,
+) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
+    match lane_authorized_rework_route(store, summary, status).await {
+        Ok(route) => route,
+        Err(error) => {
+            let blocker_code = error
+                .split(':')
+                .next()
+                .unwrap_or("team_flow_rework_blocked");
+            if !truth.blocker_codes.iter().any(|code| code == blocker_code) {
+                truth.blocker_codes.push(blocker_code.to_string());
+            }
+            truth.blocked = true;
+            truth.next_actions.push(format!(
+                "rehydrate dispatch rework authority before continuing: {error}"
+            ));
+            None
+        }
+    }
 }
 
 fn pending_host_bridge_next_action(
@@ -2797,8 +2868,18 @@ fn lane_completion_packet_path(
 }
 
 fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), String> {
-    let encoded = serde_json::to_string_pretty(packet)
+    let mut compact_packet = packet.clone();
+    crate::runtime_dispatch_state::normalize_persisted_dispatch_packet_role_selection(
+        &mut compact_packet,
+    )?;
+    let encoded = serde_json::to_string_pretty(&compact_packet)
         .map_err(|error| format!("Failed to encode persisted lane packet `{path}`: {error}"))?;
+    if encoded.len() as u64 > MAX_LANE_PACKET_READ_BYTES {
+        return Err(format!(
+            "Persisted lane packet `{path}` exceeds {} bytes.",
+            MAX_LANE_PACKET_READ_BYTES
+        ));
+    }
     std::fs::write(path, encoded)
         .map_err(|error| format!("Failed to write persisted lane packet `{path}`: {error}"))
 }
@@ -3040,6 +3121,13 @@ fn write_rework_downstream_packet_fallback(
     target: &str,
     source_packet: &serde_json::Value,
 ) -> Option<String> {
+    if source_packet
+        .get("role_selection_full")
+        .and_then(|selection| selection.get("compiled_bundle"))
+        .is_some_and(serde_json::Value::is_null)
+    {
+        return None;
+    }
     let mut packet = source_packet.clone();
     let object = packet.as_object_mut()?;
     object.insert("dispatch_target".to_string(), serde_json::json!(target));
@@ -3146,12 +3234,14 @@ fn reconcile_lane_completion_allowed_next_node(
     let persisted_allowed_next_node = persisted_allowed_next_node
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let terminal_closure_target = role_selection.and_then(|selection| {
-        crate::runtime_dispatch_state::terminal_closure_downstream_target_from_execution_plan(
-            &selection.execution_plan,
-            receipt,
-        )
-    });
+    let terminal_closure_target = role_selection
+        .map(|selection| {
+            crate::runtime_dispatch_state::terminal_closure_downstream_target_for_role_selection(
+                selection, receipt,
+            )
+        })
+        .transpose()?
+        .flatten();
     if requested_allowed_next_node == Some("next") {
         return Err(format!(
             "{surface_label} allowed_next_node `next` is not a concrete runtime route."
@@ -3167,49 +3257,46 @@ fn reconcile_lane_completion_allowed_next_node(
         return Ok(terminal_closure_target);
     };
     let lawful_requested = if terminal_closure_route(requested) {
-        let configured_lawful_requested = role_selection.and_then(|selection| {
-            let dispatch_contract =
-                &selection.execution_plan["development_flow"]["dispatch_contract"];
+        let configured_lawful_requested = if let Some(selection) = role_selection {
             let requested_target =
                 crate::runtime_assignment_policy::canonical_dispatch_target_name(requested);
-            crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
-                .iter()
-                .any(|candidate| {
-                    crate::runtime_assignment_policy::canonical_dispatch_target_name(candidate)
-                        == requested_target
-                })
-                .then(|| {
-                    crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
-                        &selection.execution_plan,
-                        receipt,
-                        requested,
-                    )
-                })
-                .flatten()
-        });
+            let configured_sequence =
+                crate::runtime_dispatch_state::typed_lane_sequence(selection, false)?;
+            if configured_sequence.iter().any(|candidate| {
+                crate::runtime_assignment_policy::canonical_dispatch_target_name(candidate)
+                    == requested_target
+            }) {
+                crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_role_selection(
+                    selection,
+                    receipt,
+                    requested,
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         configured_lawful_requested.or(terminal_closure_target.clone())
     } else {
-        role_selection.and_then(|selection| {
-            rework_target
-                .map(str::trim)
-                .filter(|target| !target.is_empty())
-                .and_then(|target| {
-                    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
-                        &selection.execution_plan,
-                        &receipt.dispatch_target,
-                        receipt.downstream_dispatch_last_target.as_deref(),
-                        requested,
-                        target,
-                    )
-                })
-                .or_else(|| {
-                    crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
-                        &selection.execution_plan,
-                        receipt,
-                        requested,
-                    )
-                })
-        })
+        let Some(selection) = role_selection else {
+            return Err(format!(
+                "{surface_label} TeamFlow authority selection is missing for `{requested}`"
+            ));
+        };
+        if rework_target
+            .map(str::trim)
+            .is_some_and(|target| !target.is_empty())
+        {
+            return Err(format!(
+                "{surface_label} TeamFlow rework admission requires typed receipt evidence for `{requested}`"
+            ));
+        }
+        crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_role_selection(
+            selection,
+            receipt,
+            requested,
+        )?
     };
     let effective_requested = lawful_requested.as_deref().unwrap_or(requested).to_string();
     if role_selection.is_some() && lawful_requested.is_none() {
@@ -3222,17 +3309,19 @@ fn reconcile_lane_completion_allowed_next_node(
         let effective_persisted =
             crate::runtime_dispatch_state::canonical_terminal_closure_dispatch_target(persisted)
                 .unwrap_or(persisted);
+        let persisted_transition_target = role_selection
+            .map(|selection| {
+                crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_role_selection(
+                    selection,
+                    receipt,
+                    persisted,
+                )
+            })
+            .transpose()?
+            .flatten();
         let persisted_matches = persisted == effective_requested
             || effective_persisted == effective_requested
-            || role_selection
-                .and_then(|selection| {
-                    crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
-                        &selection.execution_plan,
-                        receipt,
-                        persisted,
-                    )
-                })
-                .is_some_and(|target| target == effective_requested);
+            || persisted_transition_target.as_deref() == Some(effective_requested.as_str());
         let stale_terminal_closure = terminal_closure_route(persisted)
             && (lawful_requested.is_some() || terminal_closure_target.is_some());
         let stale_current_lane_marker =
@@ -3256,81 +3345,112 @@ fn reconcile_lane_completion_allowed_next_node(
 }
 
 fn rework_allowed_next_node_from_execution_plan(
+    state_root: &Path,
     role_selection: Option<&crate::RuntimeConsumptionLaneSelection>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
-    completed_dispatch_target: &str,
+    _completed_dispatch_target: &str,
     rework_target: Option<&str>,
-) -> Option<String> {
-    let rework_target = rework_target
+) -> Result<Option<String>, String> {
+    let Some(rework_target) = rework_target
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let execution_plan = &role_selection?.execution_plan;
-    let rework_lane = format!("{rework_target}_rework");
-    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
-        execution_plan,
-        completed_dispatch_target,
-        receipt.downstream_dispatch_last_target.as_deref(),
-        &rework_lane,
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(role_selection) = role_selection else {
+        return Err("team_flow_role_selection_missing_for_rework".to_string());
+    };
+    let explicit_target = rework_target;
+    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_role_selection(
+        state_root,
+        role_selection,
+        receipt,
+        explicit_target,
         rework_target,
     )
-    .or_else(|| {
-        crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
-            execution_plan,
-            completed_dispatch_target,
-            receipt.downstream_dispatch_last_target.as_deref(),
-            rework_target,
-            rework_target,
-        )
-    })
+    .map(|target| target.or_else(|| Some(rework_target.to_string())))
 }
 
 fn canonical_implementation_rework_target_from_execution_plan(
     role_selection: Option<&crate::RuntimeConsumptionLaneSelection>,
     completed_dispatch_target: &str,
-) -> Option<String> {
-    let execution_plan = &role_selection?.execution_plan;
-    let dispatch_contract = execution_plan
-        .get("development_flow")
-        .and_then(|flow| flow.get("dispatch_contract"))?;
-    let state_machine =
-        crate::team_flow_state_machine::TeamFlowStateMachine::from_dispatch_contract(
-            dispatch_contract,
-            "execution_lane_sequence",
-        )?;
+) -> Result<Option<String>, String> {
+    let Some(role_selection) = role_selection else {
+        return Ok(None);
+    };
+    let authority =
+        crate::runtime_dispatch_state::require_persisted_team_flow_authority_for_selection(
+            role_selection,
+        )
+        .map_err(|blocker| blocker.code)?;
     let completed_dispatch_target = completed_dispatch_target.trim().replace('-', "_");
-    let completed_index = state_machine
-        .steps
-        .iter()
-        .position(|step| step.role_id == completed_dispatch_target);
-    state_machine
-        .steps
+    let ordered_nodes = authority.ordered_nodes().collect::<Vec<_>>();
+    let completed_index = ordered_nodes.iter().position(|step| {
+        step.dispatch_alias == completed_dispatch_target
+            || step.node.node_id == completed_dispatch_target
+    });
+    Ok(ordered_nodes
         .iter()
         .enumerate()
         .take_while(|(index, _)| completed_index.is_none_or(|completed| *index < completed))
         .find(|(_, step)| {
-            step.task_class == "implementation" || step.task_class.starts_with("implementation_")
+            step.node.task_class == "implementation"
+                || step.node.task_class.starts_with("implementation_")
         })
-        .map(|(_, step)| step.role_id.clone())
+        .map(|(_, step)| step.dispatch_alias.clone()))
 }
 
 fn dispatch_contract_blocker_from_execution_plan(
     role_selection: Option<&crate::RuntimeConsumptionLaneSelection>,
-) -> Option<&'static str> {
-    let dispatch_contract = role_selection?
-        .execution_plan
-        .get("development_flow")?
-        .get("dispatch_contract")?;
-    crate::team_flow_state_machine::validate_dispatch_contract(
-        dispatch_contract,
-        "execution_lane_sequence",
-    )
-    .err()
+    current_dispatch_target: &str,
+) -> Option<String> {
+    let role_selection = role_selection?;
+    let authority =
+        match crate::runtime_dispatch_state::require_persisted_team_flow_authority_for_selection(
+            role_selection,
+        ) {
+            Ok(authority) => authority,
+            Err(blocker) => return Some(blocker.code),
+        };
+    let selected_node_id = crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let current_dispatch_target = current_dispatch_target.trim();
+    let Some(current_dispatch_target) = (!current_dispatch_target.is_empty())
+        .then_some(current_dispatch_target)
+    else {
+        return Some("team_flow_current_node_missing".to_string());
+    };
+    let selected_node = match selected_node_id {
+        Some(selected_node_id) => match authority.resolve_target(
+            Some(&role_selection.execution_plan),
+            selected_node_id,
+        ) {
+            Ok(node) => Some(node),
+            Err(blocker) => return Some(blocker.code.to_string()),
+        },
+        None => None,
+    };
+    let current_node = match authority.resolve_target(
+        Some(&role_selection.execution_plan),
+        current_dispatch_target,
+    ) {
+        Ok(node) => node,
+        Err(blocker) => return Some(blocker.code.to_string()),
+    };
+    if let Some(selected_node) = selected_node {
+        if selected_node.node_id != current_node.node_id {
+            return Some("team_flow_selected_node_dispatch_target_mismatch".to_string());
+        }
+    }
+    None
 }
 
 fn read_supplied_host_bridge_completion_result(
     state_root: &Path,
     result_file: Option<&str>,
     request_path: Option<&str>,
+    requestless_expected_binding: Option<(&str, &str)>,
 ) -> Result<Option<serde_json::Value>, String> {
     let Some(result_file) = result_file.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -3353,7 +3473,19 @@ fn read_supplied_host_bridge_completion_result(
         return Ok(Some(result));
     }
 
-    read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
+    let result = read_host_bridge_json_artifact_at_path(&canonical_path)?;
+    if let Some((run_id, dispatch_target)) = requestless_expected_binding {
+        let expected_binding = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": dispatch_target,
+        });
+        validate_materialized_host_bridge_result_contract(
+            &canonical_path,
+            &expected_binding,
+            &result,
+        )?;
+    }
+    Ok(Some(result))
 }
 
 fn supplied_host_bridge_completion_result_path(
@@ -5023,8 +5155,7 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            "host_bridge_completion_request_identity_missing: request_id is required"
-                .to_string()
+            "host_bridge_completion_request_identity_missing: request_id is required".to_string()
         })?;
     let submitted_result_path = supplied_result_path.map(|path| path.display().to_string());
     let packet_path = request
@@ -5033,8 +5164,7 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            "host_bridge_completion_request_identity_missing: packet_path is required"
-                .to_string()
+            "host_bridge_completion_request_identity_missing: packet_path is required".to_string()
         })?;
     let backend_id = request
         .get("backend_id")
@@ -5042,8 +5172,7 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            "host_bridge_completion_request_identity_missing: backend_id is required"
-                .to_string()
+            "host_bridge_completion_request_identity_missing: backend_id is required".to_string()
         })?;
     let summary = summary
         .map(str::trim)
@@ -5097,7 +5226,9 @@ fn materialize_host_bridge_completion_evidence(
             serde_json::Value::Null
         };
     let mut blocker_codes = Vec::new();
-    if let Some(blocker_code) = dispatch_contract_blocker_from_execution_plan(role_selection) {
+    if let Some(blocker_code) =
+        dispatch_contract_blocker_from_execution_plan(role_selection, dispatch_target)
+    {
         blocker_codes.push(blocker_code.to_string());
     }
     if requires_implementation_artifacts && !supplied_no_code_change {
@@ -5192,14 +5323,13 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
-    let canonical_rework_target = supplied_rework_target.map(str::to_string).or_else(|| {
-        (!blocker_codes.is_empty()).then(|| {
-            canonical_implementation_rework_target_from_execution_plan(
-                role_selection,
-                dispatch_target,
-            )
-        })?
-    });
+    let canonical_rework_target = if let Some(target) = supplied_rework_target {
+        Some(target.to_string())
+    } else if !blocker_codes.is_empty() {
+        canonical_implementation_rework_target_from_execution_plan(role_selection, dispatch_target)?
+    } else {
+        None
+    };
     let blocked_contract_allows_next = allowed_next_node
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("next"))
@@ -5228,6 +5358,13 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .any(host_bridge_completion_result_value_is_rework_alias)
         || allowed_next_node.map(str::trim) == Some(result_verdict.allowed_next_node.as_str());
+    let rework_allowed_next_node = rework_allowed_next_node_from_execution_plan(
+        state_root,
+        role_selection,
+        persisted_receipt,
+        dispatch_target,
+        supplied_rework_target,
+    )?;
     let effective_allowed_next_node = if blocker_codes.is_empty() {
         reconcile_lane_completion_allowed_next_node(
             "Host bridge completion",
@@ -5242,14 +5379,7 @@ fn materialize_host_bridge_completion_evidence(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .or_else(|| {
-                rework_allowed_next_node_from_execution_plan(
-                    role_selection,
-                    persisted_receipt,
-                    dispatch_target,
-                    supplied_rework_target,
-                )
-            })
+            .or(rework_allowed_next_node)
             .or_else(|| persisted_allowed_next_node.map(str::to_string))
     };
     if let (Some(requested), Some(persisted)) = (
@@ -5503,6 +5633,55 @@ fn decode_lane_completion_packet_context(
     Ok(Some((role_selection, run_graph_bootstrap)))
 }
 
+async fn rehydrate_lane_completion_packet_context(
+    store: &StateStore,
+    run_id: &str,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    packet: &serde_json::Value,
+) -> Result<Option<(crate::RuntimeConsumptionLaneSelection, serde_json::Value)>, String> {
+    let Some((role_selection, run_graph_bootstrap)) =
+        decode_lane_completion_packet_context(packet)?
+    else {
+        return Ok(None);
+    };
+    let status = status.ok_or_else(|| {
+        format!("lane_completion_role_selection_authority_identity_missing:{run_id}:run_status")
+    })?;
+    if status.run_id.trim() != run_id.trim() {
+        return Err(format!(
+            "lane_completion_role_selection_authority_run_mismatch:{}:{run_id}",
+            status.run_id
+        ));
+    }
+    let task_id = status.task_id.trim();
+    if task_id.is_empty() {
+        return Err(format!(
+            "lane_completion_role_selection_authority_identity_missing:{run_id}:task_id"
+        ));
+    }
+    store.show_task(task_id).await.map_err(|error| {
+        format!(
+            "lane_completion_role_selection_authority_task_unavailable:{run_id}:{task_id}:{error}"
+        )
+    })?;
+    let role_selection = serde_json::to_value(role_selection).map_err(|error| {
+        format!("Failed to serialize persisted lane role selection for rehydration: {error}")
+    })?;
+    let role_selection = crate::taskflow_run_graph::rehydrate_persisted_role_selection_value(
+        store,
+        role_selection,
+        Some(task_id),
+    )
+    .await
+    .map_err(|error| format!("Failed to rehydrate persisted lane role selection: {error}"))?;
+    if role_selection.compiled_bundle.is_null() {
+        return Err(
+            "lane_completion_role_selection_rehydration_missing_compiled_bundle".to_string(),
+        );
+    }
+    Ok(Some((role_selection, run_graph_bootstrap)))
+}
+
 pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
     if lane_help_requested(&args.args) {
         println!("{}", lane_help_text(&args.args));
@@ -5651,12 +5830,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 }
             };
-            let truth = derive_lane_show_truth_with_exception_metadata(
+            let mut truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
                 exception_path_metadata.as_ref(),
             );
-            let envelope = build_lane_envelope_with_owned_scope(
+            let authorized_rework_route =
+                lane_rework_route_for_envelope(&store, &summary, status.as_ref(), &mut truth).await;
+            let envelope = build_lane_envelope_with_owned_scope_and_rework_route(
                 summary,
                 status,
                 exception_path_metadata_path,
@@ -5666,6 +5847,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
                 &owned_write_scope_hint,
+                authorized_rework_route.as_ref(),
             );
             return emit_lane_envelope_with_projection_cache(
                 &state_dir, "latest", &envelope, *as_json,
@@ -5787,12 +5969,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 }
             };
-            let truth = derive_lane_show_truth_with_exception_metadata(
+            let mut truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
                 exception_path_metadata.as_ref(),
             );
-            let envelope = build_lane_envelope_with_owned_scope(
+            let authorized_rework_route =
+                lane_rework_route_for_envelope(&store, &summary, status.as_ref(), &mut truth).await;
+            let envelope = build_lane_envelope_with_owned_scope_and_rework_route(
                 summary,
                 status,
                 exception_path_metadata_path,
@@ -5802,6 +5986,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
                 &owned_write_scope_hint,
+                authorized_rework_route.as_ref(),
             );
             return emit_lane_envelope_with_projection_cache(
                 &state_dir, run_id, &envelope, *as_json,
@@ -5869,12 +6054,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth_with_exception_metadata(
+            let mut truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
                 exception_path_metadata.as_ref(),
             );
-            let lane_envelope = build_lane_envelope_with_owned_scope(
+            let authorized_rework_route =
+                lane_rework_route_for_envelope(&store, &summary, status.as_ref(), &mut truth).await;
+            let lane_envelope = build_lane_envelope_with_owned_scope_and_rework_route(
                 summary,
                 status,
                 exception_path_metadata_path
@@ -5886,6 +6073,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
                 &owned_write_scope_hint,
+                authorized_rework_route.as_ref(),
             );
             let takeover_envelope = build_lane_takeover_ready_envelope(lane_envelope);
             return emit_lane_takeover_ready_envelope(&takeover_envelope, *as_json);
@@ -5941,12 +6129,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth_with_exception_metadata(
+            let mut truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
                 exception_path_metadata.as_ref(),
             );
-            let envelope = build_lane_envelope(
+            let authorized_rework_route =
+                lane_rework_route_for_envelope(&store, &summary, status.as_ref(), &mut truth).await;
+            let envelope = build_lane_envelope_with_owned_scope_and_rework_route(
                 summary,
                 status,
                 exception_path_metadata_path
@@ -5957,6 +6147,8 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
+                &[],
+                authorized_rework_route.as_ref(),
             );
             emit_lane_envelope_with_projection_cache(&state_dir, "latest", &envelope, as_json)
         }
@@ -5994,12 +6186,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth_with_exception_metadata(
+            let mut truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
                 exception_path_metadata.as_ref(),
             );
-            let envelope = build_lane_envelope(
+            let authorized_rework_route =
+                lane_rework_route_for_envelope(&store, &summary, status.as_ref(), &mut truth).await;
+            let envelope = build_lane_envelope_with_owned_scope_and_rework_route(
                 summary,
                 status,
                 exception_path_metadata_path
@@ -6010,6 +6204,8 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
+                &[],
+                authorized_rework_route.as_ref(),
             );
             emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
@@ -6166,6 +6362,34 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
                 return ExitCode::from(2);
             }
+            let mut lane_completion_packet_context = match rehydrate_lane_completion_packet_context(
+                &store,
+                run_id,
+                status.as_ref(),
+                &packet,
+            )
+            .await
+            {
+                Ok(context) => context,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            if let (Some((role_selection, _)), Some(status)) =
+                (lane_completion_packet_context.as_mut(), status.as_ref())
+            {
+                if let Err(error) =
+                    crate::taskflow_run_graph::project_selected_node_for_run_graph_status(
+                        role_selection,
+                        status,
+                        Some(&receipt.dispatch_target),
+                    )
+                {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            }
             if takeover_active {
                 if let Some(metadata) = exception_path_metadata.as_ref() {
                     let packet_template_kind = packet
@@ -6207,14 +6431,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
-            let lane_completion_packet_context =
-                match decode_lane_completion_packet_context(&packet) {
-                    Ok(context) => context,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
             let supplied_completion_result_args = HostBridgeCompletionResultArgs {
                 result_file: host_bridge_result_file,
                 decision,
@@ -6228,6 +6444,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 store.root(),
                 supplied_completion_result_args.result_file,
                 host_bridge_request,
+                host_bridge_request
+                    .is_none()
+                    .then_some((run_id, receipt.dispatch_target.as_str())),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -6793,31 +7012,33 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready")
             {
                 let fallback_packet_context = if lane_completion_packet_context.is_none() {
-                    decode_lane_completion_packet_context(&packet)
-                        .ok()
-                        .flatten()
-                        .or_else(|| {
-                            packet
-                                .get("packet_path")
-                                .and_then(serde_json::Value::as_str)
-                                .and_then(read_json_file_lossy)
-                                .and_then(|packet| {
-                                    decode_lane_completion_packet_context(&packet)
-                                        .ok()
-                                        .flatten()
-                                })
-                        })
+                    let fallback_packet = packet
+                        .get("packet_path")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(read_json_file_lossy)
                         .or_else(|| {
                             host_bridge_result_file_source_dispatch_packet_path(
                                 &completion_result_path,
                             )
                             .and_then(|path| read_json_file_lossy(&path))
-                            .and_then(|packet| {
-                                decode_lane_completion_packet_context(&packet)
-                                    .ok()
-                                    .flatten()
-                            })
-                        })
+                        });
+                    match fallback_packet {
+                        Some(fallback_packet) => match rehydrate_lane_completion_packet_context(
+                            &store,
+                            run_id,
+                            status.as_ref(),
+                            &fallback_packet,
+                        )
+                        .await
+                        {
+                            Ok(context) => context,
+                            Err(error) => {
+                                eprintln!("{error}");
+                                return ExitCode::from(2);
+                            }
+                        },
+                        None => None,
+                    }
                 } else {
                     None
                 };
@@ -6896,6 +7117,18 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     if let Err(error) = store.record_run_graph_status(&executed_status).await {
                         eprintln!(
                             "Failed to persist run-graph status after lane completion: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                    if let Err(error) =
+                        crate::taskflow_run_graph::persist_selected_node_for_run_graph_transition(
+                            &store,
+                            &executed_status,
+                        )
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to persist TeamFlow selected node after lane completion: {error}"
                         );
                         return ExitCode::from(1);
                     }
@@ -7552,7 +7785,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "status": "completed",
                 "dispatch_transport": "host_tool_bridge",
                 "result_path": result_path.display().to_string(),
@@ -7734,52 +7967,286 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    fn lane_complete_role_selection(dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
-        crate::RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "continue development".to_string(),
-            selected_role: "pm".to_string(),
-            conversational_mode: Some("development".to_string()),
-            single_task_only: true,
-            tracked_flow_entry: Some("dev-pack".to_string()),
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec!["development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "tracked_flow_bootstrap": {
-                    "dev_task": {
-                        "task_id": dev_task_id,
-                        "ensure_command": "vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json"
-                    }
-                },
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["implementer", "coach", "verification"],
-                        "implementer_activation": {
-                            "completion_blocker": "pending_implementation_evidence",
-                            "activation_agent_type": "junior",
-                            "activation_runtime_role": "worker"
-                        },
-                        "coach_activation": {
-                            "completion_blocker": "pending_review_clean_evidence",
-                            "activation_agent_type": "middle",
-                            "activation_runtime_role": "coach"
-                        },
-                        "verifier_activation": {
-                            "completion_blocker": "pending_verification_evidence",
-                            "activation_agent_type": "senior",
-                            "activation_runtime_role": "verifier"
-                        }
-                    }
-                },
-                "orchestration_contract": {}
-            }),
-            reason: "test".to_string(),
-        }
+    fn lane_complete_role_selection(_dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
+        let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let config =
+            crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+                .expect("lane fixture project config should load");
+        let compiled_bundle =
+            crate::build_compiled_agent_extension_bundle_for_root(&config, &project_root)
+                .expect("lane fixture compiled bundle should build");
+        crate::runtime_lane_summary::build_runtime_lane_selection_from_bundle(
+            &compiled_bundle,
+            "test",
+            &crate::launcher_activation_snapshot::pack_router_keywords_json(&config),
+            "continue development",
+        )
+        .expect("lane fixture selection should resolve from project config")
+    }
+
+    fn lane_complete_role_selection_with_configured_terminal_predecessor(
+        task_id: &str,
+    ) -> crate::RuntimeConsumptionLaneSelection {
+        let mut selection = lane_complete_role_selection(task_id);
+        let flow_id = selection.compiled_bundle["team_flow_authority"]["resolved_all_flow_payload"]
+            ["flows"]
+            .as_array()
+            .and_then(|flows| {
+                flows.iter().find_map(|flow| {
+                    let lanes = flow["lanes"].as_array()?;
+                    let terminal_id = lanes
+                        .iter()
+                        .find(|lane| lane["terminal"].as_bool() == Some(true))
+                        .and_then(|lane| lane["node_id"].as_str())?;
+                    let has_included_predecessor = lanes.iter().any(|lane| {
+                        lane["included"].as_bool() != Some(false)
+                            && lane["next_node"].as_str() == Some(terminal_id)
+                    });
+                    has_included_predecessor
+                        .then(|| flow["flow_id"].as_str().map(ToOwned::to_owned))
+                        .flatten()
+                })
+            })
+            .expect("project config should expose a flow with terminal predecessor");
+        let compiled_bundle = selection.compiled_bundle.clone();
+        crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan(
+            &mut selection,
+            &compiled_bundle,
+            &flow_id,
+        )
+        .expect("terminal predecessor fixture should normalize from project config");
+        selection
+    }
+
+    async fn write_lane_activation_snapshot_for_store(
+        store: &crate::state_store::StateStore,
+    ) -> Result<(), String> {
+        let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let config =
+            crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)?;
+        let bundle = crate::build_compiled_agent_extension_bundle_for_root(&config, &project_root)
+            .map_err(|error| format!("build compiled bundle: {error}"))?;
+        let snapshot = crate::state_store::LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: project_root.join("vida.config.yaml").display().to_string(),
+            source_config_digest: crate::launcher_activation_snapshot::config_file_digest(
+                &project_root.join("vida.config.yaml"),
+            )?,
+            captured_at: "2026-01-01T00:00:00Z".to_string(),
+            compiled_bundle: bundle,
+            pack_router_keywords: crate::launcher_activation_snapshot::pack_router_keywords_json(
+                &config,
+            ),
+        };
+        store
+            .write_launcher_activation_snapshot(&snapshot)
+            .await
+            .map_err(|error| format!("write launcher activation snapshot: {error}"))
+    }
+
+    fn compact_lane_completion_packet(
+        role_selection: &crate::RuntimeConsumptionLaneSelection,
+        run_id: &str,
+    ) -> serde_json::Value {
+        let mut persisted = serde_json::to_value(role_selection)
+            .expect("lane completion role selection should serialize");
+        persisted["compiled_bundle"] = serde_json::Value::Null;
+        serde_json::json!({
+            "run_id": run_id,
+            "role_selection_full": persisted,
+            "run_graph_bootstrap": {"run_id": run_id}
+        })
+    }
+
+    fn canonical_lane_completion_route(
+        role_selection: &crate::RuntimeConsumptionLaneSelection,
+    ) -> Result<
+        (
+            crate::team_flow_authority_adapter::TeamFlowNodeResolution,
+            crate::team_flow_authority_adapter::TeamFlowNodeResolution,
+        ),
+        String,
+    > {
+        let sequence =
+            crate::runtime_dispatch_state::typed_lane_node_sequence(role_selection, true)?;
+        sequence
+            .iter()
+            .find_map(|current| {
+                let next_node_id = current.next_node.as_deref()?;
+                let next = sequence
+                    .iter()
+                    .find(|candidate| candidate.node_id == next_node_id)?;
+                Some((current.clone(), next.clone()))
+            })
+            .ok_or_else(|| "team_flow_canonical_successor_missing".to_string())
+    }
+
+    #[tokio::test]
+    async fn lane_completion_compact_role_selection_rehydrates_before_rework_authority() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-completion-compact-rehydrate-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("open lane completion state store");
+        write_lane_activation_snapshot_for_store(&store)
+            .await
+            .expect("write lane completion activation snapshot");
+        let task_id = "lane-completion-compact-rehydrate-task";
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Lane completion compact rehydrate",
+                display_id: None,
+                description: "Lane completion compact rehydrate",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: &root.display().to_string(),
+            })
+            .await
+            .expect("create lane completion task");
+        let run_id = "lane-completion-compact-rehydrate-run";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(task_id, "worker", "worker");
+        status.run_id = run_id.to_string();
+        let packet = compact_lane_completion_packet(&lane_complete_role_selection(task_id), run_id);
+        let (rehydrated, _) =
+            rehydrate_lane_completion_packet_context(&store, run_id, Some(&status), &packet)
+                .await
+                .expect("compact lane packet should rehydrate")
+                .expect("compact lane packet should include context");
+        assert!(rehydrated.compiled_bundle.is_object());
+        let (current_node, next_node) = canonical_lane_completion_route(&rehydrated)
+            .expect("configured successor should resolve");
+        assert_eq!(
+            current_node.next_node.as_deref(),
+            Some(next_node.node_id.as_str())
+        );
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = current_node.node_id.clone();
+        let requested = next_node.node_id.clone();
+        let resolved = reconcile_lane_completion_allowed_next_node(
+            "lane completion test",
+            Some(&rehydrated),
+            &receipt,
+            Some(&requested),
+            None,
+            None,
+        )
+        .expect("rehydrated completion should admit the next lawful lane");
+        assert_eq!(
+            resolved.as_deref(),
+            Some(next_node.dispatch_target.as_str())
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_completion_tampered_or_missing_authority_blocks_before_packet_mutation() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-completion-authority-block-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("open lane completion state store");
+        write_lane_activation_snapshot_for_store(&store)
+            .await
+            .expect("write lane completion activation snapshot");
+        let task_id = "lane-completion-authority-block-task";
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Lane completion authority block",
+                display_id: None,
+                description: "Lane completion authority block",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: &root.display().to_string(),
+            })
+            .await
+            .expect("create lane completion task");
+        let run_id = "lane-completion-authority-block-run";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(task_id, "worker", "worker");
+        status.run_id = run_id.to_string();
+        let valid_compact_packet =
+            compact_lane_completion_packet(&lane_complete_role_selection(task_id), run_id);
+        let (valid_context, _) = rehydrate_lane_completion_packet_context(
+            &store,
+            run_id,
+            Some(&status),
+            &valid_compact_packet,
+        )
+        .await
+        .expect("valid compact TeamFlow authority should rehydrate")
+        .expect("valid compact TeamFlow authority should include context");
+        assert!(valid_context.compiled_bundle.is_object());
+        let mut tampered = valid_compact_packet.clone();
+        let unknown_node = serde_json::json!("unknown_persisted_node");
+        tampered["role_selection_full"]["execution_plan"]["team_flow_authority_selected_node_id"] =
+            unknown_node.clone();
+        tampered["role_selection_full"]["execution_plan"]["development_flow"]
+            ["dispatch_contract"]["selected_node_id"] = unknown_node.clone();
+        tampered["role_selection_full"]["execution_plan"]["development_flow"]
+            ["dispatch_contract"]["team_flow_authority_selected_node_id"] = unknown_node.clone();
+        tampered["role_selection_full"]["execution_plan"]["selected_flow_contract"]
+            ["selected_node_id"] = unknown_node;
+        let tampered_before = tampered.clone();
+        let error =
+            rehydrate_lane_completion_packet_context(&store, run_id, Some(&status), &tampered)
+                .await
+                .expect_err("tampered TeamFlow authority must fail closed");
+        assert!(error.contains("team_flow_authority_selected_node_id_unknown"));
+        assert_eq!(tampered, tampered_before);
+
+        let missing_identity = valid_compact_packet;
+        let mut missing_status = status;
+        missing_status.task_id.clear();
+        let missing_before = missing_identity.clone();
+        let error = rehydrate_lane_completion_packet_context(
+            &store,
+            run_id,
+            Some(&missing_status),
+            &missing_identity,
+        )
+        .await
+        .expect_err("missing task identity must fail closed");
+        assert!(error.contains("authority_identity_missing"));
+        assert_eq!(missing_identity, missing_before);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn wait_for_state_unlock(state_dir: &std::path::Path) {
@@ -7838,6 +8305,62 @@ mod tests {
         }
     }
 
+    fn canonical_host_bridge_identity(dispatch_target: &str) -> (String, String, String, String) {
+        let bundle = crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let backend_id = bundle
+            .get("carrier_runtime")
+            .and_then(|value| value.get("executor_backend_relation"))
+            .and_then(|value| value.get("backend_id"))
+            .and_then(serde_json::Value::as_str)
+            .expect("canonical executor backend id")
+            .to_string();
+        let mut selected = None;
+        if let Some(flows) = bundle
+            .get("team_flow_authority")
+            .and_then(|value| value.get("resolved_all_flow_payload"))
+            .and_then(|value| value.get("flows"))
+            .and_then(serde_json::Value::as_array)
+        {
+            for flow in flows {
+                let Some(lanes) = flow.get("lanes").and_then(serde_json::Value::as_array) else {
+                    continue;
+                };
+                for lane in lanes {
+                    if lane
+                        .get("dispatch_target")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(dispatch_target)
+                    {
+                        continue;
+                    }
+                    let carrier_id = lane
+                        .get("carrier_id")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("canonical carrier id")
+                        .to_string();
+                    let runtime_role = lane
+                        .get("runtime_role")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("canonical runtime role")
+                        .to_string();
+                    let task_class = lane
+                        .get("task_class")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("canonical task class")
+                        .to_string();
+                    selected = Some((carrier_id, runtime_role, task_class));
+                    break;
+                }
+                if selected.is_some() {
+                    break;
+                }
+            }
+        }
+        let (carrier_id, runtime_role, task_class) =
+            selected.expect("canonical dispatch target identity");
+        (backend_id, carrier_id, runtime_role, task_class)
+    }
+
     fn current_host_bridge_request_fixture(
         mut request: serde_json::Value,
         run_id: &str,
@@ -7856,6 +8379,12 @@ mod tests {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or("host-bridge-fixture")
             .to_string();
+        let (
+            canonical_backend_id,
+            canonical_carrier_id,
+            canonical_runtime_role,
+            canonical_task_class,
+        ) = canonical_host_bridge_identity(dispatch_target);
         object
             .entry("schema_version")
             .or_insert_with(|| serde_json::json!(1));
@@ -7885,22 +8414,16 @@ mod tests {
             .or_insert_with(|| serde_json::json!(packet_path.display().to_string()));
         object
             .entry("runtime_role")
-            .or_insert_with(|| serde_json::json!("worker"));
-        object
-            .entry("task_class")
-            .or_insert_with(|| {
-                if dispatch_target == "verification" {
-                    serde_json::json!("verification")
-                } else {
-                    serde_json::json!("implementation")
-                }
-            });
+            .or_insert_with(|| serde_json::json!(canonical_runtime_role));
         object
             .entry("backend_id")
-            .or_insert_with(|| serde_json::json!("internal_subagents"));
+            .or_insert_with(|| serde_json::json!(canonical_backend_id));
         object
             .entry("carrier_id")
-            .or_insert_with(|| serde_json::json!("middle"));
+            .or_insert_with(|| serde_json::json!(canonical_carrier_id));
+        object
+            .entry("task_class")
+            .or_insert_with(|| serde_json::json!(canonical_task_class));
         object
             .entry("execution_boundary")
             .or_insert_with(|| serde_json::json!("parent_host_session"));
@@ -7946,8 +8469,8 @@ mod tests {
             .unwrap_or(adapter_operations);
         let adapter_hash =
             blake3::hash(&serde_json::to_vec(&adapter_snapshot).expect("adapter fixture snapshot"))
-        .to_hex()
-        .to_string();
+                .to_hex()
+                .to_string();
         object.insert(
             "adapter_contract_hash".to_string(),
             serde_json::json!(adapter_hash),
@@ -8027,7 +8550,9 @@ mod tests {
         object
             .entry("read_only_paths")
             .or_insert_with(|| serde_json::json!([]));
-        object.entry("proof_target").or_insert(serde_json::Value::Null);
+        object
+            .entry("proof_target")
+            .or_insert(serde_json::Value::Null);
         object.insert(
             "request_path".to_string(),
             serde_json::json!(request_path.display().to_string()),
@@ -8064,7 +8589,8 @@ mod tests {
             result_path,
             receipt_path,
         );
-        std::fs::write(request_path, request.to_string()).expect("normalize host bridge request fixture");
+        std::fs::write(request_path, request.to_string())
+            .expect("normalize host bridge request fixture");
     }
 
     fn normalize_current_host_bridge_packet_file(
@@ -8098,17 +8624,15 @@ mod tests {
             ("task_id", serde_json::json!(run_id)),
             (
                 "attempt_id",
-                request
-                    .get("attempt_id")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt"))),
+                request.get("attempt_id").cloned().unwrap_or_else(|| {
+                    serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt"))
+                }),
             ),
             (
                 "packet_id",
-                request
-                    .get("packet_id")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!(format!("{run_id}::host-bridge-fixture-packet"))),
+                request.get("packet_id").cloned().unwrap_or_else(|| {
+                    serde_json::json!(format!("{run_id}::host-bridge-fixture-packet"))
+                }),
             ),
             ("dispatch_target", serde_json::json!(dispatch_target)),
             (
@@ -8132,10 +8656,7 @@ mod tests {
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!("middle")),
             ),
-            (
-                "dispatch_transport",
-                serde_json::json!("host_tool_bridge"),
-            ),
+            ("dispatch_transport", serde_json::json!("host_tool_bridge")),
         ] {
             object.entry(field.to_string()).or_insert(value);
         }
@@ -8148,7 +8669,8 @@ mod tests {
         object
             .entry("read_only_paths".to_string())
             .or_insert_with(|| serde_json::json!([".vida/data/state/runtime-consumption"]));
-        std::fs::write(packet_path, packet.to_string()).expect("normalize host bridge packet fixture");
+        std::fs::write(packet_path, packet.to_string())
+            .expect("normalize host bridge packet fixture");
     }
 
     fn normalize_current_host_bridge_request_and_packet_files(
@@ -8191,38 +8713,35 @@ mod tests {
 
     #[test]
     fn lane_completion_reconciles_stale_current_lane_marker_to_requested_next() {
-        let mut role_selection = lane_complete_role_selection("ldr-074j");
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] =
-            serde_json::json!(["developer", "coach_implementation_gate", "tester"]);
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
-            "analyst": {
-                "dispatch_target": "analyst",
-                "task_class": "specification",
-                "completion_blocker": "pending_analysis_evidence"
-            },
-            "developer": {
-                "dispatch_target": "developer",
-                "task_class": "implementation",
-                "completion_blocker": "pending_implementation_evidence"
-            }
-        });
+        let role_selection = lane_complete_role_selection("ldr-074j");
+        let configured_nodes =
+            crate::runtime_dispatch_state::typed_lane_node_sequence(&role_selection, true)
+                .expect("configured TeamFlow nodes should resolve");
+        let current = configured_nodes
+            .first()
+            .expect("configured TeamFlow current node should exist");
+        let requested_next = configured_nodes
+            .get(1)
+            .expect("configured TeamFlow successor should exist");
         let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.dispatch_target = "analyst".to_string();
-        receipt.downstream_dispatch_target = Some("analyst".to_string());
-        receipt.downstream_dispatch_active_target = Some("analyst".to_string());
+        receipt.dispatch_target = current.node_id.clone();
+        receipt.downstream_dispatch_target = Some(current.node_id.clone());
+        receipt.downstream_dispatch_active_target = Some(current.node_id.clone());
 
         let target = reconcile_lane_completion_allowed_next_node(
             "Lane completion",
             Some(&role_selection),
             &receipt,
-            Some("developer"),
-            receipt.downstream_dispatch_target.as_deref(),
+            Some(requested_next.node_id.as_str()),
+            Some(current.node_id.as_str()),
             None,
         )
         .expect("stale current-lane marker must not block the concrete next lane");
 
-        assert_eq!(target.as_deref(), Some("developer"));
+        assert_eq!(
+            target.as_deref(),
+            Some(requested_next.dispatch_target.as_str())
+        );
     }
 
     #[test]
@@ -8254,109 +8773,91 @@ mod tests {
 
     #[test]
     fn lane_completion_accepts_terminal_closure_after_final_execution_lane() {
-        let mut role_selection = lane_complete_role_selection("terminal-closure-run");
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!([
-            "analyst",
-            "developer",
-            "coach_implementation_gate",
-            "tester"
-        ]);
+        let role_selection = lane_complete_role_selection_with_configured_terminal_predecessor(
+            "terminal-closure-run",
+        );
+        let configured_nodes =
+            crate::runtime_dispatch_state::typed_lane_node_sequence(&role_selection, true)
+                .expect("configured TeamFlow nodes should resolve");
+        let terminal_node = configured_nodes
+            .iter()
+            .find(|node| node.terminal)
+            .expect("configured TeamFlow terminal node should exist");
+        let predecessor = configured_nodes
+            .iter()
+            .find(|node| node.next_node.as_deref() == Some(terminal_node.node_id.as_str()))
+            .expect("configured TeamFlow terminal predecessor should exist");
         let mut receipt = sample_receipt("bridge_request_pending");
         receipt.dispatch_kind = "agent_lane".to_string();
-        receipt.dispatch_target = "tester".to_string();
-        receipt.downstream_dispatch_active_target = Some("tester".to_string());
+        receipt.dispatch_target = predecessor.node_id.clone();
+        receipt.downstream_dispatch_active_target = Some(predecessor.node_id.clone());
 
         let target = reconcile_lane_completion_allowed_next_node(
             "Host bridge completion",
             Some(&role_selection),
             &receipt,
-            Some("closure_lane"),
+            Some(terminal_node.node_id.as_str()),
             None,
             None,
         )
-        .expect("final execution lane may route to canonical closure");
+        .expect("configured terminal node should follow its predecessor");
+        assert_eq!(
+            target.as_deref(),
+            Some(terminal_node.dispatch_target.as_str())
+        );
 
-        assert_eq!(target.as_deref(), Some("closure"));
-
-        for requested in ["terminal_closure", "release_closure"] {
-            assert_eq!(
-                reconcile_lane_completion_allowed_next_node(
-                    "Host bridge completion",
-                    Some(&role_selection),
-                    &receipt,
-                    Some(requested),
-                    None,
-                    None,
-                )
-                .expect("closure aliases must normalize after the final lane")
-                .as_deref(),
-                Some("closure")
+        receipt.dispatch_target = terminal_node.node_id.clone();
+        receipt.downstream_dispatch_active_target = Some(terminal_node.node_id.clone());
+        for requested in [
+            terminal_node.node_id.as_str(),
+            "closure",
+            "terminal_closure",
+            "release_closure",
+        ] {
+            let error = reconcile_lane_completion_allowed_next_node(
+                "Host bridge completion",
+                Some(&role_selection),
+                &receipt,
+                Some(requested),
+                None,
+                None,
+            )
+            .expect_err("terminal nodes and closure aliases must not fabricate a successor");
+            assert!(
+                error.contains("team_flow_node_resolution_missing")
+                    || error.contains("not the next lawful lane"),
+                "unexpected error for `{requested}`: {error}"
             );
         }
-
-        receipt.dispatch_target = "coach_implementation_gate".to_string();
-        let error = reconcile_lane_completion_allowed_next_node(
-            "Host bridge completion",
-            Some(&role_selection),
-            &receipt,
-            Some("closure"),
-            None,
-            None,
-        )
-        .expect_err("non-final execution lane must not skip to closure");
-
-        assert!(
-            error.contains("not the next lawful lane after `coach_implementation_gate`"),
-            "unexpected error: {error}"
-        );
     }
 
     #[test]
     fn lane_completion_terminal_alias_precedence_matrix() {
-        let mut role_selection =
-            lane_complete_role_selection("run-host-bridge-prover-pass-summary");
-        role_selection.execution_plan = serde_json::json!({
-            "development_flow": {
-                "dispatch_contract": {
-                    "execution_lane_sequence": ["prover", "release_closure"],
-                    "lane_catalog": {
-                        "prover": {
-                            "dispatch_target": "verification",
-                            "task_class": "verification",
-                            "stage": "quality_gate",
-                            "runtime_role": "prover"
-                        },
-                        "release_closure": {
-                            "dispatch_target": "release_closure",
-                            "task_class": "release_readiness",
-                            "stage": "release_readiness",
-                            "runtime_role": "prover"
-                        }
-                    }
-                }
-            }
-        });
+        let role_selection = lane_complete_role_selection("run-host-bridge-prover-pass-summary");
+        let (current, requested_next) = canonical_lane_completion_route(&role_selection)
+            .expect("configured TeamFlow successor should resolve");
         let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.dispatch_target = "verification".to_string();
-        receipt.downstream_dispatch_active_target = Some("verification".to_string());
-        receipt.downstream_dispatch_last_target = Some("verification".to_string());
-        receipt.downstream_dispatch_target = Some("release_closure".to_string());
+        receipt.dispatch_target = current.node_id.clone();
+        receipt.downstream_dispatch_active_target = Some(current.node_id.clone());
+        receipt.downstream_dispatch_last_target = Some(current.node_id.clone());
+        receipt.downstream_dispatch_target = Some(requested_next.node_id.clone());
 
         assert_eq!(
-            crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
-                &role_selection.execution_plan,
+            crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_for_role_selection(
+                &role_selection,
                 &receipt,
-                "release_closure",
+                &requested_next.node_id,
             )
+            .expect("typed TeamFlow downstream target")
             .as_deref(),
-            Some("release_closure")
+            Some(requested_next.dispatch_target.as_str())
         );
         assert!(
-            crate::runtime_dispatch_state::terminal_closure_downstream_target_from_execution_plan(
-                &role_selection.execution_plan,
+            crate::runtime_dispatch_state::terminal_closure_downstream_target_for_role_selection(
+                &role_selection,
                 &receipt,
             )
+            .expect("typed TeamFlow terminal target")
             .is_none()
         );
         assert_eq!(
@@ -8364,45 +8865,29 @@ mod tests {
                 "Lane completion",
                 Some(&role_selection),
                 &receipt,
-                Some("release_closure"),
-                Some("release_closure"),
+                Some(&requested_next.node_id),
+                Some(&requested_next.node_id),
                 None,
             )
-            .expect("configured release_closure successor should win before terminal alias fallback")
+            .expect("configured TeamFlow successor should win before terminal alias fallback")
             .as_deref(),
-            Some("release_closure")
+            Some(requested_next.dispatch_target.as_str())
         );
 
         let mismatch = reconcile_lane_completion_allowed_next_node(
             "Lane completion",
             Some(&role_selection),
             &receipt,
-            Some("release_closure"),
+            Some(&requested_next.node_id),
             Some("unconfigured_persisted_route"),
             None,
         )
         .expect_err("persisted downstream mismatch must remain rejected");
         assert!(
-            mismatch.contains("does not match persisted downstream route")
-                && mismatch.contains("unconfigured_persisted_route"),
+            mismatch.contains("team_flow_node_resolution_missing")
+                || (mismatch.contains("does not match persisted downstream route")
+                    && mismatch.contains("unconfigured_persisted_route")),
             "unexpected error: {mismatch}"
-        );
-
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!(["prover"]);
-        receipt.downstream_dispatch_target = None;
-        assert_eq!(
-            reconcile_lane_completion_allowed_next_node(
-                "Lane completion",
-                Some(&role_selection),
-                &receipt,
-                Some("release_closure"),
-                None,
-                None,
-            )
-            .expect("true terminal alias should use the terminal closure target")
-            .as_deref(),
-            Some("closure")
         );
 
         let unknown = reconcile_lane_completion_allowed_next_node(
@@ -8415,8 +8900,8 @@ mod tests {
         )
         .expect_err("unknown dispatch target must remain rejected");
         assert!(
-            unknown.contains("not the next lawful lane after")
-                && unknown.contains("verification"),
+            unknown.contains("team_flow_node_resolution_missing")
+                || unknown.contains("not the next lawful lane"),
             "unexpected error: {unknown}"
         );
     }
@@ -13539,36 +14024,35 @@ mod tests {
             .expect("create receipt parent");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "retryable_blocked",
-                "request_id": "run-host-bridge-stale-result",
-                "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_target": "implementer",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "junior",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "implementation_isolation": {
-                    "schema_version": "implementation-isolation-v1",
-                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lane_surface.rs"]
-                },
-                "implementation_artifacts": [{
-                    "artifact_kind": "patch_proposal",
-                    "attempt_id": "stale-result-attempt-1",
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "retryable_blocked",
+                    "request_id": "run-host-bridge-stale-result",
+                    "run_id": run_id,
                     "task_id": run_id,
-                    "stage_id": "implementation",
-                    "freshness": task.updated_at,
-                    "receipt_backed": true,
-                    "consolidation_receipt_id": "stale-result-consolidation-receipt",
-                    "changed_files": ["crates/vida/src/lane_surface.rs"]
-                }],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+                    "dispatch_target": "implementer",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                        "owned_paths": ["crates/vida/src/lane_surface.rs"]
+                    },
+                    "implementation_artifacts": [{
+                        "artifact_kind": "patch_proposal",
+                        "attempt_id": "stale-result-attempt-1",
+                        "task_id": run_id,
+                        "stage_id": "implementation",
+                        "freshness": task.updated_at,
+                        "receipt_backed": true,
+                        "consolidation_receipt_id": "stale-result-consolidation-receipt",
+                        "changed_files": ["crates/vida/src/lane_surface.rs"]
+                    }],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "implementer",
                 &packet_path,
@@ -14512,36 +14996,35 @@ mod tests {
         .expect("create request dir");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-host-bridge-summary-retry",
-                "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_target": "implementer",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "junior",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "implementation_isolation": {
-                    "schema_version": "implementation-isolation-v1",
-                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lane_surface.rs"]
-                },
-                "implementation_artifacts": [{
-                    "artifact_kind": "patch_proposal",
-                    "attempt_id": "summary-attempt-1",
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-host-bridge-summary-retry",
+                    "run_id": run_id,
                     "task_id": run_id,
-                    "stage_id": "implementation",
-                    "freshness": task.updated_at,
-                    "receipt_backed": true,
-                    "consolidation_receipt_id": "summary-consolidation-receipt",
-                    "changed_files": ["crates/vida/src/lane_surface.rs"]
-                }],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+                    "dispatch_target": "implementer",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                        "owned_paths": ["crates/vida/src/lane_surface.rs"]
+                    },
+                    "implementation_artifacts": [{
+                        "artifact_kind": "patch_proposal",
+                        "attempt_id": "summary-attempt-1",
+                        "task_id": run_id,
+                        "stage_id": "implementation",
+                        "freshness": task.updated_at,
+                        "receipt_backed": true,
+                        "consolidation_receipt_id": "summary-consolidation-receipt",
+                        "changed_files": ["crates/vida/src/lane_surface.rs"]
+                    }],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "implementer",
                 &packet_path,
@@ -14956,27 +15439,26 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-attempt-artifacts",
-                "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_target": "implementer",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "implementation_isolation": {
-                    "schema_version": "implementation-isolation-v1",
-                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lib.rs"]
-                },
-                "implementation_artifacts": [],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-attempt-artifacts",
+                    "run_id": run_id,
+                    "task_id": run_id,
+                    "dispatch_target": "implementer",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                        "owned_paths": ["crates/vida/src/lib.rs"]
+                    },
+                    "implementation_artifacts": [],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "implementer",
                 &packet_path,
@@ -15328,20 +15810,21 @@ mod tests {
         }
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "result-binding",
-                "run_id": "run-result-binding",
-                "task_id": "run-result-binding",
-                "dispatch_target": "verification",
-                "dispatch_transport": "host_tool_bridge",
-                "receipt_mode": "host_bridge_receipt",
-                "request_path": request_path.display().to_string(),
-                "packet_path": packet_path.display().to_string(),
-                "result_path": expected_result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            }),
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "result-binding",
+                    "run_id": "run-result-binding",
+                    "task_id": "run-result-binding",
+                    "dispatch_target": "verification",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
+                    "request_path": request_path.display().to_string(),
+                    "packet_path": packet_path.display().to_string(),
+                    "result_path": expected_result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }),
                 "run-result-binding",
                 "verification",
                 &packet_path,
@@ -15402,6 +15885,7 @@ mod tests {
             &root,
             Some(&missing_identity_result_path_string),
             Some(&request_path_string),
+            None,
         )
         .expect_err("missing result identity must be rejected");
         assert!(
@@ -15414,6 +15898,7 @@ mod tests {
             &root,
             Some(&forged_result_path_string),
             Some(&request_path_string),
+            None,
         )
         .expect_err("forged identity must be rejected");
         assert!(
@@ -15426,12 +15911,53 @@ mod tests {
             &root,
             Some(&expected_result_path_string),
             Some(&request_path_string),
+            None,
         )
         .expect("staged result path should be accepted")
         .expect("result should be present");
         assert_eq!(result["allowed_next_node"], "closure");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn requestless_lane_completion_rejects_dispatch_packet_as_result_artifact() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-requestless-result-binding-{}-{nanos}",
+            std::process::id()
+        ));
+        let packet_path = root.join("runtime-consumption/dispatch-packets/stale.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "run_id": "run-stale-result",
+                "dispatch_target": "developer"
+            })
+            .to_string(),
+        )
+        .expect("write stale dispatch packet");
+        let packet_path_string = packet_path.display().to_string();
+
+        let error = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&packet_path_string),
+            None,
+            Some(("run-stale-result", "developer")),
+        )
+        .expect_err("dispatch packet must not be accepted as requestless completion result");
+
+        assert!(
+            error.contains("missing artifact_kind `host_tool_bridge_result`"),
+            "unexpected error: {error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -15768,6 +16294,48 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("vida-lane-surface-lane-packet-read-{pid}-{nanos}"));
         std::fs::create_dir_all(&root).expect("create packet root");
+
+        let compact_packet_path = root.join("runtime-consumption/packets/compact.json");
+        std::fs::create_dir_all(compact_packet_path.parent().expect("compact packet parent"))
+            .expect("create compact packet parent");
+        write_lane_packet(
+            compact_packet_path
+                .to_str()
+                .expect("compact packet path utf-8"),
+            &serde_json::json!({
+                "run_id": "run-compact",
+                "role_selection_full": {
+                    "compiled_bundle": {"large_projection": "omitted-at-transport"},
+                    "matched_terms": ["dev_team_flow_id:default_delivery"],
+                    "execution_plan": {
+                        "team_flow_authority_selected_flow_id": "default_delivery",
+                        "team_flow_authority_id": "authority-test",
+                        "team_flow_config_hash": "config-hash-test",
+                        "team_flow_registry_hash": "registry-hash-test"
+                    }
+                }
+            }),
+        )
+        .expect("compact lane packet should write");
+        let compact_packet = read_lane_packet(
+            &root,
+            compact_packet_path
+                .to_str()
+                .expect("compact packet path utf-8"),
+        )
+        .expect("compact lane packet should read");
+        assert!(compact_packet["role_selection_full"]["compiled_bundle"].is_null());
+        assert_eq!(
+            compact_packet["role_selection_full"]["execution_plan"]
+                ["team_flow_authority_selected_flow_id"],
+            "default_delivery"
+        );
+        assert!(
+            serde_json::to_vec(&compact_packet)
+                .expect("compact lane packet should serialize")
+                .len()
+                < MAX_LANE_PACKET_READ_BYTES as usize
+        );
 
         let packet_path = root.join("runtime-consumption/packets/packet.json");
         std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
@@ -16417,7 +16985,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
                 "request_id": "retryable-forged",
@@ -16501,7 +17069,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "bridge_request_pending",
                 "request_id": "pending-original",
@@ -16605,7 +17173,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "bridge_request_pending",
                 "request_id": "pending-original",
@@ -16723,7 +17291,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "pass",
                 "request_id": "completed-original",
@@ -16816,7 +17384,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
                 "request_id": "retryable-original",
@@ -16903,7 +17471,7 @@ mod tests {
         std::fs::write(
             &request_path,
             current_host_bridge_request_fixture(
-            serde_json::json!({
+                serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
                 "request_id": "retryable-target",
@@ -17333,39 +17901,38 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-unverified",
-                "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_target": "implementer",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "implementation_isolation": {
-                    "schema_version": "implementation-isolation-v1",
-                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lib.rs"]
-                },
-                "implementation_artifacts": [{
-                    "artifact_kind": "patch_proposal",
-                    "schema_version": "host-bridge-implementation-artifact-v1",
-                    "attempt_id": "request-attempt-1",
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-unverified",
+                    "run_id": run_id,
                     "task_id": run_id,
-                    "stage_id": "implementation",
-                    "freshness": task.updated_at,
-                    "receipt_backed": true,
-                    "consolidation_receipt_id": "self-attested-request-receipt",
-                    "changed_files": ["crates/vida/src/lib.rs"],
-                    "source_artifact_ref": "host-tool-bridge/artifacts/self-attested.json",
-                    "source_artifact_kind": "patch_proposal"
-                }],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+                    "dispatch_target": "implementer",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                        "owned_paths": ["crates/vida/src/lib.rs"]
+                    },
+                    "implementation_artifacts": [{
+                        "artifact_kind": "patch_proposal",
+                        "schema_version": "host-bridge-implementation-artifact-v1",
+                        "attempt_id": "request-attempt-1",
+                        "task_id": run_id,
+                        "stage_id": "implementation",
+                        "freshness": task.updated_at,
+                        "receipt_backed": true,
+                        "consolidation_receipt_id": "self-attested-request-receipt",
+                        "changed_files": ["crates/vida/src/lib.rs"],
+                        "source_artifact_ref": "host-tool-bridge/artifacts/self-attested.json",
+                        "source_artifact_kind": "patch_proposal"
+                    }],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "implementer",
                 &packet_path,
@@ -17579,36 +18146,35 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-attempt-retry",
-                "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_target": "implementer",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "middle",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "implementation_isolation": {
-                    "schema_version": "implementation-isolation-v1",
-                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lib.rs"]
-                },
-                "implementation_artifacts": [{
-                    "artifact_kind": "patch_proposal",
-                    "attempt_id": "attempt-retry",
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-attempt-retry",
+                    "run_id": run_id,
                     "task_id": run_id,
-                    "stage_id": "implementation",
-                    "freshness": task.updated_at,
-                    "receipt_backed": true,
-                    "consolidation_receipt_id": "attempt-retry-consolidation-receipt",
-                    "changed_files": ["crates/vida/src/lib.rs"]
-                }],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+                    "dispatch_target": "implementer",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                        "owned_paths": ["crates/vida/src/lib.rs"]
+                    },
+                    "implementation_artifacts": [{
+                        "artifact_kind": "patch_proposal",
+                        "attempt_id": "attempt-retry",
+                        "task_id": run_id,
+                        "stage_id": "implementation",
+                        "freshness": task.updated_at,
+                        "receipt_backed": true,
+                        "consolidation_receipt_id": "attempt-retry-consolidation-receipt",
+                        "changed_files": ["crates/vida/src/lib.rs"]
+                    }],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "implementer",
                 &packet_path,
@@ -18137,20 +18703,19 @@ mod tests {
         .expect("create request dir");
         std::fs::write(
             &request_path,
-            current_host_bridge_request_fixture(serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-host-bridge-verification",
-                "run_id": run_id,
-                "dispatch_target": "verification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "carrier_id": "verifier",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "result_path": result_path.display().to_string(),
-                "receipt_path": bridge_receipt_path.display().to_string()
-            }),
+            current_host_bridge_request_fixture(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-host-bridge-verification",
+                    "run_id": run_id,
+                    "dispatch_target": "verification",
+                    "packet_path": packet_path.display().to_string(),
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }),
                 run_id,
                 "verification",
                 &packet_path,
@@ -18523,12 +19088,12 @@ mod tests {
         let request_path = root.join("custom-agent-bridge/requests/run-custom.json");
         let result_path = root.join("custom-agent-bridge/results/run-custom.json");
         let receipt_path = root.join("custom-agent-bridge/receipts/run-custom.json");
-        let packet_path = root.join(
-            "runtime-consumption/downstream-dispatch-packets/run-custom.json",
-        );
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-custom.json");
         std::fs::create_dir_all(request_path.parent().expect("request parent"))
             .expect("create request parent");
-        let request = current_host_bridge_request_fixture(serde_json::json!({
+        let request = current_host_bridge_request_fixture(
+            serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-custom",
@@ -18547,8 +19112,7 @@ mod tests {
             &result_path,
             &receipt_path,
         );
-        std::fs::write(&request_path, request.to_string())
-        .expect("write request");
+        std::fs::write(&request_path, request.to_string()).expect("write request");
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-custom-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -18649,7 +19213,9 @@ mod tests {
             &request_path,
             "run-completed-contract",
             "implementer",
-            &root.join("runtime-consumption/downstream-dispatch-packets/run-completed-contract.json"),
+            &root.join(
+                "runtime-consumption/downstream-dispatch-packets/run-completed-contract.json",
+            ),
             &result_path,
             &receipt_path,
         );
@@ -21640,7 +22206,7 @@ mod tests {
                 "coder",
             );
 
-        assert_eq!(resolved.as_deref(), Some("coder"));
+        assert!(resolved.is_none());
     }
 
     #[test]

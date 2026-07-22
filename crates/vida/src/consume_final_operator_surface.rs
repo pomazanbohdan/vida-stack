@@ -1,6 +1,6 @@
 use crate::contract_profile_adapter::{
-    BlockerCode, blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
-    render_operator_contract_envelope,
+    blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
+    render_operator_contract_envelope, BlockerCode,
 };
 use crate::release1_operator_output::{
     build_release1_operator_output_payload, render_vida_gate_result_from_operator_contracts,
@@ -395,21 +395,15 @@ mod tests {
         let blocker_codes = consume_final_operator_blocker_codes(&payload);
         let next_actions = consume_final_operator_next_actions(&payload);
 
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "dispatch_packet_contract_invalid")
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("owned_paths"))
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("proof_target"))
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "dispatch_packet_contract_invalid"));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("owned_paths")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("proof_target")));
     }
 
     #[test]

@@ -1212,12 +1212,10 @@ mod tests {
             .expect("fresh projection should read");
         let cached: serde_json::Value =
             serde_json::from_str(&cached).expect("projection should remain json");
-        assert!(
-            cached
-                .get("projection_cache_dependencies")
-                .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
-                .is_some()
-        );
+        assert!(cached
+            .get("projection_cache_dependencies")
+            .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+            .is_some());
 
         std::thread::sleep(Duration::from_millis(10));
         fs::write(&marker, "new").expect("marker should be updateable");
@@ -1240,25 +1238,21 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"status": "pass", "cached": true});
         write_json_projection(&root, "doctor-latest", &payload);
-        assert!(
-            read_fresh_json_projection_with_dependency_marker(
-                &root,
-                "doctor-latest",
-                Some(std::time::SystemTime::UNIX_EPOCH)
-            )
-            .is_some()
-        );
+        assert!(read_fresh_json_projection_with_dependency_marker(
+            &root,
+            "doctor-latest",
+            Some(std::time::SystemTime::UNIX_EPOCH)
+        )
+        .is_some());
 
         std::thread::sleep(Duration::from_millis(10));
         let dependency_modified = std::time::SystemTime::now();
-        assert!(
-            read_fresh_json_projection_with_dependency_marker(
-                &root,
-                "doctor-latest",
-                Some(dependency_modified)
-            )
-            .is_none()
-        );
+        assert!(read_fresh_json_projection_with_dependency_marker(
+            &root,
+            "doctor-latest",
+            Some(dependency_modified)
+        )
+        .is_none());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1280,23 +1274,19 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10));
         let dependency_modified = std::time::SystemTime::now();
-        assert!(
-            read_fresh_json_projection_with_dependency_marker(
-                &root,
-                "doctor-summary-latest",
-                Some(dependency_modified),
-            )
-            .is_none()
-        );
+        assert!(read_fresh_json_projection_with_dependency_marker(
+            &root,
+            "doctor-summary-latest",
+            Some(dependency_modified),
+        )
+        .is_none());
         assert!(read_state_fresh_json_projection(&root, "doctor-summary-latest").is_some());
-        assert!(
-            read_state_recent_json_projection(
-                &root,
-                "doctor-summary-latest",
-                Duration::from_secs(60)
-            )
-            .is_some()
-        );
+        assert!(read_state_recent_json_projection(
+            &root,
+            "doctor-summary-latest",
+            Duration::from_secs(60)
+        )
+        .is_some());
         let launcher_stale = read_launcher_stale_state_fresh_recent_json_projection(
             &root,
             "doctor-summary-latest",
@@ -1481,14 +1471,12 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
-        assert!(
-            read_state_recent_json_projection(
-                &root,
-                "doctor-summary-latest",
-                Duration::from_secs(60)
-            )
-            .is_none()
-        );
+        assert!(read_state_recent_json_projection(
+            &root,
+            "doctor-summary-latest",
+            Duration::from_secs(60)
+        )
+        .is_none());
         let stale = read_state_stale_recent_json_projection(
             &root,
             "doctor-summary-latest",
@@ -1577,15 +1565,13 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10));
         let dependency_modified = std::time::SystemTime::now();
-        assert!(
-            read_recent_json_projection_with_dependency_marker(
-                &root,
-                "doctor-full-latest",
-                Duration::from_secs(60),
-                Some(dependency_modified),
-            )
-            .is_none()
-        );
+        assert!(read_recent_json_projection_with_dependency_marker(
+            &root,
+            "doctor-full-latest",
+            Duration::from_secs(60),
+            Some(dependency_modified),
+        )
+        .is_none());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1801,13 +1787,11 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("task-marker-1")
         );
-        assert!(
-            cached
-                .get("projection_metadata")
-                .and_then(|metadata| metadata.get("content_hash"))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|hash| !hash.is_empty())
-        );
+        assert!(cached
+            .get("projection_metadata")
+            .and_then(|metadata| metadata.get("content_hash"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|hash| !hash.is_empty()));
 
         fs::write(&marker, "task-marker-2").expect("task marker should update");
         assert!(
@@ -2082,12 +2066,10 @@ mod tests {
             fs::read_to_string(&outside).expect("outside file should remain readable"),
             "outside-original"
         );
-        assert!(
-            std::fs::symlink_metadata(&marker_link)
-                .expect("marker symlink should remain readable")
-                .file_type()
-                .is_symlink()
-        );
+        assert!(std::fs::symlink_metadata(&marker_link)
+            .expect("marker symlink should remain readable")
+            .file_type()
+            .is_symlink());
 
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);

@@ -16,6 +16,13 @@ The authority order is:
 4. Agent-extension registries provide referenced roles, profiles, flows, packs, commands, and dispatch aliases.
 5. The compiled bundle is a deterministic derived projection, never a second authoring surface.
 
+The persisted `team_flow_authority.resolved_all_flow_payload` is the schema-complete
+authority source consumed after compilation. The payload is hashed with
+`canonical_json_blake3_v1`; `team_flow_authority.resolved_all_flow_payload_blake3`
+and `team_flow_authority.authority_source.payload_blake3` must match before reload or
+dispatch. A current implementation example contains 13 resolved flows and 51
+resolved lanes; the schema remains extensible for project-declared counts.
+
 Other ADRs and process docs explain use and ownership only. They must not enumerate an independent option catalog.
 
 ## Configuration Rules
@@ -37,6 +44,20 @@ Project config must not:
 
 Unknown selections, missing refs, malformed conditions, ambiguous aliases, and incomplete terminal/rework/approval definitions are validation blockers.
 
+## Field-Source and Exact-One Rules
+
+The master catalog is the only exhaustive documentation owner for supported values, source paths, and variants. A project flow step selects one `dispatch_alias`, task class, command ref, inclusion/proof/approval/lifecycle contract, and explicit transitions. Its referenced team role supplies runtime role, packet template kind, closure class, stage, completion blocker, and carrier policy. Dispatch-alias, command, and profile registries supply their declared rows and identities. The carrier catalog supplies the selected carrier/model-profile relation. The selected host system supplies the executor-backend relation.
+
+Every authority-affecting field has exactly one source. Every alias, command, profile, and model-profile ref resolves to exactly one effective row. The resolved alias must admit the selected runtime role and task class. Empty refs, duplicate/shadowed rows, conflicting step/role values, or an unlisted architect context fail closed. Architect aliases are selected by flow context from the master catalog: evidence-triggered architecture is escalation; planned runtime-remediation and architecture-design work is execution preparation.
+
+Carrier relation and executor-backend relation are separate typed fields. A carrier identifies the admissible agent/profile/model catalog entry; an executor backend identifies the configured host execution mechanism. Matching names, defaults, or implementation convenience never permit one relation to fill the other.
+
+The relation shapes are strict and non-substitutable:
+
+- `carrier_relation` is exactly `{relation_kind, source_path, selected_id}` with `relation_kind: carrier_catalog`.
+- `executor_backend_relation` is exactly `{relation_kind, source_path, selected_id, backend_class, required_backend_class}` with `relation_kind: executor_backend`.
+- Loose `executor_backend`, `backend_id`, `backend_class`, and `required_backend_class` fields are forbidden only in resolved lane/runtime-assignment authority objects once the typed relation is present. The host-system source DSL may retain `backend_id` and `required_backend_class`; materialization resolves those inputs into the strict five-field lane relation.
+
 ## Deterministic Authority Identity
 
 The compiled bundle binds every authority-affecting registry before hashing: roles, skills, profiles, flows, packs, commands, and dispatch aliases. It also hashes the selected `dev_team` config.
@@ -48,6 +69,13 @@ Canonicalization rules:
 - ordered arrays such as flow steps and proof gates preserve order;
 - identities use canonical JSON plus the algorithm selected by config;
 - the aggregate TeamFlow identity covers the config identity and all component registry identities.
+
+Identity construction is two-phase to avoid circular references:
+
+1. Phase 1 hashes the selected config and registry identities without embedding the resolved payload.
+2. Phase 2 canonicalizes and persists the resolved all-flow payload, then hashes that payload and records it through `authority_source` with `identity_phase: phase_2_persisted_payload`.
+
+Identity references point to phase-1 ids or phase-2 payload hashes; a payload may not recursively embed its own aggregate identity. Circular or mismatched references are migration/dispatch blockers.
 
 A changed pack or command must change its component identity and the aggregate identity. Mapping-key or registry-row reordering alone must not.
 
@@ -65,6 +93,9 @@ Every resolved lane is typed and includes all schema-required fields. In additio
 - `terminal`: typed terminal kind plus proof that it was config-declared;
 - `profile_authority`: configured team role, runtime role, task class, and source path;
 - `selected_model_profile`: runtime-selected model profile id and selection source.
+- `carrier_relation` and `executor_backend_relation`: distinct typed refs to carrier selection and host execution mechanism;
+- `authority_identities`: config and effective registry/profile/model identity refs;
+- `execution_identity`: the stable identity derived from the selected flow/node and bound authority.
 
 `profile_authority` and `selected_model_profile` are intentionally distinct. Carrier/model selection can change without changing the team role or flow authority.
 
@@ -85,6 +116,8 @@ Terminal closure is lawful only from a step declared terminal in the selected co
 `command_ref` resolves through the configured command registry. A required lane with an unresolved command fails closed unless the capability/admissibility matrix explicitly permits a commandless lane.
 
 Aliases are identifiers, not fallback command text. Duplicate ids, competing targets, or a project alias that shadows another effective alias are conflicts and must be rejected. Source order is never a conflict-resolution policy.
+
+Each executable configured step must declare a non-empty alias. Alias resolution validates runtime-role and task-class admissibility before carrier selection. Command mapping resolves separately from the command registry; alias text cannot act as command text or as a model/profile selector.
 
 ## Conditional Inclusion and Evidence
 
@@ -108,18 +141,24 @@ Existing configs remain readable only when they can be normalized without invent
 
 Migration order follows the TeamFlow authority ADR: establish template/schema/identity, migrate the TaskFlow owner, adapt consumers, remove fallbacks, then enable closure proof.
 
+Migration notes for persisted authority:
+
+- A legacy selected-flow-only snapshot must be expanded to `resolved_all_flow_payload` before it can be reloaded as executable authority.
+- Missing payload hash, stale hash, missing `authority_source`, or a circular identity reference returns a typed blocker; do not recompute a replacement from loose lane fields.
+- During rollout, retain old data only as read-only migration input and never as a second executable projection.
+
 ## Proof Targets
 
-Proof must include template/schema parity and cases for missing, malformed, conditional, approval, terminal, rework/resume, evidence, command, alias-conflict, and registry-identity behavior. Static hardcode checks must cover routing, dispatch, resume, state, and status consumers. Executable test commands are recorded by the active implementation packet after all shared owner types are stable.
+Proof must include template/schema parity and cases for missing, malformed, conditional, approval, terminal, rework/resume, evidence, command, alias-conflict, architect-context resolution, exact-one field sources, distinct carrier/backend relations, complete node identity, registry-identity behavior, persisted all-flow payload hash/reload, two-phase identity, and circular-reference rejection. Static hardcode checks must cover routing, dispatch, resume, state, and status consumers. Executable test commands are recorded by the active implementation packet after all shared owner types are stable.
 
 -----
 artifact_path: product/spec/development-flow-catalog-schema-contract
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-07-19'
+artifact_revision: '2026-07-20'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/development-flow-catalog-schema-contract.md
 created_at: '2026-06-01T00:00:00+03:00'
-updated_at: '2026-07-19T00:00:00+03:00'
+updated_at: '2026-07-20T00:00:00+03:00'
 changelog_ref: development-flow-catalog-schema-contract.changelog.jsonl

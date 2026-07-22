@@ -391,7 +391,11 @@ fn env_u64(name: &str) -> Option<u64> {
 }
 
 fn exit_code_to_i32(code: ExitCode) -> i32 {
-    if code == ExitCode::SUCCESS { 0 } else { 1 }
+    if code == ExitCode::SUCCESS {
+        0
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -431,12 +435,10 @@ mod tests {
         );
 
         assert_eq!(context.target_dir_policy, "repo_local_worktree_shared");
-        assert!(
-            context
-                .effective_cargo_target_dir
-                .replace('\\', "/")
-                .ends_with("repo-root/.vida/cargo-target")
-        );
+        assert!(context
+            .effective_cargo_target_dir
+            .replace('\\', "/")
+            .ends_with("repo-root/.vida/cargo-target"));
         assert_eq!(context.wait_classification, "not_over_budget");
     }
 
@@ -450,36 +452,26 @@ mod tests {
 
         let actions = timing_next_actions(true, Some(("execution", 45_000)), Some(&cargo_timing));
 
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("target_dir_policy=caller_provided"))
-        );
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("Group related focused proof filters"))
-        );
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("CARGO_TARGET_DIR"))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("target_dir_policy=caller_provided")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("Group related focused proof filters")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("CARGO_TARGET_DIR")));
     }
 
     #[test]
     fn non_cargo_timing_next_actions_keep_generic_guidance() {
         let actions = timing_next_actions(true, Some(("execution", 2_500)), None);
 
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("cached projection or read-model"))
-        );
-        assert!(
-            !actions
-                .iter()
-                .any(|action| action.contains("CARGO_TARGET_DIR"))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("cached projection or read-model")));
+        assert!(!actions
+            .iter()
+            .any(|action| action.contains("CARGO_TARGET_DIR")));
     }
 }

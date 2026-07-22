@@ -1,5 +1,41 @@
 use serde_json::Map;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelProfileSelectionBlocker {
+    Missing,
+    Unknown,
+    Disabled,
+    Ambiguous,
+}
+
+impl ModelProfileSelectionBlocker {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "model_profile_selection_missing",
+            Self::Unknown => "model_profile_selection_unknown",
+            Self::Disabled => "model_profile_selection_disabled",
+            Self::Ambiguous => "model_profile_selection_ambiguous",
+        }
+    }
+}
+
+fn profile_selection_error(blocker: ModelProfileSelectionBlocker, detail: impl Into<String>) -> String {
+    format!("{}:{}", blocker.code(), detail.into())
+}
+
+fn profile_is_disabled(profile: &serde_json::Value) -> bool {
+    profile["enabled"].as_bool() == Some(false)
+        || profile["disabled"].as_bool() == Some(true)
+        || profile["readiness"]["enabled"].as_bool() == Some(false)
+}
+
+fn profile_id_from_value(value: Option<&serde_json::Value>) -> Option<&str> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn sanitize_profile_token(raw: &str) -> String {
     let mut normalized = String::new();
     let mut previous_was_separator = false;
@@ -93,6 +129,7 @@ fn profile_with_defaults(
         "task_classes": task_classes,
         "readiness": readiness.unwrap_or(serde_json::Value::Null),
         "reasoning_control": reasoning_control.unwrap_or(serde_json::Value::Null),
+        "enabled": true,
     })
 }
 
@@ -112,27 +149,74 @@ fn projection_from_profiles(
             profile_map.insert(profile_id.to_string(), profile.clone());
         }
     }
-    let default_profile = default_model_profile
+
+    let configured_profile_id = default_model_profile
         .as_deref()
-        .and_then(|profile_id| profile_map.get(profile_id))
-        .cloned()
-        .or_else(|| profiles.first().cloned())
-        .unwrap_or(serde_json::Value::Null);
-    let default_profile_id = default_profile["profile_id"]
-        .as_str()
-        .map(str::to_string)
-        .or(default_model_profile);
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (selected_profile, selection_blocker) = match configured_profile_id {
+        Some(profile_id) => match profile_map.get(profile_id) {
+            None => (
+                serde_json::Value::Null,
+                Some(profile_selection_error(
+                    ModelProfileSelectionBlocker::Unknown,
+                    profile_id,
+                )),
+            ),
+            Some(profile) if profile_is_disabled(profile) => (
+                serde_json::Value::Null,
+                Some(profile_selection_error(
+                    ModelProfileSelectionBlocker::Disabled,
+                    profile_id,
+                )),
+            ),
+            Some(profile) => (profile.clone(), None),
+        },
+        None if profiles.is_empty() => (
+            serde_json::Value::Null,
+            Some(profile_selection_error(
+                ModelProfileSelectionBlocker::Missing,
+                "no model profiles are configured",
+            )),
+        ),
+        None if profiles.len() == 1 => (
+            serde_json::Value::Null,
+            Some(profile_selection_error(
+                ModelProfileSelectionBlocker::Missing,
+                "default_model_profile is not configured",
+            )),
+        ),
+        None => (
+            serde_json::Value::Null,
+            Some(profile_selection_error(
+                ModelProfileSelectionBlocker::Ambiguous,
+                "default_model_profile is not configured for multiple profiles",
+            )),
+        ),
+    };
+    let selection_status = if selection_blocker.is_some() {
+        "blocked"
+    } else {
+        "selected"
+    };
+    let selection_blocker_code = selection_blocker
+        .as_deref()
+        .and_then(|value| value.split_once(':'))
+        .map(|(code, _)| code.to_string());
     serde_json::json!({
-        "default_model_profile": default_profile_id,
+        "default_model_profile": configured_profile_id,
         "model_profiles": serde_json::Value::Object(profile_map),
-        "model": default_profile["model_ref"].clone(),
-        "model_provider": default_profile["provider"].clone(),
-        "model_reasoning_effort": default_profile["reasoning_effort"].clone(),
-        "plan_mode_reasoning_effort": default_profile["plan_mode_reasoning_effort"].clone(),
-        "sandbox_mode": default_profile["sandbox_mode"].clone(),
-        "current_model_ref": default_profile["model_ref"].clone(),
-        "current_reasoning_effort": default_profile["reasoning_effort"].clone(),
-        "current_model_profile": default_profile["profile_id"].clone(),
+        "model": selected_profile["model_ref"].clone(),
+        "model_provider": selected_profile["provider"].clone(),
+        "model_reasoning_effort": selected_profile["reasoning_effort"].clone(),
+        "plan_mode_reasoning_effort": selected_profile["plan_mode_reasoning_effort"].clone(),
+        "sandbox_mode": selected_profile["sandbox_mode"].clone(),
+        "current_model_ref": selected_profile["model_ref"].clone(),
+        "current_reasoning_effort": selected_profile["reasoning_effort"].clone(),
+        "current_model_profile": selected_profile["profile_id"].clone(),
+        "selection_status": selection_status,
+        "selection_blocker_code": selection_blocker_code,
+        "selection_blocker": selection_blocker,
     })
 }
 
@@ -143,7 +227,7 @@ pub(crate) fn normalize_profile_projection_from_yaml(
     fallback_runtime_roles: &[String],
     fallback_task_classes: &[String],
 ) -> serde_json::Value {
-    let default_model_profile =
+    let mut default_model_profile =
         crate::yaml_string(crate::yaml_lookup(owner, &["default_model_profile"]))
             .filter(|value| !value.trim().is_empty());
     let fallback_model_ref = crate::yaml_string(crate::yaml_lookup(owner, &["model"]))
@@ -195,7 +279,7 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                     rows
                 }
             };
-            profiles.push(profile_with_defaults(
+            let mut profile = profile_with_defaults(
                 profile_id,
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["model_ref"]))
                     .or_else(|| crate::yaml_string(crate::yaml_lookup(profile_value, &["model"])))
@@ -241,15 +325,24 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                 crate::yaml_lookup(profile_value, &["reasoning_control"]).map(|value| {
                     serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
                 }),
+            );
+            profile["enabled"] = serde_json::json!(crate::yaml_bool(
+                crate::yaml_lookup(profile_value, &["enabled"]),
+                true,
             ));
+            if crate::yaml_bool(crate::yaml_lookup(profile_value, &["disabled"]), false) {
+                profile["disabled"] = serde_json::Value::Bool(true);
+            }
+            profiles.push(profile);
         }
     }
 
     if profiles.is_empty() && fallback_model_ref.is_some() {
         let model_ref = fallback_model_ref.clone().unwrap_or_default();
         let reasoning_effort = fallback_reasoning_effort.clone().unwrap_or_default();
+        let synthetic_id = synthetic_profile_id(owner_id, &model_ref, &reasoning_effort);
         profiles.push(profile_with_defaults(
-            &synthetic_profile_id(owner_id, &model_ref, &reasoning_effort),
+            &synthetic_id,
             Some(model_ref),
             fallback_provider,
             fallback_reasoning_effort,
@@ -268,6 +361,9 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                 serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
             }),
         ));
+        if default_model_profile.is_none() {
+            default_model_profile = Some(synthetic_id);
+        }
     }
 
     projection_from_profiles(default_model_profile, profiles)
@@ -403,40 +499,77 @@ pub(crate) fn model_profiles_from_json_row(row: &serde_json::Value) -> Vec<serde
     profiles
 }
 
+pub(crate) fn selected_model_profile_from_json_row_checked(
+    row: &serde_json::Value,
+    preferred_profile_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let profiles = model_profiles_from_json_row(row);
+    let resolve = |profile_id: &str| {
+        let profile = profiles
+            .iter()
+            .find(|profile| profile["profile_id"].as_str() == Some(profile_id))
+            .ok_or_else(|| {
+                profile_selection_error(ModelProfileSelectionBlocker::Unknown, profile_id)
+            })?;
+        if profile_is_disabled(profile) {
+            return Err(profile_selection_error(
+                ModelProfileSelectionBlocker::Disabled,
+                profile_id,
+            ));
+        }
+        Ok(profile.clone())
+    };
+    if let Some(profile_id) = preferred_profile_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return resolve(profile_id);
+    }
+    for persisted_id in [
+        profile_id_from_value(row.get("selected_model_profile_id")),
+        profile_id_from_value(row.get("default_model_profile")),
+        profile_id_from_value(row.get("current_model_profile")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        return resolve(persisted_id);
+    }
+
+    let legacy_model_only = !row["model"].as_str().is_none_or(|value| value.trim().is_empty())
+        && row["model_profiles"].as_object().is_none_or(Map::is_empty);
+    if legacy_model_only && profiles.len() == 1 {
+        let profile_id = profiles[0]["profile_id"].as_str().ok_or_else(|| {
+            profile_selection_error(
+                ModelProfileSelectionBlocker::Missing,
+                "legacy model profile id is missing",
+            )
+        })?;
+        return resolve(profile_id);
+    }
+    if profiles.is_empty() {
+        Err(profile_selection_error(
+            ModelProfileSelectionBlocker::Missing,
+            "no model profiles are configured",
+        ))
+    } else if profiles.len() == 1 {
+        Err(profile_selection_error(
+            ModelProfileSelectionBlocker::Missing,
+            "selected_model_profile_id/default_model_profile is not persisted",
+        ))
+    } else {
+        Err(profile_selection_error(
+            ModelProfileSelectionBlocker::Ambiguous,
+            "multiple model profiles are configured without a persisted selection",
+        ))
+    }
+}
+
 pub(crate) fn selected_model_profile_from_json_row(
     row: &serde_json::Value,
     preferred_profile_id: Option<&str>,
 ) -> Option<serde_json::Value> {
-    let profiles = model_profiles_from_json_row(row);
-    let preferred_profile_id = preferred_profile_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let default_profile_id = row["default_model_profile"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            row["current_model_profile"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
-    preferred_profile_id
-        .and_then(|profile_id| {
-            profiles
-                .iter()
-                .find(|profile| profile["profile_id"].as_str() == Some(profile_id))
-                .cloned()
-        })
-        .or_else(|| {
-            default_profile_id.and_then(|profile_id| {
-                profiles
-                    .iter()
-                    .find(|profile| profile["profile_id"].as_str() == Some(profile_id))
-                    .cloned()
-            })
-        })
-        .or_else(|| profiles.first().cloned())
+    selected_model_profile_from_json_row_checked(row, preferred_profile_id).ok()
 }
 
 pub(crate) fn apply_selected_model_profile_to_row(
@@ -584,5 +717,83 @@ model_reasoning_effort: low
         );
         assert_eq!(patched["model_reasoning_effort"], "xhigh");
         assert_eq!(patched["normalized_cost_units"], 48);
+    }
+
+    #[test]
+    fn selected_profile_fail_closed_matrix_covers_missing_unknown_disabled_ambiguous() {
+        let cases = [
+            (
+                "missing",
+                serde_json::json!({
+                    "model_profiles": { "only": { "profile_id": "only" } }
+                }),
+                "model_profile_selection_missing",
+            ),
+            (
+                "unknown",
+                serde_json::json!({
+                    "default_model_profile": "ghost",
+                    "model_profiles": { "known": { "profile_id": "known" } }
+                }),
+                "model_profile_selection_unknown",
+            ),
+            (
+                "disabled",
+                serde_json::json!({
+                    "default_model_profile": "off",
+                    "model_profiles": { "off": { "profile_id": "off", "enabled": false } }
+                }),
+                "model_profile_selection_disabled",
+            ),
+            (
+                "ambiguous",
+                serde_json::json!({
+                    "model_profiles": {
+                        "a": { "profile_id": "a" },
+                        "b": { "profile_id": "b" }
+                    }
+                }),
+                "model_profile_selection_ambiguous",
+            ),
+        ];
+        for (label, row, expected_code) in cases {
+            let error = super::selected_model_profile_from_json_row_checked(&row, None)
+                .expect_err(label);
+            assert!(error.starts_with(expected_code), "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn yaml_projection_selection_is_stable_when_profile_mapping_order_changes() {
+        let first: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+            default_model_profile: profile_b
+            model_profiles:
+              profile_a:
+                model_ref: model-a
+              profile_b:
+                model_ref: model-b
+            "#,
+        )
+        .expect("first config should parse");
+        let second: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+            default_model_profile: profile_b
+            model_profiles:
+              profile_b:
+                model_ref: model-b
+              profile_a:
+                model_ref: model-a
+            "#,
+        )
+        .expect("second config should parse");
+        let first_projection =
+            super::normalize_profile_projection_from_yaml("carrier", &first, None, &[], &[]);
+        let second_projection =
+            super::normalize_profile_projection_from_yaml("carrier", &second, None, &[], &[]);
+        assert_eq!(first_projection["selection_status"], "selected");
+        assert_eq!(first_projection["model"], "model-b");
+        assert_eq!(second_projection["selection_status"], "selected");
+        assert_eq!(second_projection["model"], "model-b");
     }
 }

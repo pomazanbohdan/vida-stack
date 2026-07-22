@@ -99,12 +99,87 @@ impl LauncherActivationSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[derive(Debug)]
+    struct JsonMismatch {
+        path: String,
+        before_type: &'static str,
+        before_value: String,
+        after_type: &'static str,
+        after_value: String,
+    }
+
+    fn json_value_type(value: Option<&serde_json::Value>) -> &'static str {
+        match value {
+            None => "missing",
+            Some(serde_json::Value::Null) => "null",
+            Some(serde_json::Value::Bool(_)) => "boolean",
+            Some(serde_json::Value::Number(_)) => "number",
+            Some(serde_json::Value::String(_)) => "string",
+            Some(serde_json::Value::Array(_)) => "array",
+            Some(serde_json::Value::Object(_)) => "object",
+        }
+    }
+
+    fn json_value_text(value: Option<&serde_json::Value>) -> String {
+        value
+            .map(serde_json::Value::to_string)
+            .unwrap_or_else(|| "<missing>".to_string())
+    }
+
+    fn json_pointer_segment(value: &str) -> String {
+        value.replace('~', "~0").replace('/', "~1")
+    }
+
+    fn first_json_mismatch(
+        before: Option<&serde_json::Value>,
+        after: Option<&serde_json::Value>,
+        path: &str,
+    ) -> Option<JsonMismatch> {
+        if before == after {
+            return None;
+        }
+        match (before, after) {
+            (Some(serde_json::Value::Object(before)), Some(serde_json::Value::Object(after))) => {
+                let keys = before.keys().chain(after.keys()).collect::<BTreeSet<_>>();
+                for key in keys {
+                    let child_path = format!("{path}/{}", json_pointer_segment(key));
+                    if let Some(mismatch) =
+                        first_json_mismatch(before.get(key), after.get(key), &child_path)
+                    {
+                        return Some(mismatch);
+                    }
+                }
+                None
+            }
+            (Some(serde_json::Value::Array(before)), Some(serde_json::Value::Array(after))) => {
+                for index in 0..before.len().max(after.len()) {
+                    let child_path = format!("{path}/{index}");
+                    if let Some(mismatch) =
+                        first_json_mismatch(before.get(index), after.get(index), &child_path)
+                    {
+                        return Some(mismatch);
+                    }
+                }
+                None
+            }
+            _ => Some(JsonMismatch {
+                path: path.to_string(),
+                before_type: json_value_type(before),
+                before_value: json_value_text(before),
+                after_type: json_value_type(after),
+                after_value: json_value_text(after),
+            }),
+        }
+    }
+
     #[tokio::test]
-    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only()
-     {
+    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -225,6 +300,100 @@ mod tests {
             persisted.source_config_digest,
             snapshot.source_config_digest
         );
+        let mismatch = first_json_mismatch(
+            Some(&snapshot.compiled_bundle),
+            Some(&persisted.compiled_bundle),
+            "$",
+        );
+        assert!(
+            persisted.compiled_bundle == snapshot.compiled_bundle,
+            "compiled_bundle changed across state-store reopen at {}: before_type={}; before_value={}; after_type={}; after_value={}",
+            mismatch.as_ref().map(|mismatch| mismatch.path.as_str()).unwrap_or("$"),
+            mismatch
+                .as_ref()
+                .map(|mismatch| mismatch.before_type)
+                .unwrap_or("unknown"),
+            mismatch
+                .as_ref()
+                .map(|mismatch| mismatch.before_value.as_str())
+                .unwrap_or("<unknown>"),
+            mismatch
+                .as_ref()
+                .map(|mismatch| mismatch.after_type)
+                .unwrap_or("unknown"),
+            mismatch
+                .as_ref()
+                .map(|mismatch| mismatch.after_value.as_str())
+                .unwrap_or("<unknown>"),
+        );
+        crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &persisted.compiled_bundle,
+            None,
+            None,
+        )
+        .unwrap_or_else(|blocker| {
+            panic!(
+                "persisted compiled_bundle must retain executable TeamFlow authority: code={}; requested={}; candidates={:?}",
+                blocker.code, blocker.requested, blocker.candidates
+            )
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn matching_digest_invalid_team_flow_snapshot_refreshes_from_canonical() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-activation-semantic-refresh-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("vida crate should live under the workspace root")
+            .to_path_buf();
+        let canonical =
+            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root(
+                &workspace_root,
+            )
+            .expect("canonical snapshot should capture");
+        let mut stale = canonical.clone();
+        stale.compiled_bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]
+            ["lanes"][0]
+            .as_object_mut()
+            .expect("canonical lane should be an object")
+            .remove("runtime_role");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .write_launcher_activation_snapshot(&stale)
+            .await
+            .expect("shape-valid stale snapshot should persist");
+        let refreshed =
+            crate::launcher_activation_snapshot::read_or_sync_launcher_activation_snapshot(&store)
+                .await
+                .expect("semantic mismatch should trigger canonical refresh");
+        assert_eq!(
+            refreshed.source_config_digest,
+            canonical.source_config_digest
+        );
+        assert_eq!(refreshed.source_config_path, canonical.source_config_path);
+        assert_eq!(
+            refreshed.compiled_bundle["team_flow_authority"],
+            canonical.compiled_bundle["team_flow_authority"],
+            "canonical refresh must restore the stable TeamFlow authority contract"
+        );
+        crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &refreshed.compiled_bundle,
+            None,
+            None,
+        )
+        .expect("canonical refresh must restore executable TeamFlow authority");
 
         let _ = fs::remove_dir_all(&root);
     }

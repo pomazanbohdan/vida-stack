@@ -254,6 +254,7 @@ Project-routing rule:
 11. Integration-test variance rule: prefer smaller, varied integration tests over one oversized scenario. Cover meaningful variants such as happy path, blocked gate, persisted snapshot parity, command-output parity, recovery/next-action guidance, and cross-surface consistency.
 12. Focused-defect discovery rule: if a focused test exposes a production defect while the batch is still incomplete, fix the production contract and continue completing the planned batch before broad/full verification.
 13. Public-surface proof rule: architectural defects require proof at the contract boundary and through every affected public CLI/operator surface family in the bounded scope; unit-only proof is insufficient for closing a runtime behavior defect. The proof plan must include default compact TOON output where applicable, explicit JSON output, `--help`/option descriptions, fail-closed blocker shape, and rewritten integration tests for old behavior that should now be owned by the shared boundary.
+14. Contour Analysis routing: use the canonical `### Contour Analysis Gate` in `docs/process/project-error-search-runtime-diagnostics-protocol.md` when two related defect/proof events, a shared authority/schema/persistence/routing change, three or more downstream/public surfaces, or a pre-release architectural rewrite is present. This sidecar carries only the trigger pointer; the protocol owns axes, artifact fields, bounds, exclusions, direct-fallback limits, procedure, proof, residual sweep, and reset law.
 ## Defective Runtime Emulation Overlay
 
 Generic defective-runtime recovery law is owned by the orchestration, TaskFlow, command-execution, lane handoff, and runtime diagnostic protocols. This sidecar keeps only vida-stack residue:
@@ -322,10 +323,10 @@ Verification checklist for complex or architectural work:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-06-12'
+artifact_revision: '2026-07-22'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-07-12T16:24:00.0000000Z
+updated_at: 2026-07-22T00:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

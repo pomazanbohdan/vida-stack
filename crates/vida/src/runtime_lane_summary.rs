@@ -4,8 +4,8 @@ use crate::taskflow_routing::{
     route_primary_backend_hint_from_route, runtime_assignment_backend_for_route,
 };
 use crate::{
-    StateStore, json_bool, json_lookup, json_string, json_string_list,
-    read_or_sync_launcher_activation_snapshot,
+    json_bool, json_lookup, json_string, json_string_list,
+    read_or_sync_launcher_activation_snapshot, StateStore,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -605,8 +605,11 @@ pub(crate) fn summarize_agent_route_from_snapshot(
     route_id: &str,
 ) -> serde_json::Value {
     let Some(route) = json_lookup(agent_system, &["routing", route_id]) else {
-        return summarize_development_flow_route_from_catalog(compiled_bundle, route_id)
-            .unwrap_or(serde_json::Value::Null);
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [format!("agent_extensions_route_missing:{route_id}")],
+            "route_id": route_id,
+        });
     };
     let (runtime_role, task_class) = match route_id {
         "implementation" | "small_patch" | "small_patch_write" | "ui_patch" => {
@@ -684,129 +687,102 @@ pub(crate) fn summarize_agent_route_from_snapshot(
     route_summary
 }
 
-fn default_development_flow(compiled_bundle: &serde_json::Value) -> Option<&serde_json::Value> {
-    let flow_id = compiled_bundle["default_flow_set"].as_str()?;
-    compiled_bundle["all_project_flow_catalog"]
-        .get(flow_id)
-        .or_else(|| compiled_bundle["project_flow_catalog"].get(flow_id))
-        .filter(|flow| flow["flow_class"].as_str() == Some("development"))
+fn selected_flow_route_node(
+    authority: &crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
+    route_id: &str,
+) -> Option<crate::team_flow_authority_adapter::TeamFlowNodeResolution> {
+    let node_id = authority.ordered_nodes().find(|node| {
+        [
+            node.node.node_id.as_str(),
+            node.lane_id.as_str(),
+            node.dispatch_target.as_str(),
+            node.dispatch_alias.as_str(),
+            node.node.task_class.as_str(),
+            node.node.runtime_role.as_str(),
+        ]
+        .into_iter()
+        .any(|candidate| candidate == route_id)
+    })
+    .map(|node| node.node.node_id.clone())?;
+    authority.resolve_target(None, &node_id).ok()
 }
 
-fn default_development_flow_has_lane(compiled_bundle: &serde_json::Value, lane_id: &str) -> bool {
-    if let Some(flow) = default_development_flow(compiled_bundle) {
-        return flow["lane_templates"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|lane| lane["lane_id"].as_str() == Some(lane_id));
-    }
-    matches!(lane_id, "implementation" | "coach" | "verification")
-}
-
-fn runtime_assignment_for_standard_dispatch_alias(
+pub(crate) fn summarize_agent_route_from_snapshot_with_authority(
     compiled_bundle: &serde_json::Value,
-    preferred_alias_id: &str,
-    task_class: &str,
+    agent_system: &serde_json::Value,
+    route_id: &str,
+    authority: &crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
 ) -> serde_json::Value {
-    let dispatch_alias =
-        crate::resolve_dispatch_alias_id(compiled_bundle, preferred_alias_id, task_class)
-            .unwrap_or_default();
-    if dispatch_alias.is_empty() {
+    let Some(route_node) = selected_flow_route_node(authority, route_id) else {
         return serde_json::json!({
-            "enabled": false,
-            "reason": "dispatch_alias_missing_from_standard_development_flow",
-            "task_class": task_class,
+            "status": "blocked",
+            "blocker_codes": [format!(
+                "team_flow_selected_flow_route_missing:{}:{}",
+                authority.snapshot.flow_ref, route_id
+            )],
+            "selected_flow_set": authority.snapshot.flow_ref,
+            "route_id": route_id,
+        });
+    };
+    let Some(route) = json_lookup(agent_system, &["routing", route_id]) else {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [format!("agent_extensions_route_missing:{route_id}")],
+            "selected_flow_set": authority.snapshot.flow_ref,
+            "route_id": route_id,
+            "team_flow_selected_node_id": route_node.node_id,
+        });
+    };
+    let mut summary = summarize_agent_route_from_snapshot(compiled_bundle, agent_system, route_id);
+    if summary.is_null() {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [format!("agent_extensions_route_missing:{route_id}")],
+            "selected_flow_set": authority.snapshot.flow_ref,
+            "route_id": route_id,
+            "team_flow_selected_node_id": route_node.node_id,
         });
     }
-    crate::build_runtime_assignment_preview_from_dispatch_alias(
-        compiled_bundle,
-        &dispatch_alias,
-        task_class,
-    )
-}
-
-fn summarize_development_flow_route_from_catalog(
-    compiled_bundle: &serde_json::Value,
-    route_id: &str,
-) -> Option<serde_json::Value> {
-    let (task_class, runtime_role, preferred_alias_id, route) = match route_id {
-        "implementation" => {
-            let coach_required = default_development_flow_has_lane(compiled_bundle, "coach");
-            let verification_required =
-                default_development_flow_has_lane(compiled_bundle, "verification");
-            (
-                "implementation",
-                "worker",
-                "development_implementer",
-                serde_json::json!({
-                    "route_id": route_id,
-                    "write_scope": "scoped_only",
-                    "dispatch_required": "compiled_development_flow",
-                    "verification_gate": "targeted_verification",
-                    "analysis_required": true,
-                    "analysis_route_task_class": "implementer",
-                    "coach_required": coach_required,
-                    "coach_route_task_class": if coach_required { "coach" } else { "" },
-                    "verification_route_task_class": if verification_required { "verification" } else { "" },
-                    "independent_verification_required": verification_required,
-                    "graph_strategy": "compiled_development_flow",
-                    "writer_route_task_class": "implementer",
-                }),
-            )
-        }
-        "coach" if default_development_flow_has_lane(compiled_bundle, "coach") => (
-            "coach",
-            "coach",
-            "development_coach",
-            serde_json::json!({
-                "route_id": route_id,
-                "write_scope": "none",
-                "dispatch_required": "compiled_development_flow",
-                "verification_gate": "coach_review",
-                "graph_strategy": "compiled_development_flow",
-            }),
-        ),
-        "verification" if default_development_flow_has_lane(compiled_bundle, "verification") => (
-            "verification",
-            "verifier",
-            "development_verifier",
-            serde_json::json!({
-                "route_id": route_id,
-                "write_scope": "none",
-                "dispatch_required": "compiled_development_flow",
-                "verification_gate": "verification_summary",
-                "graph_strategy": "compiled_development_flow",
-            }),
-        ),
-        _ => return None,
-    };
-    let runtime_assignment = runtime_assignment_for_standard_dispatch_alias(
-        compiled_bundle,
-        preferred_alias_id,
-        task_class,
-    );
-    let executor_backend = runtime_assignment["selected_backend"]
-        .as_str()
-        .or_else(|| runtime_assignment["selected_carrier_id"].as_str())
-        .unwrap_or_default()
-        .to_string();
-    let mut route = route;
-    if let Some(summary) = route.as_object_mut() {
+    if let Some(summary) = summary.as_object_mut() {
         summary.insert(
-            "executor_backend".to_string(),
-            serde_json::Value::String(executor_backend.clone()),
+            "selected_flow_set".to_string(),
+            serde_json::Value::String(authority.snapshot.flow_ref.clone()),
         );
         summary.insert(
-            "carrier_backend_hint".to_string(),
-            serde_json::Value::String(executor_backend),
+            "team_flow_selected_node_id".to_string(),
+            serde_json::Value::String(route_node.node_id.clone()),
         );
         summary.insert(
             "preferred_runtime_role".to_string(),
-            serde_json::Value::String(runtime_role.to_string()),
+            serde_json::Value::String(route_node.runtime_role.clone()),
         );
-        summary.extend(crate::runtime_assignment_alias_fields(&runtime_assignment));
+        summary.insert(
+            "team_flow_authority_id".to_string(),
+            serde_json::Value::String(route_node.authority_id.clone()),
+        );
+        summary.insert(
+            "team_flow_config_hash".to_string(),
+            serde_json::Value::String(route_node.config_authority_hash.clone()),
+        );
+        summary.insert(
+            "team_flow_registry_hash".to_string(),
+            serde_json::Value::String(route_node.registry_authority_hash.clone()),
+        );
+        if !route_node.carrier_id.trim().is_empty() {
+            summary.insert(
+                "preferred_agent_type".to_string(),
+                serde_json::Value::String(route_node.carrier_id.clone()),
+            );
+        }
+        if !route_node.carrier_tier.trim().is_empty() {
+            summary.insert(
+                "preferred_agent_tier".to_string(),
+                serde_json::Value::String(route_node.carrier_tier.clone()),
+            );
+        }
     }
-    Some(route)
+    let _ = route;
+    summary
 }
 
 #[cfg(test)]
@@ -814,13 +790,15 @@ mod tests {
     use super::{
         build_executor_backend_admissibility_matrix, build_runtime_execution_plan_from_snapshot,
         build_runtime_lane_selection_from_bundle, summarize_agent_route_from_snapshot,
+        summarize_agent_route_from_snapshot_with_authority,
         summarize_execution_truth_for_route,
     };
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::project_activator_surface::read_yaml_file_checked;
+    use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::{Cli, build_compiled_agent_extension_bundle_for_root, run};
+    use crate::{build_compiled_agent_extension_bundle_for_root, run, Cli};
     use clap::Parser;
     use std::fs;
     use std::path::Path;
@@ -898,6 +876,49 @@ mod tests {
             summary["fallback_executor_backend_policy"]["lane_admissibility"]["review"],
             true
         );
+    }
+
+    #[test]
+    fn selected_flow_missing_agent_extension_route_blocks_without_synthesis() {
+        let compiled_bundle = canonical_compiled_bundle();
+        let authority = crate::runtime_dispatch_state::require_team_flow_authority_for_selection(
+            &crate::RuntimeConsumptionLaneSelection {
+                ok: true,
+                activation_source: "test".to_string(),
+                selection_mode: "configured".to_string(),
+                fallback_role: "orchestrator".to_string(),
+                request: String::new(),
+                selected_role: "orchestrator".to_string(),
+                conversational_mode: None,
+                single_task_only: true,
+                tracked_flow_entry: None,
+                allow_freeform_chat: false,
+                confidence: "test".to_string(),
+                matched_terms: Vec::new(),
+                compiled_bundle: compiled_bundle.clone(),
+                execution_plan: serde_json::Value::Null,
+                reason: "test".to_string(),
+            },
+        )
+        .expect("canonical default TeamFlow authority");
+        let route_id = authority
+            .ordered_nodes()
+            .find(|node| node.node.included)
+            .map(|node| node.lane_id)
+            .expect("selected flow lane");
+        let summary = summarize_agent_route_from_snapshot_with_authority(
+            &compiled_bundle,
+            &serde_json::json!({"routing": {}}),
+            &route_id,
+            &authority,
+        );
+        assert_eq!(summary["status"], "blocked");
+        assert!(summary["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| {
+                code.as_str()
+                    .is_some_and(|code| code.starts_with("agent_extensions_route_missing:"))
+            })));
     }
 
     #[test]
@@ -1007,11 +1028,9 @@ mod tests {
         let coach_fanout = coach["fanout_executor_backends"]
             .as_array()
             .expect("coach fanout should be an array");
-        assert!(
-            coach_fanout
-                .iter()
-                .any(|value| { value.as_str() == Some(configured_executor("coach")) })
-        );
+        assert!(coach_fanout
+            .iter()
+            .any(|value| { value.as_str() == Some(configured_executor("coach")) }));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -1031,11 +1050,9 @@ mod tests {
         let review_ensemble_fanout = review_ensemble["fanout_executor_backends"]
             .as_array()
             .expect("review ensemble fanout should be an array");
-        assert!(
-            review_ensemble_fanout
-                .iter()
-                .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) })
-        );
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) }));
     }
 
     #[test]
@@ -1241,12 +1258,10 @@ mod tests {
         assert_eq!(selection.selected_role, "worker");
         assert!(selection.conversational_mode.is_none());
         assert_eq!(selection.reason, "auto_explicit_implementation_request");
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "write-producing" || term == "move the test")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "write-producing" || term == "move the test"));
     }
 
     #[test]
@@ -1291,14 +1306,10 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "implement"
-                    || term == "bounded patch"
-                    || term == "code change")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "implement" || term == "bounded patch" || term == "code change"));
     }
 
     #[test]
@@ -1343,12 +1354,10 @@ mod tests {
             Some("scope_discussion")
         );
         assert_eq!(selection.reason, "auto_keyword_match");
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "scope" || term == "spec" || term == "acceptance")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "scope" || term == "spec" || term == "acceptance"));
     }
 
     #[test]
@@ -1393,18 +1402,14 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "repair" || term == "fix" || term == "regression test")
-        );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == ".rs" || term == "crates/" || term == "rust file")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "repair" || term == "fix" || term == "regression test"));
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == ".rs" || term == "crates/" || term == "rust file"));
     }
 
     #[test]

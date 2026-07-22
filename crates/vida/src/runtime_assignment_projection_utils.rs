@@ -49,12 +49,7 @@ pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
     };
     let runtime_role = crate::json_string(latest_status.get("activation_runtime_role"))
         .unwrap_or_else(|| role_selection.selected_role.clone());
-    let conversation_role = role_selection
-        .fallback_role
-        .trim()
-        .is_empty()
-        .then_some("orchestrator")
-        .unwrap_or(role_selection.fallback_role.as_str());
+    let conversation_role = role_selection.fallback_role.trim();
     let assignment = crate::build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         conversation_role,
@@ -156,7 +151,7 @@ pub(crate) fn infer_task_class_from_task_payload(task: &serde_json::Value) -> St
     {
         return "specification".to_string();
     }
-    "implementation".to_string()
+    String::new()
 }
 
 #[cfg(test)]
@@ -190,7 +185,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "test".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({}),
             reason: "test".to_string(),
         };
@@ -210,5 +206,38 @@ mod tests {
         .expect("assignment helper should update selection");
 
         assert_eq!(selection.execution_plan, serde_json::json!({}));
+    }
+
+    #[test]
+    fn task_payload_class_inference_preserves_priority_and_fails_closed_when_missing() {
+        let cases = [
+            (serde_json::json!({"labels": ["coach", "prover"]}), "coach"),
+            (
+                serde_json::json!({"labels": ["prover", "tester"]}),
+                "verification",
+            ),
+            (
+                serde_json::json!({"title": "architecture migration"}),
+                "architecture",
+            ),
+            (
+                serde_json::json!({"title": "write a verification proof"}),
+                "verification",
+            ),
+            (
+                serde_json::json!({"title": "prepare a specification plan"}),
+                "specification",
+            ),
+        ];
+
+        for (task, expected) in cases {
+            assert_eq!(super::infer_task_class_from_task_payload(&task), expected);
+        }
+        assert_eq!(
+            super::infer_task_class_from_task_payload(&serde_json::json!({
+                "title": "ordinary work"
+            })),
+            ""
+        );
     }
 }

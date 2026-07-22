@@ -43,9 +43,12 @@ pub(crate) fn normalized_dispatch_result_activation_evidence(
         evidence
             .entry("result_path".to_string())
             .or_insert_with(|| serde_json::json!(result_artifact_path));
-        evidence.entry("backend_id".to_string()).or_insert_with(|| {
-            serde_json::json!(canonical_lane_receipt_carrier_id_for_result(receipt, body))
-        });
+        if let Some(backend_id) = canonical_lane_receipt_backend_id_for_result(receipt, body) {
+            evidence.insert("backend_id".to_string(), serde_json::json!(backend_id));
+        }
+        if let Some(carrier_id) = canonical_lane_receipt_carrier_id_for_result(receipt, body) {
+            evidence.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
+        }
         serde_json::Value::Object(evidence)
     } else {
         serde_json::Value::Null
@@ -63,27 +66,23 @@ pub(crate) fn normalized_dispatch_result_activation_evidence(
     })
 }
 
-fn canonical_lane_receipt_carrier_id(
+fn canonical_lane_receipt_backend_id(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> String {
+) -> Option<String> {
     receipt
         .selected_backend
         .clone()
-        .or_else(|| receipt.activation_agent_type.clone())
-        .or_else(|| receipt.dispatch_surface.clone())
-        .unwrap_or_else(|| "taskflow_state_store".to_string())
+        .filter(|value| !value.trim().is_empty() && value != "unknown")
 }
 
-fn canonical_lane_receipt_carrier_id_for_result(
+fn canonical_lane_receipt_backend_id_for_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     body: &serde_json::Value,
-) -> String {
+) -> Option<String> {
     for candidate in [
-        body.get("execution_evidence")
+        body.get("backend_dispatch")
             .and_then(|value| value.get("backend_id")),
-        body.get("backend_dispatch")
-            .and_then(|value| value.get("carrier_id")),
-        body.get("backend_dispatch")
+        body.get("execution_evidence")
             .and_then(|value| value.get("backend_id")),
         body.get("execution_truth")
             .and_then(|value| value.get("effective_selected_backend")),
@@ -94,10 +93,39 @@ fn canonical_lane_receipt_carrier_id_for_result(
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty() && value != "unknown")
         {
-            return value;
+            return Some(value);
         }
     }
-    canonical_lane_receipt_carrier_id(receipt)
+    canonical_lane_receipt_backend_id(receipt)
+}
+
+fn canonical_lane_receipt_carrier_id_for_result(
+    _receipt: &crate::state_store::RunGraphDispatchReceipt,
+    body: &serde_json::Value,
+) -> Option<String> {
+    for candidate in [
+        body.get("backend_dispatch")
+            .and_then(|value| value.get("carrier_id")),
+        body.get("execution_evidence")
+            .and_then(|value| value.get("carrier_id")),
+        body.get("selected_carrier_id"),
+        body.get("backend_dispatch")
+            .and_then(|value| value.get("selected_carrier_id")),
+        body.get("runtime_assignment")
+            .and_then(|value| value.get("selected_carrier_id")),
+        body.pointer("/role_selection/execution_plan/runtime_assignment/selected_carrier_id"),
+        body.pointer("/role_selection_full/execution_plan/runtime_assignment/selected_carrier_id"),
+        body.get("carrier_runtime_assignment")
+            .and_then(|value| value.get("carrier_id")),
+    ] {
+        if let Some(value) = crate::json_string(candidate)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && value != "unknown")
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 pub(crate) fn is_terminal_dispatch_execution_state(body: &serde_json::Value) -> bool {
@@ -112,6 +140,14 @@ pub(crate) struct DispatchReworkRoute {
     pub(crate) rework_target: String,
     pub(crate) allowed_next_node: String,
     pub(crate) blocker_code: Option<String>,
+    pub(crate) receipt_backed: bool,
+    pub(crate) outcome_blocker_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthorizedDispatchReworkContext {
+    pub(crate) route: DispatchReworkRoute,
+    pub(crate) role_selection: crate::RuntimeConsumptionLaneSelection,
 }
 
 pub(crate) fn dispatch_rework_route_from_receipt_fields(
@@ -131,6 +167,7 @@ pub(crate) fn dispatch_rework_route_from_receipt_fields(
     None
 }
 
+#[cfg(test)]
 pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
     downstream_dispatch_result_path: Option<&str>,
     dispatch_result_path: Option<&str>,
@@ -138,7 +175,7 @@ pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
     completed_dispatch_target: &str,
 ) -> Option<DispatchReworkRoute> {
     let packet = dispatch_packet_path.and_then(read_dispatch_packet_json)?;
-    let execution_plan = packet_role_selection_execution_plan(&packet)?;
+    let (authority, execution_plan) = packet_team_flow_authority(&packet).ok()?;
     let completed_target = completed_result_target(&packet, completed_dispatch_target);
     let packet_fallback_path = (downstream_dispatch_result_path.is_none()
         && dispatch_result_path.is_none())
@@ -150,12 +187,139 @@ pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
         packet_fallback_path,
     ) {
         if let Some(route) = dispatch_rework_route_from_result_path(&result_path) {
-            if rework_route_is_authorized(&execution_plan, &completed_target, &route) {
+            if rework_route_is_authorized(&authority, &execution_plan, &completed_target, &route)
+                .is_ok()
+            {
                 return Some(route);
             }
         }
     }
     None
+}
+
+pub(crate) async fn authorized_dispatch_rework_context_from_receipt_fields(
+    store: &crate::state_store::StateStore,
+    run_id: &str,
+    task_id: &str,
+    downstream_dispatch_result_path: Option<&str>,
+    dispatch_result_path: Option<&str>,
+    dispatch_packet_path: Option<&str>,
+    completed_dispatch_target: &str,
+) -> Result<
+    Option<AuthorizedDispatchReworkContext>,
+    crate::team_flow_authority_adapter::TeamFlowResolutionBlocker,
+> {
+    let run_id = run_id.trim();
+    if run_id.is_empty() {
+        return Err(rework_authority_blocker(
+            "team_flow_rework_run_id_missing",
+            "run_id",
+            Vec::new(),
+        ));
+    }
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return Err(rework_authority_blocker(
+            "team_flow_rework_task_id_missing",
+            "task_id",
+            Vec::new(),
+        ));
+    }
+    let packet_path = dispatch_packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            rework_authority_blocker(
+                "team_flow_rework_packet_missing",
+                "dispatch_packet_path",
+                Vec::new(),
+            )
+        })?;
+    let packet = read_dispatch_packet_json(packet_path).ok_or_else(|| {
+        rework_authority_blocker(
+            "team_flow_rework_packet_unreadable",
+            packet_path,
+            Vec::new(),
+        )
+    })?;
+    let packet_run_id = packet
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            rework_authority_blocker(
+                "team_flow_rework_packet_run_id_missing",
+                "run_id",
+                Vec::new(),
+            )
+        })?;
+    if packet_run_id != run_id {
+        return Err(rework_authority_blocker(
+            "team_flow_rework_packet_run_id_mismatch",
+            packet_run_id,
+            vec![run_id.to_string()],
+        ));
+    }
+    let packet_fallback_path = (downstream_dispatch_result_path.is_none()
+        && dispatch_result_path.is_none())
+    .then_some(dispatch_packet_path)
+    .flatten();
+    let result_paths = dispatch_result_path_candidates_from_receipt_fields(
+        downstream_dispatch_result_path,
+        dispatch_result_path,
+        packet_fallback_path,
+    );
+    if !result_paths
+        .iter()
+        .any(|path| dispatch_rework_route_from_result_path(path).is_some())
+    {
+        return Ok(None);
+    }
+    store.show_task(task_id).await.map_err(|error| {
+        rework_authority_blocker(
+            "team_flow_rework_task_missing",
+            task_id,
+            vec![error.to_string()],
+        )
+    })?;
+    let role_selection_value = packet
+        .get("role_selection_full")
+        .or_else(|| packet.get("role_selection"))
+        .cloned()
+        .ok_or_else(|| {
+            rework_authority_blocker(
+                "team_flow_rework_role_selection_missing",
+                "role_selection",
+                Vec::new(),
+            )
+        })?;
+    let role_selection = crate::taskflow_run_graph::rehydrate_persisted_role_selection_value(
+        store,
+        role_selection_value,
+        Some(task_id),
+    )
+    .await
+    .map_err(|error| {
+        rework_authority_blocker(
+            "team_flow_rework_role_selection_rehydrate_failed",
+            task_id,
+            vec![error],
+        )
+    })?;
+    let (authority, execution_plan) =
+        team_flow_authority_from_rehydrated_selection(&role_selection)?;
+    let completed_target = completed_result_target(&packet, completed_dispatch_target);
+    for result_path in result_paths {
+        if let Some(route) = dispatch_rework_route_from_result_path(&result_path) {
+            rework_route_is_authorized(&authority, &execution_plan, &completed_target, &route)?;
+            return Ok(Some(AuthorizedDispatchReworkContext {
+                route,
+                role_selection,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 const MAX_DISPATCH_EVIDENCE_JSON_BYTES: u64 = 1024 * 1024;
@@ -224,12 +388,145 @@ fn read_bounded_dispatch_evidence_json(path: &str) -> Option<serde_json::Value> 
     serde_json::from_str(&raw).ok()
 }
 
-fn packet_role_selection_execution_plan(packet: &serde_json::Value) -> Option<serde_json::Value> {
-    packet
+fn rework_authority_blocker(
+    code: impl Into<String>,
+    requested: impl Into<String>,
+    candidates: Vec<String>,
+) -> crate::team_flow_authority_adapter::TeamFlowResolutionBlocker {
+    crate::team_flow_authority_adapter::TeamFlowResolutionBlocker {
+        code: code.into(),
+        requested: requested.into(),
+        candidates,
+    }
+}
+
+fn team_flow_authority_from_rehydrated_selection(
+    selection: &crate::RuntimeConsumptionLaneSelection,
+) -> Result<
+    (
+        crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
+        serde_json::Value,
+    ),
+    crate::team_flow_authority_adapter::TeamFlowResolutionBlocker,
+> {
+    if selection.compiled_bundle.is_null() {
+        return Err(rework_authority_blocker(
+            "team_flow_rework_compiled_bundle_missing_after_rehydrate",
+            "compiled_bundle",
+            Vec::new(),
+        ));
+    }
+    let execution_plan = selection.execution_plan.clone();
+    if !execution_plan.is_object() {
+        return Err(rework_authority_blocker(
+            "team_flow_authority_execution_plan_missing",
+            "execution_plan",
+            Vec::new(),
+        ));
+    }
+    let flow_ref = crate::runtime_dispatch_state::validated_selected_flow_ref(
+        selection,
+        None,
+        crate::runtime_dispatch_state::SelectedFlowIdentityMode::Replay,
+    )?;
+    let projection = crate::team_flow_authority_adapter::compile_team_flow_authority(
+        &selection.compiled_bundle,
+        flow_ref.as_deref(),
+        None,
+    )
+    .map_err(|error| {
+        rework_authority_blocker(
+            "team_flow_rework_authority_compile_failed",
+            flow_ref.as_deref().unwrap_or_default(),
+            vec![error],
+        )
+    })?;
+    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
+        ["team_flow_authority_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if plan_authority_id != projection.authority_id {
+            return Err(rework_authority_blocker(
+                "team_flow_authority_plan_identity_mismatch",
+                plan_authority_id,
+                vec![projection.authority_id.clone()],
+            ));
+        }
+    }
+    Ok((projection, execution_plan))
+}
+
+#[cfg(test)]
+fn packet_team_flow_authority(
+    packet: &serde_json::Value,
+) -> Result<
+    (
+        crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
+        serde_json::Value,
+    ),
+    crate::team_flow_authority_adapter::TeamFlowResolutionBlocker,
+> {
+    let role_selection = packet
         .get("role_selection_full")
         .or_else(|| packet.get("role_selection"))
-        .and_then(|role_selection| role_selection.get("execution_plan"))
+        .ok_or_else(|| {
+            rework_authority_blocker(
+                "team_flow_authority_role_selection_missing",
+                "role_selection",
+                Vec::new(),
+            )
+        })?;
+    let execution_plan = role_selection
+        .get("execution_plan")
         .cloned()
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            rework_authority_blocker(
+                "team_flow_authority_execution_plan_missing",
+                "execution_plan",
+                Vec::new(),
+            )
+        })?;
+    let compiled_bundle = role_selection.get("compiled_bundle").ok_or_else(|| {
+        rework_authority_blocker(
+            "team_flow_authority_bundle_missing",
+            "compiled_bundle",
+            Vec::new(),
+        )
+    })?;
+    let flow_ref = execution_plan["development_flow"]["dispatch_contract"]["selected_flow_set"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let projection = crate::team_flow_authority_adapter::compile_team_flow_authority(
+        compiled_bundle,
+        flow_ref,
+        None,
+    )
+    .map_err(|error| {
+        rework_authority_blocker(
+            "team_flow_authority_compile_failed",
+            flow_ref.unwrap_or_default(),
+            vec![error],
+        )
+    })?;
+    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
+        ["team_flow_authority_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if plan_authority_id != projection.authority_id {
+            return Err(rework_authority_blocker(
+                "team_flow_authority_plan_identity_mismatch",
+                plan_authority_id,
+                vec![projection.authority_id.clone()],
+            ));
+        }
+    }
+    Ok((projection, execution_plan))
 }
 
 fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String {
@@ -244,46 +541,65 @@ fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|value| value.replace('-', "_"))
+            .map(str::to_string)
     })
-    .unwrap_or_else(|| fallback.trim().replace('-', "_"))
+    .unwrap_or_else(|| fallback.trim().to_string())
 }
 
 pub(crate) fn rework_route_is_authorized(
+    authority: &crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
     execution_plan: &serde_json::Value,
     completed_dispatch_target: &str,
     route: &DispatchReworkRoute,
-) -> bool {
-    let Some(rework_resolution) = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-        execution_plan,
-        &route.rework_target,
-    ) else {
-        return false;
-    };
-    let Some(completed_resolution) = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-        execution_plan,
+) -> Result<(), crate::team_flow_authority_adapter::TeamFlowResolutionBlocker> {
+    if !route.receipt_backed {
+        return Err(rework_authority_blocker(
+            taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_REQUIRED,
+            completed_dispatch_target,
+            Vec::new(),
+        ));
+    }
+    if !route.outcome_blocker_codes.is_empty() {
+        return Err(rework_authority_blocker(
+            taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_NOT_COMPLETED,
+            completed_dispatch_target,
+            route.outcome_blocker_codes.clone(),
+        ));
+    }
+    let source = crate::team_flow_authority_adapter::resolve_team_flow_node(
+        authority,
+        Some(execution_plan),
         completed_dispatch_target,
-    ) else {
-        return false;
-    };
-    let allowed = route.allowed_next_node.trim();
-    if allowed != rework_resolution.dispatch_target
-        && allowed != format!("{}_rework", rework_resolution.dispatch_target)
+    )?;
+    let target = crate::team_flow_authority_adapter::resolve_team_flow_node(
+        authority,
+        Some(execution_plan),
+        &route.rework_target,
+    )?;
+    let allowed = crate::team_flow_authority_adapter::resolve_team_flow_node(
+        authority,
+        Some(execution_plan),
+        &route.allowed_next_node,
+    )?;
+    if target.node_id != allowed.node_id {
+        return Err(rework_authority_blocker(
+            "team_flow_rework_route_target_mismatch",
+            &route.allowed_next_node,
+            vec![target.node_id, allowed.node_id],
+        ));
+    }
+    if !source
+        .rework_targets
+        .iter()
+        .any(|configured| configured == &target.node_id)
     {
-        return false;
+        return Err(rework_authority_blocker(
+            taskflow_authority::team_flow_transition::BLOCKER_REWORK_TARGET_NOT_CONFIGURED,
+            target.node_id,
+            source.rework_targets,
+        ));
     }
-    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    let sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
-    let rework_index = sequence
-        .iter()
-        .position(|target| target == &rework_resolution.dispatch_target);
-    let completed_index = sequence
-        .iter()
-        .position(|target| target == &completed_resolution.dispatch_target);
-    if rework_resolution.dispatch_target == completed_resolution.dispatch_target {
-        return route.allowed_next_node == rework_resolution.dispatch_target;
-    }
-    matches!((rework_index, completed_index), (Some(rework_index), Some(completed_index)) if rework_index < completed_index)
+    Ok(())
 }
 
 fn push_json_string_path(paths: &mut Vec<String>, value: &serde_json::Value, field_names: &[&str]) {
@@ -332,10 +648,25 @@ pub(crate) fn dispatch_rework_route_from_result(
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     Some(DispatchReworkRoute {
-        rework_target: rework_target.replace('-', "_"),
-        allowed_next_node: allowed_next_node.replace('-', "_"),
+        rework_target: rework_target.to_string(),
+        allowed_next_node: allowed_next_node.to_string(),
         blocker_code: result_blocker_code(result),
+        receipt_backed: result
+            .pointer("/execution_evidence/receipt_backed")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+        outcome_blocker_codes: rework_result_contract_blockers(result),
     })
+}
+
+fn rework_result_contract_blockers(result: &serde_json::Value) -> Vec<String> {
+    let mut required_fields = taskflow_host_bridge::default_host_bridge_required_result_fields();
+    for field in ["status", "execution_state"] {
+        if !required_fields.iter().any(|required| required == field) {
+            required_fields.push(field.to_string());
+        }
+    }
+    taskflow_host_bridge::host_bridge_result_verdict_contract_blockers(result, &required_fields)
 }
 
 fn dispatch_result_has_rework_verdict(result: &serde_json::Value) -> bool {
@@ -428,6 +759,7 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
         .activation_runtime_role
         .clone()
         .unwrap_or_else(|| receipt.dispatch_target.clone());
+    let backend_id = canonical_lane_receipt_backend_id_for_result(receipt, body);
     let carrier_id = canonical_lane_receipt_carrier_id_for_result(receipt, body);
     let status = match crate::json_string(body.get("status")).as_deref() {
         Some("pass") => "pass".to_string(),
@@ -447,7 +779,7 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
             .to_string(),
         _ => receipt.lane_status.clone(),
     };
-    serde_json::to_value(
+    let mut artifact = serde_json::to_value(
         crate::release1_contracts::CanonicalLaneExecutionReceiptArtifact {
             lane_execution_receipt: crate::release1_contracts::CanonicalLaneExecutionReceipt {
                 header: crate::release1_contracts::CanonicalArtifactHeader::new(
@@ -471,7 +803,7 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
                 packet_id,
                 lane_id: format!("{}:{}", receipt.run_id, receipt.dispatch_target),
                 lane_role,
-                carrier_id,
+                carrier_id: carrier_id.unwrap_or_else(|| "unknown".to_string()),
                 lane_status,
                 evidence_status: "recorded".to_string(),
                 started_at: receipt.recorded_at.clone(),
@@ -482,12 +814,116 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
             },
         },
     )
-    .expect("lane execution receipt artifact should serialize")
+    .expect("lane execution receipt artifact should serialize");
+    if let Some(object) = artifact.as_object_mut() {
+        object.insert(
+            "backend_id".to_string(),
+            serde_json::Value::String(backend_id.unwrap_or_else(|| "unknown".to_string())),
+        );
+    }
+    artifact
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn identity_test_receipt(
+        selected_backend: Option<&str>,
+    ) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-identity".to_string(),
+            dispatch_target: "lane-identity".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/identity-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: selected_backend.map(str::to_string),
+            recorded_at: "2026-07-22T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn normalized_execution_evidence_keeps_backend_and_carrier_distinct() {
+        let receipt = identity_test_receipt(Some("receipt-backend"));
+        let body = serde_json::json!({
+            "activation_semantics": {"activation_kind": "execution_evidence"},
+            "execution_evidence": {"status": "recorded"},
+            "backend_dispatch": {
+                "backend_id": "executor-backend",
+                "carrier_id": "carrier-token"
+            },
+            "execution_state": "executed"
+        });
+
+        let normalized = normalized_dispatch_result_activation_evidence(
+            &receipt,
+            &body,
+            "/tmp/identity-result.json",
+        );
+        assert_eq!(
+            normalized["execution_evidence"]["backend_id"],
+            "executor-backend"
+        );
+        assert_eq!(
+            normalized["execution_evidence"]["carrier_id"],
+            "carrier-token"
+        );
+        assert_ne!(
+            normalized["execution_evidence"]["backend_id"],
+            normalized["execution_evidence"]["carrier_id"]
+        );
+
+        let artifact = canonical_lane_execution_receipt_artifact_json(
+            &receipt,
+            &body,
+            "2026-07-22T00:01:00Z",
+            "/tmp/identity-result.json",
+        );
+        assert_eq!(artifact["backend_id"], "executor-backend");
+        assert_eq!(artifact["carrier_id"], "carrier-token");
+    }
+
+    #[test]
+    fn carrier_field_never_populates_missing_backend_identity() {
+        let receipt = identity_test_receipt(None);
+        let body = serde_json::json!({
+            "activation_semantics": {"activation_kind": "execution_evidence"},
+            "backend_dispatch": {"carrier_id": "carrier-only"},
+            "execution_state": "executed"
+        });
+
+        let normalized = normalized_dispatch_result_activation_evidence(
+            &receipt,
+            &body,
+            "/tmp/carrier-only-result.json",
+        );
+        assert!(normalized["execution_evidence"].get("backend_id").is_none());
+        assert_eq!(
+            normalized["execution_evidence"]["carrier_id"],
+            "carrier-only"
+        );
+    }
 
     #[test]
     fn dispatch_rework_route_accepts_legacy_top_level_completion_verdict() {
@@ -502,7 +938,7 @@ mod tests {
         let route = dispatch_rework_route_from_result(&result)
             .expect("legacy completion_verdict should produce a rework route");
         assert_eq!(route.rework_target, "alpha_impl");
-        assert_eq!(route.allowed_next_node, "alpha_impl_rework");
+        assert_eq!(route.allowed_next_node, "alpha-impl-rework");
         assert_eq!(
             route.blocker_code.as_deref(),
             Some("verification_rework_required")
@@ -566,19 +1002,373 @@ mod tests {
         assert!(dispatch_rework_route_from_result(&result).is_none());
     }
 
-    fn execution_plan() -> serde_json::Value {
+    fn rework_projection_step(
+        node_id: &str,
+        dispatch_alias: &str,
+        runtime_role: &str,
+        task_class: &str,
+        proof_id: &str,
+        next_node: Option<&str>,
+        rework_targets: &[&str],
+        terminal: bool,
+    ) -> serde_json::Value {
         serde_json::json!({
-            "development_flow": {
-                "dispatch_contract": {
-                    "lane_catalog": {
-                        "alpha_impl": {"dispatch_target": "alpha_impl", "task_class": "implementation"},
-                        "beta_gate": {"dispatch_target": "beta_gate", "task_class": "quality_gate"},
-                        "omega_release": {"dispatch_target": "omega_release", "task_class": "release"}
-                    },
-                    "execution_lane_sequence": ["alpha_impl", "beta_gate"]
+            "node_id": node_id,
+            "lane_id": node_id,
+            "dispatch_target": dispatch_alias,
+            "dispatch_alias": dispatch_alias,
+            "runtime_role": runtime_role,
+            "task_class": task_class,
+            "packet_template_kind": "fixture-packet",
+            "closure_class": "fixture-proof",
+            "stage": "fixture-execution",
+            "completion_blocker": "fixture-pending-proof",
+            "inclusion_rule": "always",
+            "included": true,
+            "required": true,
+            "evidence_requirements": [proof_id],
+            "proof_gates": {"required_outputs": [proof_id]},
+            "command_ref": "fixture-command",
+            "command_mapping": {
+                "command_id": "fixture-command",
+                "surface": "vida agent-init"
+            },
+            "next_node": next_node,
+            "terminal": terminal,
+            "requires_user_approval": false,
+            "approval_policy": {},
+            "lifecycle_hook_templates": ["command_timing_summary"],
+            "resume_transitions": {},
+            "rework": {"targets": rework_targets},
+            "policy_diagnostics": {
+                "source": "team_flow_authority.selected_config",
+                "fallback_used": false,
+                "fallback_fields": []
+            },
+            "activation": {
+                "source": "configured",
+                "dispatch_alias": dispatch_alias
+            },
+            "runtime_assignment": {
+                "source": "configured",
+                "backend_id": "fixture-backend"
+            },
+            "carrier_runtime_assignment": {
+                "source": "configured",
+                "carrier_id": node_id
+            },
+            "profile_authority": {
+                "team_role_id": node_id,
+                "runtime_role": runtime_role,
+                "task_class": task_class,
+                "source_path": format!("fixture-config#roles.{node_id}")
+            },
+            "selected_model_profile": {
+                "profile_id": "fixture-model-profile",
+                "selection_source": "fixture-config"
+            },
+            "carrier_relation": {
+                "relation_kind": "carrier_catalog",
+                "source_path": "carrier_runtime.dispatch_aliases",
+                "selected_id": node_id
+            },
+            "executor_backend_relation": {
+                "relation_kind": "executor_backend",
+                "source_path": "carrier_runtime.executor_backend_relation",
+                "selected_id": "fixture-backend"
+            },
+            "authority_identities": [
+                {
+                    "kind": "config",
+                    "id": "fixture-config",
+                    "source_path": "team_flow_authority.config"
+                },
+                {
+                    "kind": "registry",
+                    "id": "fixture-registry",
+                    "source_path": "team_flow_authority.registries"
+                }
+            ],
+            "execution_identity": {
+                "id": format!("fixture-flow:{node_id}"),
+                "source_fields": ["flow_id", "node_id", "dispatch_alias"]
+            }
+        })
+    }
+
+    fn rework_authority_config() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "team-flow-authority.v1",
+            "authority_selection": {
+                "schema_version": "team-flow-authority.v1",
+                "config_id": "fixture-config",
+                "team_profile_id": "fixture-profile",
+                "default_flow_id": "fixture-flow",
+                "projection_mode": "typed_fail_closed",
+                "registry_identity_algorithm": "canonical_json_blake3_v1",
+                "terminal_source": "config_only",
+                "edge_source": "explicit_config_only",
+                "command_resolution_mode": "registry_ref_only",
+                "approval_enforcement_mode": "required",
+                "alias_conflict_policy": "reject",
+                "node_field_source_mode": "typed_exact_one",
+                "dispatch_alias_resolution_mode": "registry_ref_exactly_one",
+                "carrier_relation_mode": "distinct_from_executor_backend",
+                "profile_model_resolution_mode": "registry_identity_ref"
+            },
+            "command_catalog": {
+                "fixture-command": {
+                    "command_id": "fixture-command",
+                    "surface": "vida agent-init"
+                }
+            },
+            "roles": {
+                "stage-a": {
+                    "task_classes": ["class-a"],
+                    "default_carrier": "fixture-tier"
+                },
+                "stage-b": {
+                    "task_classes": ["class-b"],
+                    "default_carrier": "fixture-tier"
+                },
+                "stage-c": {
+                    "task_classes": ["class-c"],
+                    "default_carrier": "fixture-tier"
+                }
+            },
+            "flows": {
+                "fixture-flow": {
+                    "flow_id": "fixture-flow",
+                    "steps": [
+                        rework_projection_step(
+                            "stage-a",
+                            "dispatch-a",
+                            "runtime-a",
+                            "class-a",
+                            "proof-a",
+                            Some("stage-b"),
+                            &["stage-c"],
+                            false,
+                        ),
+                        rework_projection_step(
+                            "stage-b",
+                            "dispatch-b",
+                            "runtime-b",
+                            "class-b",
+                            "proof-b",
+                            Some("stage-c"),
+                            &["stage-a"],
+                            false,
+                        ),
+                        rework_projection_step(
+                            "stage-c",
+                            "dispatch-c",
+                            "runtime-c",
+                            "class-c",
+                            "proof-c",
+                            None,
+                            &["stage-a"],
+                            true,
+                        )
+                    ]
                 }
             }
         })
+    }
+
+    fn rework_authority_fixture(
+        duplicate_target_alias: bool,
+    ) -> (
+        serde_json::Value,
+        crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
+        serde_json::Value,
+    ) {
+        let mut config = rework_authority_config();
+        if duplicate_target_alias {
+            let duplicate_alias =
+                config["flows"]["fixture-flow"]["steps"][1]["dispatch_alias"].clone();
+            config["flows"]["fixture-flow"]["steps"][2]["dispatch_alias"] = duplicate_alias.clone();
+            config["flows"]["fixture-flow"]["steps"][2]["dispatch_target"] =
+                duplicate_alias.clone();
+            config["flows"]["fixture-flow"]["steps"][2]["activation"]["dispatch_alias"] =
+                duplicate_alias;
+        }
+        let command_catalog = config["command_catalog"].clone();
+        let dispatch_aliases = config["flows"]["fixture-flow"]["steps"]
+            .as_array()
+            .expect("valid fixture steps")
+            .iter()
+            .map(|step| {
+                let node_id = step["node_id"].as_str().expect("fixture node id");
+                let role = &config["roles"][node_id];
+                serde_json::json!({
+                    "alias_id": step["dispatch_alias"].clone(),
+                    "template_role_id": node_id,
+                    "carrier_tier": role["default_carrier"].clone(),
+                    "runtime_roles": [step["runtime_role"].clone()],
+                    "task_classes": [step["task_class"].clone()],
+                    "selected_model_profile_id": step["selected_model_profile"]["profile_id"].clone(),
+                    "enabled": true,
+                    "backend_id": "fixture-backend",
+                    "backend_class": "fixture"
+                })
+            })
+            .collect::<Vec<_>>();
+        let config_hash = taskflow_authority::team_flow_transition::hash_json(&config);
+        let bundle = serde_json::json!({
+            "team_flow_authority": {
+                "authority_id": "team-flow-authority:fixture",
+                "config": {
+                    "id": "config:fixture-config",
+                    "content_blake3": config_hash
+                },
+                "registries": {
+                    "content_blake3": "fixture-registry",
+                    "dispatch_aliases": {"id": "registry:dispatch-aliases"},
+                    "commands": {"id": "registry:commands"},
+                    "profiles": {"id": "registry:profiles"}
+                },
+                "selected_config": config,
+                "source_of_truth": {
+                    "selection": "fixture-config",
+                    "options": "fixture-master",
+                    "schema": "fixture-schema"
+                }
+            },
+            "command_catalog": command_catalog,
+            "carrier_runtime": {
+                "dispatch_aliases": dispatch_aliases,
+                "executor_backend_relation": {
+                    "backend_id": "fixture-backend",
+                    "backend_class": "fixture"
+                }
+            }
+        });
+        let authority =
+            crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
+                .expect("fixture authority should compile");
+        let lane_catalog =
+            authority
+                .nodes
+                .iter()
+                .fold(serde_json::Map::new(), |mut catalog, node| {
+                    catalog.insert(
+                        node.dispatch_alias.clone(),
+                        serde_json::json!({
+                            "node_id": node.node.node_id,
+                            "dispatch_target": node.dispatch_alias
+                        }),
+                    );
+                    catalog
+                });
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "selected_flow_set": authority.snapshot.flow_ref,
+                    "team_flow_authority_id": authority.authority_id,
+                    "lane_catalog": lane_catalog
+                }
+            }
+        });
+        (bundle, authority, execution_plan)
+    }
+
+    #[test]
+    fn rehydrated_result_authority_rejects_forged_conflicting_flow_identity() {
+        let selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "resume rework".to_string(),
+            selected_role: "stage-a".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("fixture-flow".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["dev_team_flow_id:forged-result-flow-c".to_string()],
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
+            execution_plan: serde_json::json!({
+                "team_flow_authority_selected_flow_id": "forged-result-flow-a",
+                "development_flow": {
+                    "dispatch_contract": {
+                        "selected_flow_set": "forged-result-flow-b"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let blocker = team_flow_authority_from_rehydrated_selection(&selection)
+            .expect_err("forged result flow identity must fail closed");
+        assert_eq!(blocker.code, "team_flow_selected_flow_identity_conflict");
+    }
+
+    fn configured_rework_nodes(
+        authority: &crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
+        execution_plan: &serde_json::Value,
+    ) -> (
+        crate::team_flow_authority_adapter::TeamFlowNodeResolution,
+        crate::team_flow_authority_adapter::TeamFlowNodeResolution,
+    ) {
+        let source_id = authority
+            .nodes
+            .iter()
+            .find(|node| !node.node.rework_targets.is_empty())
+            .map(|node| node.node.node_id.as_str())
+            .expect("fixture should declare a rework source");
+        let source = crate::team_flow_authority_adapter::resolve_team_flow_node(
+            authority,
+            Some(execution_plan),
+            source_id,
+        )
+        .expect("configured source should resolve");
+        let target = crate::team_flow_authority_adapter::resolve_team_flow_node(
+            authority,
+            Some(execution_plan),
+            source
+                .rework_targets
+                .first()
+                .expect("fixture should declare a rework target"),
+        )
+        .expect("configured target should resolve");
+        (source, target)
+    }
+
+    fn rework_route_result(
+        status: &str,
+        execution_state: &str,
+        rework_target: &str,
+        allowed_next_node: &str,
+        receipt_backed: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "status": status,
+            "execution_state": execution_state,
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "blocker_codes": ["configured_rework_required"],
+            "rework_target": rework_target,
+            "allowed_next_node": allowed_next_node,
+            "execution_evidence": {"receipt_backed": receipt_backed}
+        })
+    }
+
+    fn receipt_backed_rework_route(
+        rework_target: &str,
+        allowed_next_node: &str,
+    ) -> DispatchReworkRoute {
+        let blocked = taskflow_contracts::Release1ContractStatus::Blocked.as_str();
+        dispatch_rework_route_from_result(&rework_route_result(
+            blocked,
+            blocked,
+            rework_target,
+            allowed_next_node,
+            true,
+        ))
+        .expect("configured rework result should produce a route")
     }
 
     #[test]
@@ -602,7 +1392,7 @@ mod tests {
         let route = dispatch_rework_route_from_result_path(&result_path.display().to_string())
             .expect("bounded regular result json should parse");
         assert_eq!(route.rework_target, "alpha_impl");
-        assert_eq!(route.allowed_next_node, "alpha_impl_rework");
+        assert_eq!(route.allowed_next_node, "alpha-impl-rework");
         assert_eq!(
             route.blocker_code.as_deref(),
             Some("verification_rework_required")
@@ -669,7 +1459,7 @@ mod tests {
                 }),
                 "fallback_lane"
             ),
-            "gamma_review"
+            "gamma-review"
         );
         assert_eq!(
             completed_result_target(
@@ -679,7 +1469,7 @@ mod tests {
                 }),
                 "fallback_lane"
             ),
-            "alpha_impl"
+            "alpha-impl"
         );
         assert_eq!(
             completed_result_target(
@@ -688,45 +1478,53 @@ mod tests {
                 }),
                 "fallback_lane"
             ),
-            "beta_gate"
+            "beta-gate"
         );
     }
 
     #[test]
-    fn rework_route_authorization_accepts_configured_backward_rework_edge() {
-        let route = DispatchReworkRoute {
-            rework_target: "alpha_impl".to_string(),
-            allowed_next_node: "alpha_impl_rework".to_string(),
-            blocker_code: Some("verification_rework_required".to_string()),
-        };
+    fn rework_route_authorization_accepts_only_explicit_configured_edge() {
+        let (_, authority, execution_plan) = rework_authority_fixture(false);
+        let (source, target) = configured_rework_nodes(&authority, &execution_plan);
+        let route = receipt_backed_rework_route(&target.node_id, &target.dispatch_target);
 
-        assert!(rework_route_is_authorized(
-            &execution_plan(),
-            "beta_gate",
-            &route
-        ));
+        rework_route_is_authorized(&authority, &execution_plan, &source.dispatch_target, &route)
+            .expect("explicit configured rework edge should authorize");
     }
 
     #[test]
-    fn rework_route_authorization_accepts_receipt_backed_same_lane_retry() {
-        let plan = serde_json::json!({
-            "development_flow": {
-                "dispatch_contract": {
-                    "lane_catalog": {
-                        "coder": {"dispatch_target": "coder", "task_class": "implementation"},
-                        "tester": {"dispatch_target": "tester", "task_class": "verification"}
-                    },
-                    "execution_lane_sequence": ["coder", "tester"]
-                }
-            }
-        });
-        let route = DispatchReworkRoute {
-            rework_target: "coder".to_string(),
-            allowed_next_node: "coder".to_string(),
-            blocker_code: Some("host_agent_execution_failed".to_string()),
-        };
+    fn rework_route_authorization_rejects_unconfigured_node_even_when_resolvable() {
+        let (_, authority, execution_plan) = rework_authority_fixture(false);
+        let (source, configured_target) = configured_rework_nodes(&authority, &execution_plan);
+        let unconfigured_target = authority
+            .nodes
+            .iter()
+            .find(|node| {
+                node.node.node_id != source.node_id
+                    && node.node.node_id != configured_target.node_id
+            })
+            .map(|node| node.node.node_id.as_str())
+            .and_then(|node_id| {
+                crate::team_flow_authority_adapter::resolve_team_flow_node(
+                    &authority,
+                    Some(&execution_plan),
+                    node_id,
+                )
+                .ok()
+            })
+            .expect("fixture should expose an unconfigured target");
+        let route = receipt_backed_rework_route(
+            &unconfigured_target.node_id,
+            &unconfigured_target.dispatch_target,
+        );
 
-        assert!(rework_route_is_authorized(&plan, "coder", &route));
+        let blocker =
+            rework_route_is_authorized(&authority, &execution_plan, &source.node_id, &route)
+                .expect_err("resolvable but undeclared edge must fail closed");
+        assert_eq!(
+            blocker.code,
+            taskflow_authority::team_flow_transition::BLOCKER_REWORK_TARGET_NOT_CONFIGURED
+        );
     }
 
     #[test]
@@ -736,27 +1534,18 @@ mod tests {
         let packet_path = root.join("current-packet.json");
         let stale_result_path = root.join("stale-result.json");
         let current_result_path = root.join("current-result.json");
-        let execution_plan = serde_json::json!({
-            "development_flow": {
-                "dispatch_contract": {
-                    "lane_catalog": {
-                        "coder": {"dispatch_target": "coder", "task_class": "implementation"},
-                        "tester": {"dispatch_target": "tester", "task_class": "verification"}
-                    },
-                    "execution_lane_sequence": ["coder", "tester"]
-                }
-            }
-        });
+        let (bundle, authority, execution_plan) = rework_authority_fixture(false);
+        let (source, target) = configured_rework_nodes(&authority, &execution_plan);
+        let blocked = taskflow_contracts::Release1ContractStatus::Blocked.as_str();
         std::fs::write(
             &stale_result_path,
-            serde_json::json!({
-                "status": "blocked",
-                "decision": "rework_required",
-                "verdict": "rework_required",
-                "rework_target": "coder",
-                "allowed_next_node": "coder",
-                "execution_evidence": {"receipt_backed": true}
-            })
+            rework_route_result(
+                blocked,
+                blocked,
+                &target.node_id,
+                &target.dispatch_target,
+                true,
+            )
             .to_string(),
         )
         .expect("stale result should write");
@@ -774,8 +1563,11 @@ mod tests {
             &packet_path,
             serde_json::json!({
                 "run_id": "run-current",
-                "dispatch_target": "coder",
-                "role_selection_full": {"execution_plan": execution_plan},
+                "dispatch_target": source.dispatch_target,
+                "role_selection_full": {
+                    "compiled_bundle": bundle,
+                    "execution_plan": execution_plan
+                },
                 "downstream_dispatch_result_path": stale_result_path
             })
             .to_string(),
@@ -787,7 +1579,7 @@ mod tests {
                 None,
                 Some(&current_result_path.display().to_string()),
                 Some(&packet_path.display().to_string()),
-                "coder",
+                &source.node_id,
             )
             .is_none(),
             "stale packet rework must not supersede an explicit current result"
@@ -797,27 +1589,84 @@ mod tests {
     }
 
     #[test]
-    fn rework_route_authorization_rejects_artifact_controlled_unknown_or_unsequenced_lane() {
-        let unknown = DispatchReworkRoute {
-            rework_target: "alpha_impl".to_string(),
-            allowed_next_node: "omega_release".to_string(),
-            blocker_code: Some("verification_rework_required".to_string()),
-        };
-        let unsequenced_target = DispatchReworkRoute {
-            rework_target: "omega_release".to_string(),
-            allowed_next_node: "omega_release".to_string(),
-            blocker_code: Some("verification_rework_required".to_string()),
-        };
+    fn rework_route_authorization_reports_missing_and_ambiguous_typed_authority() {
+        let (_, authority, execution_plan) = rework_authority_fixture(false);
+        let (source, target) = configured_rework_nodes(&authority, &execution_plan);
+        let missing = receipt_backed_rework_route(&target.node_id, "unconfigured-target");
+        let missing_blocker =
+            rework_route_is_authorized(&authority, &execution_plan, &source.node_id, &missing)
+                .expect_err("missing authority must fail closed");
+        assert_eq!(missing_blocker.code, "team_flow_node_resolution_missing");
 
-        assert!(!rework_route_is_authorized(
-            &execution_plan(),
-            "beta_gate",
-            &unknown
-        ));
-        assert!(!rework_route_is_authorized(
-            &execution_plan(),
-            "beta_gate",
-            &unsequenced_target
-        ));
+        let (_, ambiguous_authority, ambiguous_plan) = rework_authority_fixture(true);
+        let (ambiguous_source, ambiguous_target) =
+            configured_rework_nodes(&ambiguous_authority, &ambiguous_plan);
+        let ambiguous = receipt_backed_rework_route(
+            &ambiguous_target.node_id,
+            &ambiguous_target.dispatch_target,
+        );
+        let ambiguous_blocker = rework_route_is_authorized(
+            &ambiguous_authority,
+            &ambiguous_plan,
+            &ambiguous_source.node_id,
+            &ambiguous,
+        )
+        .expect_err("ambiguous authority must fail closed");
+        assert_eq!(
+            ambiguous_blocker.code,
+            "team_flow_node_resolution_ambiguous"
+        );
+    }
+
+    #[test]
+    fn rework_route_authorization_requires_consistent_receipt_outcome() {
+        let (_, authority, execution_plan) = rework_authority_fixture(false);
+        let (source, target) = configured_rework_nodes(&authority, &execution_plan);
+        let blocked = taskflow_contracts::Release1ContractStatus::Blocked.as_str();
+        let pass = taskflow_contracts::Release1ContractStatus::Pass.as_str();
+
+        let missing_receipt = dispatch_rework_route_from_result(&rework_route_result(
+            blocked,
+            blocked,
+            &target.node_id,
+            &target.dispatch_target,
+            false,
+        ))
+        .expect("rework shape should parse before authorization");
+        let missing_receipt_blocker = rework_route_is_authorized(
+            &authority,
+            &execution_plan,
+            &source.node_id,
+            &missing_receipt,
+        )
+        .expect_err("missing receipt evidence must fail closed");
+        assert_eq!(
+            missing_receipt_blocker.code,
+            taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_REQUIRED
+        );
+
+        let contradictory_outcome = dispatch_rework_route_from_result(&rework_route_result(
+            pass,
+            blocked,
+            &target.node_id,
+            &target.dispatch_target,
+            true,
+        ))
+        .expect("contradictory rework shape should reach authorization blocker");
+        let outcome_blocker = rework_route_is_authorized(
+            &authority,
+            &execution_plan,
+            &source.node_id,
+            &contradictory_outcome,
+        )
+        .expect_err("contradictory receipt outcome must fail closed");
+        assert_eq!(
+            outcome_blocker.code,
+            taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_NOT_COMPLETED
+        );
+        assert!(outcome_blocker
+            .candidates
+            .iter()
+            .any(|code| code == "host_bridge_result_decision_verdict_mismatch"));
     }
 }

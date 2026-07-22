@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 
 use crate::carrier_runtime_metadata::{
-    DEFAULT_CONSECUTIVE_FAILURE_LIMIT, DEFAULT_DEMOTION_SCORE, DEFAULT_PROBATION_TASK_RUNS,
-    DEFAULT_PROMOTION_SCORE, DEFAULT_RETIREMENT_FAILURE_LIMIT, selection_policy_rule,
-    selection_policy_u64,
+    selection_policy_rule, selection_policy_u64, DEFAULT_CONSECUTIVE_FAILURE_LIMIT,
+    DEFAULT_DEMOTION_SCORE, DEFAULT_PROBATION_TASK_RUNS, DEFAULT_PROMOTION_SCORE,
+    DEFAULT_RETIREMENT_FAILURE_LIMIT,
 };
 
 pub(crate) const WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
@@ -839,10 +839,9 @@ mod tests {
     use std::fs;
 
     use super::{
-        HostAgentFeedbackInput, HostAgentHandleStateInput, append_host_agent_observability_event,
-        load_or_initialize_host_agent_observability_state,
+        append_host_agent_observability_event, load_or_initialize_host_agent_observability_state,
         load_or_initialize_prompt_lifecycle_state, prompt_lifecycle_state_path,
-        record_host_agent_handle_state,
+        record_host_agent_handle_state, HostAgentFeedbackInput, HostAgentHandleStateInput,
     };
     use crate::temp_state::TempStateHarness;
 

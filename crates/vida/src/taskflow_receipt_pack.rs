@@ -4,9 +4,9 @@ use std::process::{Command, ExitCode};
 use serde::Serialize;
 
 use crate::release1_operator_output::{
-    RELEASE1_OPERATOR_CONTRACT_SPEC, finalize_operator_surface_verdict,
+    finalize_operator_surface_verdict, RELEASE1_OPERATOR_CONTRACT_SPEC,
 };
-use crate::state_store::{StateStore, StateStoreError, TaskRecord, work_item_is_program_container};
+use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
 
 #[derive(Debug, Clone)]
 struct TaskflowReceiptPackCommand {

@@ -1,12 +1,11 @@
 use crate::semantic_routing_features::{
-    SemanticRoutingFeatureInput, SemanticScoreInputs, extract_semantic_routing_features,
-    score_semantic_route,
+    extract_semantic_routing_features, score_semantic_route, SemanticRoutingFeatureInput,
+    SemanticScoreInputs,
 };
 use crate::{
-    RuntimeConsumptionLaneSelection, carrier_runtime_section,
-    declared_task_class_supports_requested, infer_execution_runtime_role, infer_runtime_task_class,
-    json_lookup, json_u64, role_supports_task_class, runtime_role_for_task_class,
-    task_complexity_multiplier,
+    carrier_runtime_section, declared_task_class_supports_requested, infer_execution_runtime_role,
+    infer_runtime_task_class, json_lookup, json_u64, role_supports_task_class,
+    task_complexity_multiplier, RuntimeConsumptionLaneSelection,
 };
 
 fn selection_strategy(carrier_runtime: &serde_json::Value) -> String {
@@ -1318,11 +1317,77 @@ pub(crate) fn dispatch_alias_runtime_roles(alias: &serde_json::Value) -> Vec<Str
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .or_else(|| {
+                alias["runtime_role"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
         {
             runtime_roles.push(default_runtime_role.to_string());
         }
     }
+    runtime_roles.sort();
+    runtime_roles.dedup();
     runtime_roles
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DispatchAliasRuntimeRoleResolution {
+    Missing,
+    Unique(String),
+    Exact(String),
+    Ambiguous {
+        candidates: Vec<String>,
+    },
+    AuthorityMismatch {
+        configured: String,
+        candidates: Vec<String>,
+    },
+}
+
+fn resolve_dispatch_alias_runtime_role(
+    alias: &serde_json::Value,
+) -> DispatchAliasRuntimeRoleResolution {
+    let runtime_roles = dispatch_alias_runtime_roles(alias);
+    let configured_runtime_role = alias["default_runtime_role"]
+        .as_str()
+        .or_else(|| alias["runtime_role"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match runtime_roles.as_slice() {
+        [] => DispatchAliasRuntimeRoleResolution::Missing,
+        [runtime_role] => {
+            if let Some(configured) = configured_runtime_role {
+                if configured != runtime_role {
+                    return DispatchAliasRuntimeRoleResolution::AuthorityMismatch {
+                        configured: configured.to_string(),
+                        candidates: runtime_roles.clone(),
+                    };
+                }
+            }
+            DispatchAliasRuntimeRoleResolution::Unique(runtime_role.clone())
+        }
+        _ => configured_runtime_role
+            .filter(|configured| {
+                runtime_roles
+                    .iter()
+                    .any(|runtime_role| runtime_role == configured)
+            })
+            .map(|configured| DispatchAliasRuntimeRoleResolution::Exact(configured.to_string()))
+            .unwrap_or(DispatchAliasRuntimeRoleResolution::Ambiguous {
+                candidates: runtime_roles.clone(),
+            }),
+    }
+}
+
+fn dispatch_alias_runtime_role_is_resolvable(alias: &serde_json::Value) -> bool {
+    matches!(
+        resolve_dispatch_alias_runtime_role(alias),
+        DispatchAliasRuntimeRoleResolution::Unique(_)
+            | DispatchAliasRuntimeRoleResolution::Exact(_)
+    )
 }
 
 pub(crate) fn build_runtime_assignment_from_dispatch_alias(
@@ -1375,23 +1440,60 @@ fn build_runtime_assignment_from_dispatch_alias_with_readiness(
             "unresolved_diagnostic": alias["unresolved_diagnostic"],
         });
     }
-    let runtime_role = dispatch_alias_runtime_roles(alias).into_iter().next();
-    let Some(runtime_role) = runtime_role else {
-        return serde_json::json!({
-            "enabled": false,
-            "reason": "dispatch_alias_runtime_role_missing",
-            "dispatch_alias_id": alias_id,
-            "task_class": fallback_task_class,
-        });
+    let runtime_role = match resolve_dispatch_alias_runtime_role(alias) {
+        DispatchAliasRuntimeRoleResolution::Unique(runtime_role)
+        | DispatchAliasRuntimeRoleResolution::Exact(runtime_role) => runtime_role,
+        DispatchAliasRuntimeRoleResolution::Missing => {
+            return serde_json::json!({
+                "enabled": false,
+                "reason": "dispatch_alias_runtime_role_missing",
+                "blocker_codes": ["dispatch_alias_runtime_role_missing"],
+                "dispatch_alias_id": alias_id,
+                "task_class": fallback_task_class,
+            });
+        }
+        DispatchAliasRuntimeRoleResolution::Ambiguous { candidates } => {
+            return serde_json::json!({
+                "enabled": false,
+                "reason": "dispatch_alias_runtime_role_ambiguous",
+                "blocker_codes": ["dispatch_alias_runtime_role_ambiguous"],
+                "dispatch_alias_id": alias_id,
+                "task_class": fallback_task_class,
+                "runtime_role_candidates": candidates,
+            });
+        }
+        DispatchAliasRuntimeRoleResolution::AuthorityMismatch {
+            configured,
+            candidates,
+        } => {
+            return serde_json::json!({
+                "enabled": false,
+                "reason": "dispatch_alias_runtime_role_authority_mismatch",
+                "blocker_codes": ["dispatch_alias_runtime_role_authority_mismatch"],
+                "dispatch_alias_id": alias_id,
+                "task_class": fallback_task_class,
+                "configured_runtime_role": configured,
+                "runtime_role_candidates": candidates,
+            });
+        }
     };
-    let task_class = alias["task_classes"]
+    let Some(task_class) = alias["task_classes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
         .find(|value| !value.is_empty())
-        .unwrap_or(fallback_task_class)
-        .to_string();
+        .map(str::to_string)
+    else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "dispatch_alias_task_class_missing",
+            "blocker_codes": ["dispatch_alias_task_class_missing"],
+            "dispatch_alias_id": alias_id,
+            "task_class": fallback_task_class,
+        });
+    };
     let Some(alias_carrier_id) = alias["template_role_id"]
         .as_str()
         .map(str::trim)
@@ -1457,33 +1559,38 @@ pub(crate) fn resolve_dispatch_alias_id(
     preferred_alias_id: &str,
     task_class: &str,
 ) -> Option<String> {
+    if task_class.trim().is_empty() {
+        return None;
+    }
     if !preferred_alias_id.is_empty()
         && dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some_and(|alias| {
             alias["unresolved"] != serde_json::Value::Bool(true)
                 && alias["enabled"] != serde_json::Value::Bool(false)
+                && dispatch_alias_runtime_role_is_resolvable(alias)
+                && role_supports_task_class(alias, task_class)
         })
     {
         return Some(preferred_alias_id.to_string());
     }
-    let runtime_role = runtime_role_for_task_class(task_class);
-    carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
+    let candidates = carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|alias| {
+        .filter(|alias| {
             if alias["unresolved"] == serde_json::Value::Bool(true)
                 || alias["enabled"] == serde_json::Value::Bool(false)
             {
                 return false;
             }
-            let alias_runtime_roles = dispatch_alias_runtime_roles(alias);
-            (!alias_runtime_roles.is_empty()
-                && alias_runtime_roles
-                    .iter()
-                    .any(|value| value == runtime_role))
+            dispatch_alias_runtime_role_is_resolvable(alias)
                 && role_supports_task_class(alias, task_class)
         })
-        .and_then(|alias| alias["role_id"].as_str().map(str::to_string))
+        .filter_map(|alias| alias["role_id"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [alias_id] => Some(alias_id.clone()),
+        _ => None,
+    }
 }
 
 pub(crate) fn build_runtime_assignment_from_resolved_constraints(
@@ -1547,6 +1654,36 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
     scoped_row_isolation: Option<&str>,
     required_carrier_id: Option<&str>,
 ) -> serde_json::Value {
+    if conversation_role.trim().is_empty() {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "conversation_role_binding_missing",
+            "blocker_codes": ["conversation_role_binding_missing"],
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+        });
+    }
+    if task_class.trim().is_empty() {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "task_class_binding_missing",
+            "blocker_codes": ["task_class_binding_missing"],
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+        });
+    }
+    if execution_runtime_role.trim().is_empty() {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "runtime_role_binding_missing",
+            "blocker_codes": ["runtime_role_binding_missing"],
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+        });
+    }
     let carrier_runtime = carrier_runtime_section(compiled_bundle);
     let selection_rule = selection_rule_for_runtime(carrier_runtime);
     let selection_strategy = selection_strategy(carrier_runtime);
@@ -2422,15 +2559,6 @@ pub(crate) fn build_runtime_assignment(
     assignment
 }
 
-fn stage_policy_string(value: &serde_json::Value, field: &str, default_value: &str) -> String {
-    value[field]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_value)
-        .to_string()
-}
-
 fn stage_policy_optional_string(value: &serde_json::Value, fields: &[&str]) -> Option<String> {
     fields.iter().find_map(|field| {
         value[*field]
@@ -2498,9 +2626,38 @@ fn stage_policy_assignment(
     row: &serde_json::Value,
     index: usize,
 ) -> serde_json::Value {
-    let task_class = stage_policy_string(row, "task_class", stage_id);
-    let runtime_role = stage_policy_string(row, "runtime_role", "worker");
-    let conversation_role = stage_policy_string(row, "conversation_role", &runtime_role);
+    let Some(task_class) = stage_policy_optional_string(row, &["task_class"]) else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "stage_task_class_binding_missing",
+            "blocker_codes": ["stage_task_class_binding_missing"],
+            "stage_id": stage_id,
+            "attempt_index": index,
+        });
+    };
+    let Some(runtime_role) =
+        stage_policy_optional_string(row, &["runtime_role", "execution_runtime_role"])
+    else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "stage_runtime_role_binding_missing",
+            "blocker_codes": ["stage_runtime_role_binding_missing"],
+            "stage_id": stage_id,
+            "attempt_index": index,
+            "task_class": task_class,
+        });
+    };
+    let Some(conversation_role) = stage_policy_optional_string(row, &["conversation_role"]) else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "stage_conversation_role_binding_missing",
+            "blocker_codes": ["stage_conversation_role_binding_missing"],
+            "stage_id": stage_id,
+            "attempt_index": index,
+            "task_class": task_class,
+            "runtime_role": runtime_role,
+        });
+    };
     let scoped_bundle = stage_policy_scoped_bundle(compiled_bundle, row);
     let isolation = row["isolation"]
         .as_str()
@@ -2645,6 +2802,8 @@ mod tests {
         build_runtime_assignment_preview_from_dispatch_alias,
         build_runtime_assignment_preview_from_resolved_constraints as build_runtime_assignment_preview_from_resolved_constraints_impl,
         build_stage_attempt_policy_from_config as build_stage_attempt_policy_from_config_impl,
+        resolve_dispatch_alias_id, resolve_dispatch_alias_runtime_role,
+        DispatchAliasRuntimeRoleResolution,
     };
     use crate::RuntimeConsumptionLaneSelection;
 
@@ -2779,6 +2938,117 @@ mod tests {
                 ))
             })
             .expect("one materialized dispatch alias")
+    }
+
+    #[test]
+    fn dispatch_alias_runtime_role_resolution_is_typed_and_order_independent() {
+        assert_eq!(
+            resolve_dispatch_alias_runtime_role(&serde_json::json!({
+                "runtime_roles": []
+            })),
+            DispatchAliasRuntimeRoleResolution::Missing
+        );
+        assert_eq!(
+            resolve_dispatch_alias_runtime_role(&serde_json::json!({
+                "runtime_roles": ["worker"]
+            })),
+            DispatchAliasRuntimeRoleResolution::Unique("worker".to_string())
+        );
+        assert_eq!(
+            resolve_dispatch_alias_runtime_role(&serde_json::json!({
+                "runtime_roles": ["worker", "coach"]
+            })),
+            DispatchAliasRuntimeRoleResolution::Ambiguous {
+                candidates: vec!["coach".to_string(), "worker".to_string()]
+            }
+        );
+        assert_eq!(
+            resolve_dispatch_alias_runtime_role(&serde_json::json!({
+                "runtime_roles": ["worker", "coach"],
+                "default_runtime_role": "worker"
+            })),
+            DispatchAliasRuntimeRoleResolution::Exact("worker".to_string())
+        );
+        assert!(matches!(
+            resolve_dispatch_alias_runtime_role(&serde_json::json!({
+                "runtime_roles": ["worker"],
+                "default_runtime_role": "coach"
+            })),
+            DispatchAliasRuntimeRoleResolution::AuthorityMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn resolve_dispatch_alias_id_requires_exact_or_unique_relation() {
+        let alias = |role_id: &str| {
+            serde_json::json!({
+                "role_id": role_id,
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"]
+            })
+        };
+        let bundle = |aliases: Vec<serde_json::Value>| {
+            serde_json::json!({
+                "carrier_runtime": { "dispatch_aliases": aliases }
+            })
+        };
+
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle(Vec::new()), "", "implementation"),
+            None
+        );
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle(vec![alias("alias-a")]), "", "implementation"),
+            Some("alias-a".to_string())
+        );
+        let aliases = vec![alias("alias-a"), alias("alias-b")];
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle(aliases.clone()), "", "implementation"),
+            None
+        );
+        assert_eq!(
+            resolve_dispatch_alias_id(
+                &bundle(aliases.into_iter().rev().collect()),
+                "",
+                "implementation"
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_dispatch_alias_id(
+                &bundle(vec![alias("alias-a"), alias("alias-b")]),
+                "alias-b",
+                "implementation"
+            ),
+            Some("alias-b".to_string())
+        );
+    }
+
+    #[test]
+    fn dispatch_alias_assignment_blocks_ambiguous_runtime_roles() {
+        let compiled_bundle = serde_json::json!({
+            "carrier_runtime": {
+                "dispatch_aliases": [{
+                    "role_id": "ambiguous-alias",
+                    "runtime_roles": ["worker", "coach"],
+                    "task_classes": ["implementation"]
+                }]
+            }
+        });
+        let assignment = build_runtime_assignment_preview_from_dispatch_alias(
+            &compiled_bundle,
+            "ambiguous-alias",
+            "implementation",
+        );
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(
+            assignment["reason"],
+            "dispatch_alias_runtime_role_ambiguous"
+        );
+        assert_eq!(
+            assignment["blocker_codes"][0],
+            "dispatch_alias_runtime_role_ambiguous"
+        );
     }
 
     fn configured_backend_identity(compiled_bundle: &serde_json::Value) -> (String, String) {
@@ -2995,12 +3265,10 @@ mod tests {
         let policy = build_stage_attempt_policy_from_config(&compiled_bundle, "analysis");
 
         assert_eq!(policy["status"], "pass");
-        assert!(
-            policy["blocker_codes"]
-                .as_array()
-                .expect("blocker codes should render")
-                .is_empty()
-        );
+        assert!(policy["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .is_empty());
         assert_eq!(policy["attempt_count"], 2);
         assert_eq!(
             policy["source_path"],
@@ -3146,16 +3414,14 @@ mod tests {
             "policy={policy:#}"
         );
         assert_eq!(policy["attempts"][0]["enabled"], false);
-        assert!(
-            policy["attempts"][0]["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|candidate| {
-                    candidate["carrier_id"] == "analysis_writer"
-                        && candidate["reason"] == "write_scope_inadmissible_for_isolation"
-                })
-        );
+        assert!(policy["attempts"][0]["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|candidate| {
+                candidate["carrier_id"] == "analysis_writer"
+                    && candidate["reason"] == "write_scope_inadmissible_for_isolation"
+            }));
     }
 
     #[test]
@@ -3260,16 +3526,14 @@ mod tests {
             policy["attempts"][0]["reason"],
             "no_carrier_satisfies_runtime_role_or_task_class"
         );
-        assert!(
-            policy["attempts"][0]["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|candidate| {
-                    candidate["carrier_id"] == "readonly_implementer"
-                        && candidate["reason"] == "write_scope_inadmissible_for_task_class"
-                })
-        );
+        assert!(policy["attempts"][0]["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|candidate| {
+                candidate["carrier_id"] == "readonly_implementer"
+                    && candidate["reason"] == "write_scope_inadmissible_for_task_class"
+            }));
         assert_eq!(
             policy["attempts"][0]["requested_carrier_id"],
             "readonly_implementer"
@@ -3979,20 +4243,18 @@ mod tests {
             assignment["selected_model_profile_id"],
             "codex_gpt54_low_write"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "senior"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("over_budget"))
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "senior"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("over_budget"))
+            }));
     }
 
     #[test]
@@ -4098,8 +4360,8 @@ mod tests {
                 }
             }),
         ]);
-        compiled_bundle["carrier_runtime"]["model_selection"]["reasoning_floor_by_task_class"]["verification"] =
-            serde_json::json!("high");
+        compiled_bundle["carrier_runtime"]["model_selection"]["reasoning_floor_by_task_class"]
+            ["verification"] = serde_json::json!("high");
         compiled_bundle["agent_system"] = serde_json::json!({
             "model_selection": {
                 "budget_policy": {
@@ -4129,20 +4391,18 @@ mod tests {
             "strict_over_budget_escalation"
         );
         assert_eq!(assignment["over_budget_escalation_allowed"], true);
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "opencode_cli"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("reasoning_floor_not_met"))
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("reasoning_floor_not_met"))
+            }));
     }
 
     #[test]
@@ -4252,30 +4512,26 @@ mod tests {
             assignment["selection_source_paths"]["selected_model_profile_id"],
             "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
         );
-        assert!(
-            assignment["selection_override_reasons"]
-                .as_array()
-                .expect("selection override reasons should render")
-                .iter()
-                .any(|row| {
-                    row["reason"] == "selection_budget_filtered_over_budget_candidates"
-                        && row["field"] == "selected_carrier_id"
-                })
-        );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "senior"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("over_budget"))
-                })
-        );
+        assert!(assignment["selection_override_reasons"]
+            .as_array()
+            .expect("selection override reasons should render")
+            .iter()
+            .any(|row| {
+                row["reason"] == "selection_budget_filtered_over_budget_candidates"
+                    && row["field"] == "selected_carrier_id"
+            }));
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "senior"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("over_budget"))
+            }));
     }
 
     #[test]
@@ -4350,22 +4606,20 @@ mod tests {
             assignment["selected_model_profile_id"],
             "codex_gpt54_low_write"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "opencode_cli"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("write_scope_inadmissible_for_task_class")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| {
+                            reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                        })
+            }));
     }
 
     #[test]
@@ -4423,22 +4677,20 @@ mod tests {
             assignment["selected_model_profile_id"],
             "codex_gpt56_luna_xhigh_write"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["model_profile_id"] == "codex_gpt56_luna_xhigh_readonly"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("write_scope_inadmissible_for_task_class")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["model_profile_id"] == "codex_gpt56_luna_xhigh_readonly"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| {
+                            reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                        })
+            }));
     }
 
     #[test]
@@ -4512,23 +4764,21 @@ mod tests {
             assignment["selected_model_profile_id"],
             "codex_gpt54_low_write"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "pi_cli"
-                        && row["model_profile_id"] == "pi_gpt54_mini_low_guarded"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("write_scope_inadmissible_for_task_class")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "pi_cli"
+                    && row["model_profile_id"] == "pi_gpt54_mini_low_guarded"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| {
+                            reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                        })
+            }));
     }
 
     #[test]
@@ -4822,26 +5072,21 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "vida_coder"
-                        && row["configured_backend_readiness"]["backend_class"]
-                            == "service_executor"
-                        && row["configured_backend_readiness"]["raw_provider_dispatch_forbidden"]
-                            == true
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("service_executor_guard_not_ready")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"]["backend_class"] == "service_executor"
+                    && row["configured_backend_readiness"]["raw_provider_dispatch_forbidden"]
+                        == true
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
     }
 
     #[test]
@@ -4912,23 +5157,19 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "vida_coder"
-                        && row["configured_backend_readiness"].is_null()
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("service_executor_guard_not_ready")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"].is_null()
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
     }
 
     #[test]
@@ -5017,24 +5258,19 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "vida_coder"
-                        && row["configured_backend_readiness"]["backend_class"]
-                            == "service_executor"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str() == Some("service_executor_guard_not_ready")
-                            })
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"]["backend_class"] == "service_executor"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
     }
 
     #[test]
@@ -5169,12 +5405,10 @@ mod tests {
             assignment["selected_model_profile_id"],
             "readonly_review_profile"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .is_empty()
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .is_empty());
     }
 
     #[test]
@@ -5274,22 +5508,19 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "middle");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "opencode_cli"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
-                        && row["external_backend_readiness"]["status"]
-                            == "interactive_auth_required"
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["status"] == "interactive_auth_required"
+            }));
     }
 
     #[test]
@@ -5410,19 +5641,16 @@ mod tests {
         );
 
         assert_eq!(assignment["selected_carrier_id"], "middle");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "vibe_cli"
-                        && row["external_backend_readiness"]["status"] == "provider_auth_failed"
-                        && row["external_backend_readiness"]["blocked"] == true
-                        && row["external_backend_readiness"]["blocker_code"]
-                            == "provider_auth_failed"
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vibe_cli"
+                    && row["external_backend_readiness"]["status"] == "provider_auth_failed"
+                    && row["external_backend_readiness"]["blocked"] == true
+                    && row["external_backend_readiness"]["blocker_code"] == "provider_auth_failed"
+            }));
         let _ = std::fs::remove_dir_all(project_root);
     }
 
@@ -5518,24 +5746,21 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "middle");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "hermes_cli"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
-                        && row["external_backend_readiness"]["status"]
-                            == "external_cli_command_not_found"
-                        && row["external_backend_readiness"]["blocker_code"]
-                            == "tool_execution_failed"
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "hermes_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["status"]
+                        == "external_cli_command_not_found"
+                    && row["external_backend_readiness"]["blocker_code"] == "tool_execution_failed"
+            }));
     }
 
     #[test]
@@ -5628,23 +5853,21 @@ mod tests {
 
         assert_eq!(assignment["enabled"], true);
         assert_eq!(assignment["selected_carrier_id"], "internal_support");
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "external_bridge"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
-                        && row["external_backend_readiness"]["blocked"] == true
-                        && row["external_backend_readiness"]["blocker_code"]
-                            == "configured_backend_dispatch_failed"
-                })
-        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "external_bridge"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["blocked"] == true
+                    && row["external_backend_readiness"]["blocker_code"]
+                        == "configured_backend_dispatch_failed"
+            }));
     }
 
     #[test]
@@ -5876,33 +6099,29 @@ mod tests {
             assignment["selection_source_paths"]["selected_route_profile_mapping"],
             "agent_system.routing.implementation.profiles.internal_subagents"
         );
-        assert!(
-            assignment["selection_override_reasons"]
-                .as_array()
-                .expect("selection override reasons should render")
-                .iter()
-                .any(|row| {
-                    row["reason"] == "route_profile_mapping_applied"
-                        && row["field"] == "selected_model_profile_id"
-                        && row["source_path"]
-                            == "agent_system.routing.implementation.profiles.internal_subagents"
-                })
-        );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "internal_subagents"
-                        && row["model_profile_id"] == "internal_review"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| reason.as_str() == Some("route_profile_mapping_mismatch"))
-                })
-        );
+        assert!(assignment["selection_override_reasons"]
+            .as_array()
+            .expect("selection override reasons should render")
+            .iter()
+            .any(|row| {
+                row["reason"] == "route_profile_mapping_applied"
+                    && row["field"] == "selected_model_profile_id"
+                    && row["source_path"]
+                        == "agent_system.routing.implementation.profiles.internal_subagents"
+            }));
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "internal_subagents"
+                    && row["model_profile_id"] == "internal_review"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("route_profile_mapping_mismatch"))
+            }));
     }
 
     #[test]
@@ -6054,13 +6273,11 @@ mod tests {
             assignment["selection_strategy_source_path"],
             "carrier_runtime.model_selection.default_strategy"
         );
-        assert!(
-            assignment["supported_selection_strategies"]
-                .as_array()
-                .expect("supported strategies should render")
-                .iter()
-                .any(|strategy| strategy == "balanced_cost_quality")
-        );
+        assert!(assignment["supported_selection_strategies"]
+            .as_array()
+            .expect("supported strategies should render")
+            .iter()
+            .any(|strategy| strategy == "balanced_cost_quality"));
     }
 
     #[test]

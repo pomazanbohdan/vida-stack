@@ -3407,18 +3407,16 @@ agent_system:
         assert_eq!(summary["status"], "pass");
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
-        assert!(
-            summary["route_primary_external_required_backends"]
-                .as_array()
-                .expect("required backends should be an array")
-                .is_empty()
-        );
+        assert!(summary["route_primary_external_required_backends"]
+            .as_array()
+            .expect("required backends should be an array")
+            .is_empty());
         assert_eq!(summary["blocker_code"], serde_json::Value::Null);
     }
 
     #[test]
-    fn route_primary_backends_discovers_real_project_shape_without_requiring_legacy_external_routes()
-     {
+    fn route_primary_backends_discovers_real_project_shape_without_requiring_legacy_external_routes(
+    ) {
         let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
@@ -3429,11 +3427,9 @@ agent_system:
         .expect("project config should parse");
 
         let backends = super::route_primary_external_backends(&overlay);
-        assert!(
-            backends
-                .iter()
-                .any(|backend| backend == "internal_subagents")
-        );
+        assert!(backends
+            .iter()
+            .any(|backend| backend == "internal_subagents"));
         assert!(!backends.iter().any(|backend| backend == "qwen_cli"));
         let required_external =
             super::route_primary_external_backends_without_internal_fallback(&overlay);

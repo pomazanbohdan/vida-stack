@@ -61,12 +61,10 @@ pub(crate) fn blocker_codes(
     }
     let normalized = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
     if normalized.is_empty() && blocked_evidence_present {
-        vec![
-            crate::contract_profile_adapter::blocker_code_str(
-                crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
-            )
-            .to_string(),
-        ]
+        vec![crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+        )
+        .to_string()]
     } else {
         normalized
     }

@@ -3,16 +3,16 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::contract_profile_adapter::{
-    BlockerCode, CompatibilityBoundary, CompatibilityClass, blocker_code_str,
-    canonical_blocker_code_list, canonical_compatibility_class_str,
-    classify_compatibility_boundary, shared_operator_output_contract_parity_error,
+    blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
+    classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
+    CompatibilityBoundary, CompatibilityClass,
 };
 use crate::status_surface::{
-    StatusRunGraphArtifactSource, current_runtime_projection as build_current_runtime_projection,
-    first_non_empty_artifact_ref,
+    current_runtime_projection as build_current_runtime_projection, first_non_empty_artifact_ref,
+    StatusRunGraphArtifactSource,
 };
 use crate::status_surface_operator_contracts::{
-    LatestRunGraphArtifactRefsInputs, latest_run_graph_artifact_refs,
+    latest_run_graph_artifact_refs, LatestRunGraphArtifactRefsInputs,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -301,10 +301,10 @@ fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
     let dispatch_receipt = trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"]
         .as_str()
         .unwrap_or("none");
-    let runtime_consumption =
-        trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"]
-            .as_str()
-            .unwrap_or("none");
+    let runtime_consumption = trace_evidence["root_trace"]
+        ["runtime_consumption_latest_snapshot_path"]
+        .as_str()
+        .unwrap_or("none");
     let protocol_binding = trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"]
         .as_str()
         .unwrap_or("none");
@@ -2817,10 +2817,11 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent() {
-        let blocker_codes = vec![
-            crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
-                .to_string(),
-        ];
+        let blocker_codes =
+            vec![
+                crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
+                    .to_string(),
+            ];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2842,11 +2843,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("concrete run/task/packet"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("concrete run/task/packet")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2898,12 +2897,10 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_explain_latest_run_graph_checkpoint_leakage() {
-        let blocker_codes = vec![
-            crate::blocker_code_str(
-                crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
-            )
-            .to_string(),
-        ];
+        let blocker_codes = vec![crate::blocker_code_str(
+            crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+        )
+        .to_string()];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2925,11 +2922,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("checkpoint evidence"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("checkpoint evidence")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2977,27 +2972,21 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow protocol-binding check"))
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow consume bundle check"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow protocol-binding check")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume bundle check")));
         let no_target_recovery_action = next_actions
             .iter()
             .find(|action| action.contains("no validated run_id"))
             .expect("recovery readiness without target should produce no-target action");
         assert!(!no_target_recovery_action.contains("vida taskflow recovery latest"));
         assert!(!no_target_recovery_action.contains("vida taskflow consume continue"));
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida task reconcile-closed-runs --limit 25"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida task reconcile-closed-runs --limit 25")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -3053,11 +3042,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow recovery status run-doctor"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-doctor")));
         assert!(next_actions
             .iter()
             .any(|action| action.contains("vida taskflow consume continue --run-id run-doctor")));
@@ -3071,12 +3058,10 @@ mod tests {
         assert_eq!(evidence["status"], "no_target");
         assert_eq!(evidence["run_id"], serde_json::Value::Null);
         assert_eq!(evidence["task_id"], serde_json::Value::Null);
-        assert!(
-            evidence["reason"]
-                .as_str()
-                .expect("reason should be string")
-                .contains("no validated run_id")
-        );
+        assert!(evidence["reason"]
+            .as_str()
+            .expect("reason should be string")
+            .contains("no validated run_id"));
     }
 
     #[test]

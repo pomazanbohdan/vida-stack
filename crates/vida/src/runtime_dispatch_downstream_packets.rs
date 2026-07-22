@@ -12,9 +12,8 @@ use crate::runtime_dispatch_packets::{
 };
 use crate::runtime_proof_scope::proof_scope_from_planner_metadata_and_text;
 use crate::{
-    RuntimeConsumptionLaneSelection, derive_lane_status,
-    dispatch_contract_allowed_next_lane_sequence, dispatch_contract_lane,
-    downstream_activation_fields, json_string, validate_runtime_dispatch_packet_contract,
+    derive_lane_status, downstream_activation_fields, json_string,
+    validate_runtime_dispatch_packet_contract, RuntimeConsumptionLaneSelection,
 };
 
 fn neutral_downstream_activation_evidence() -> serde_json::Value {
@@ -38,33 +37,118 @@ fn infer_downstream_lane_id_for_dispatch_target(
     current_dispatch_target: &str,
     downstream_target: &str,
     explicit_lane_id: Option<String>,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     if explicit_lane_id.is_some() || downstream_target.trim().is_empty() {
-        return explicit_lane_id;
+        return Ok(explicit_lane_id);
     }
-    let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
-    let sequence = dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
-    let current_index = sequence.iter().position(|lane_id| {
-        lane_id == current_dispatch_target
-            || crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-                &role_selection.execution_plan,
-                lane_id,
-            )
-            .is_some_and(|resolution| resolution.dispatch_target == current_dispatch_target)
-    });
+    let sequence = crate::runtime_dispatch_state::typed_lane_node_sequence(role_selection, false)?;
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.code)?;
+    let current_node = authority
+        .resolve_target(None, current_dispatch_target)
+        .map_err(|blocker| blocker.code)?;
+    let downstream_node = authority
+        .resolve_target(None, downstream_target)
+        .map_err(|blocker| blocker.code)?;
+    let current_index = sequence
+        .iter()
+        .position(|node| node.node_id == current_node.node_id);
     let candidate_lanes = current_index
         .map(|index| sequence.iter().skip(index + 1).collect::<Vec<_>>())
         .unwrap_or_else(|| sequence.iter().collect::<Vec<_>>());
-    candidate_lanes.into_iter().find_map(|lane_id| {
-        crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-            &role_selection.execution_plan,
-            lane_id,
-        )
-        .filter(|resolution| {
-            resolution.dispatch_target == downstream_target && lane_id.as_str() != downstream_target
+    Ok(candidate_lanes
+        .into_iter()
+        .find(|node| node.node_id == downstream_node.node_id)
+        .map(|node| {
+            (node.lane_id != node.dispatch_target && node.lane_id != downstream_target)
+                .then(|| node.lane_id.clone())
         })
-        .map(|_| lane_id.clone())
-    })
+        .flatten())
+}
+
+fn exact_downstream_successor_selection(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    current_dispatch_target: &str,
+    downstream_dispatch_target: &str,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
+    let current_node_id = crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+        .ok_or_else(|| "team_flow_authority_selected_node_id_missing".to_string())?;
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.code)?;
+    let current_node = authority
+        .resolve_target(None, current_node_id)
+        .map_err(|blocker| blocker.code)?;
+    let current_matches_receipt = [
+        current_node.node_id.as_str(),
+        current_node.dispatch_target.as_str(),
+        current_node.dispatch_alias.as_str(),
+    ]
+    .into_iter()
+    .any(|candidate| candidate == current_dispatch_target.trim());
+    if !current_matches_receipt {
+        return Err(format!(
+            "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
+            current_node.node_id, current_dispatch_target
+        ));
+    }
+    let successor_node_id = current_node
+        .next_node
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("team_flow_exact_successor_missing:{}", current_node.node_id))?;
+    let successor = authority
+        .resolve_target(None, successor_node_id)
+        .map_err(|blocker| blocker.code)?;
+    let downstream_matches_successor = [
+        successor.node_id.as_str(),
+        successor.dispatch_target.as_str(),
+        successor.dispatch_alias.as_str(),
+    ]
+    .into_iter()
+    .any(|candidate| candidate == downstream_dispatch_target.trim());
+    if !downstream_matches_successor {
+        return Err(format!(
+            "team_flow_downstream_target_successor_mismatch:{}:{}:{}",
+            current_node.node_id, successor.node_id, downstream_dispatch_target
+        ));
+    }
+    let mut progressed = role_selection.clone();
+    let plan = progressed
+        .execution_plan
+        .as_object_mut()
+        .ok_or_else(|| "team_flow_authority_execution_plan_missing".to_string())?;
+    plan.insert(
+        "team_flow_authority_selected_node_id".to_string(),
+        serde_json::Value::String(successor.node_id.clone()),
+    );
+    let contract = plan
+        .get_mut("development_flow")
+        .and_then(|flow| flow.get_mut("dispatch_contract"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "team_flow_authority_dispatch_contract_missing".to_string())?;
+    contract.insert(
+        "team_flow_authority_selected_node_id".to_string(),
+        serde_json::Value::String(successor.node_id.clone()),
+    );
+    contract.insert(
+        "selected_node_id".to_string(),
+        serde_json::Value::String(successor.node_id.clone()),
+    );
+    if let Some(selected_flow_contract) = plan
+        .get_mut("selected_flow_contract")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if selected_flow_contract.contains_key("selected_node_id") {
+            selected_flow_contract.insert(
+                "selected_node_id".to_string(),
+                serde_json::Value::String(successor.node_id),
+            );
+        }
+    }
+    Ok(progressed)
 }
 
 fn push_unique_owned_path(paths: &mut Vec<String>, path: &str) {
@@ -127,40 +211,33 @@ pub(crate) fn configured_lane_contract_field(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
     field: &str,
-) -> Option<String> {
-    let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)?;
-    let activation = lane.get("activation").unwrap_or(lane);
-    json_string(activation.get(field))
+) -> Result<Option<String>, String> {
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.code)?;
+    let node = authority
+        .resolve_target(None, dispatch_target)
+        .map_err(|blocker| blocker.code)?;
+    let value = node
+        .activation
+        .get(field)
+        .or_else(|| node.assignment.get(field))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
         .or_else(|| {
             (field == "activation_runtime_role")
-                .then(|| json_string(activation.get("runtime_role")))?
-        })
-        .or_else(|| {
-            lane.get("runtime_assignment").and_then(|assignment| {
-                json_string(assignment.get(field)).or_else(|| {
-                    (field == "activation_runtime_role")
-                        .then(|| json_string(assignment.get("runtime_role")))?
-                })
-            })
-        })
-        .or_else(|| {
-            lane.get("carrier_runtime_assignment")
-                .and_then(|assignment| {
-                    json_string(assignment.get(field)).or_else(|| {
-                        (field == "activation_runtime_role")
-                            .then(|| json_string(assignment.get("runtime_role")))?
-                    })
-                })
-        })
-        .or_else(|| {
-            (field == "activation_runtime_role").then(|| json_string(lane.get("runtime_role")))?
-        })
+                .then(|| node.runtime_role.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    Ok(value)
 }
 
 pub(crate) fn configured_lane_runtime_role(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     configured_lane_contract_field(role_selection, dispatch_target, "activation_runtime_role")
 }
 
@@ -189,28 +266,45 @@ impl DownstreamDispatchPacketContract {
         activation_runtime_role_hint: Option<String>,
         implementation_owned_paths_override: &[String],
         project_root: &Path,
-    ) -> Self {
-        let target_resolution = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-            &role_selection.execution_plan,
-            raw_dispatch_target,
-        );
-        let resolved_lane_id = target_resolution.as_ref().and_then(|resolution| {
-            if raw_dispatch_target == resolution.dispatch_target {
-                None
-            } else {
-                resolution.lane_id.clone()
+    ) -> Result<Self, String> {
+        let authority = crate::runtime_dispatch_state::require_team_flow_authority_for_selection(
+            role_selection,
+        )
+        .map_err(|blocker| blocker.code)?;
+        let target_node = if let Some(selected_node_id) =
+            crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+        {
+            let selected = authority
+                .resolve_target(None, selected_node_id)
+                .map_err(|blocker| blocker.code)?;
+            if ![
+                selected.node_id.as_str(),
+                selected.dispatch_target.as_str(),
+                selected.dispatch_alias.as_str(),
+            ]
+            .into_iter()
+            .any(|candidate| candidate == raw_dispatch_target.trim())
+            {
+                return Err(format!(
+                    "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
+                    selected.node_id, raw_dispatch_target
+                ));
             }
-        });
-        let dispatch_target = target_resolution
-            .as_ref()
-            .map(|resolution| resolution.dispatch_target.clone())
-            .unwrap_or_else(|| raw_dispatch_target.to_string());
+            selected
+        } else {
+            authority
+                .resolve_target(None, raw_dispatch_target)
+                .map_err(|blocker| blocker.code)?
+        };
+        let dispatch_target = target_node.dispatch_target.clone();
+        let resolved_lane_id =
+            (target_node.lane_id != dispatch_target).then(|| target_node.lane_id.clone());
         let downstream_lane_id = infer_downstream_lane_id_for_dispatch_target(
             role_selection,
             current_dispatch_target,
             dispatch_target.as_str(),
             explicit_lane_id.or(resolved_lane_id),
-        );
+        )?;
         let lookup_target = downstream_lane_id
             .clone()
             .unwrap_or_else(|| dispatch_target.clone());
@@ -231,7 +325,7 @@ impl DownstreamDispatchPacketContract {
                     role_selection,
                     lookup_target.as_str(),
                     "activation_agent_type",
-                )
+                )?
                 .or_else(|| {
                     runtime_assignment_activation_field(role_selection, "activation_agent_type")
                 });
@@ -240,7 +334,7 @@ impl DownstreamDispatchPacketContract {
                 activation_runtime_role = configured_lane_runtime_role(
                     role_selection,
                     lookup_target.as_str(),
-                )
+                )?
                 .or_else(|| {
                     runtime_assignment_activation_field(role_selection, "activation_runtime_role")
                 });
@@ -257,11 +351,14 @@ impl DownstreamDispatchPacketContract {
                 lookup_target.as_str(),
                 handoff_runtime_role.as_str(),
             );
-        let closure_class =
-            dispatch_contract_lane(&role_selection.execution_plan, lookup_target.as_str())
-                .and_then(|lane| lane["closure_class"].as_str())
-                .unwrap_or("implementation")
-                .to_string();
+        let closure_class = if lookup_target.is_empty() {
+            "implementation".to_string()
+        } else {
+            authority
+                .resolve_target(None, lookup_target.as_str())
+                .map_err(|blocker| blocker.code)?
+                .closure_class
+        };
         let owned_paths =
             if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
                 let mut owned_paths = if implementation_owned_paths_override.is_empty() {
@@ -304,7 +401,7 @@ impl DownstreamDispatchPacketContract {
                 );
             }
         }
-        Self {
+        Ok(Self {
             dispatch_target,
             downstream_lane_id,
             lookup_target,
@@ -316,7 +413,7 @@ impl DownstreamDispatchPacketContract {
             owned_paths,
             proof_artifact_paths,
             implementation_isolation,
-        }
+        })
     }
 
     fn set_field(
@@ -453,11 +550,40 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     packet_path: Option<&Path>,
     implementation_owned_paths_override: &[String],
 ) -> serde_json::Value {
+    match downstream_dispatch_packet_body_with_owned_paths_result(
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        packet_path,
+        implementation_owned_paths_override,
+    ) {
+        Ok(packet) => packet,
+        Err(blocker_code) => serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [blocker_code],
+            "dispatch_target": receipt.downstream_dispatch_target,
+        }),
+    }
+}
+
+fn downstream_dispatch_packet_body_with_owned_paths_result(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet_path: Option<&Path>,
+    implementation_owned_paths_override: &[String],
+) -> Result<serde_json::Value, String> {
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let raw_downstream_target = receipt
         .downstream_dispatch_target
         .as_deref()
         .unwrap_or_default();
+    let progressed_role_selection = exact_downstream_successor_selection(
+        role_selection,
+        receipt.dispatch_target.as_str(),
+        raw_downstream_target,
+    )?;
+    let role_selection = &progressed_role_selection;
     let contract = DownstreamDispatchPacketContract::for_dispatch_target(
         role_selection,
         receipt.dispatch_target.as_str(),
@@ -467,7 +593,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         receipt.activation_runtime_role.clone(),
         implementation_owned_paths_override,
         &project_root,
-    );
+    )?;
     let downstream_target = contract.dispatch_target.as_str();
     let downstream_contract_lookup_target = contract.lookup_target.as_str();
     let (downstream_dispatch_kind, _downstream_dispatch_surface, _, _) =
@@ -485,11 +611,11 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     let packet_template_kind = if downstream_target.is_empty() {
         "delivery_task_packet".to_string()
     } else {
-        crate::runtime_dispatch_state::runtime_dispatch_packet_kind(
-            &role_selection.execution_plan,
+        crate::runtime_dispatch_state::runtime_dispatch_packet_kind_for_role_selection(
+            role_selection,
             downstream_contract_lookup_target,
             &downstream_dispatch_kind,
-        )
+        )?
     };
     let activation_command = packet_path
         .and_then(|path| path.to_str())
@@ -700,12 +826,10 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert(
         "downstream_lane_status".to_string(),
-        serde_json::json!(
-            receipt
-                .downstream_dispatch_status
-                .as_deref()
-                .map(|status| { derive_lane_status(status, None, None).as_str().to_string() })
-        ),
+        serde_json::json!(receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .map(|status| { derive_lane_status(status, None, None).as_str().to_string() })),
     );
     body.insert(
         "downstream_supersedes_receipt_id".to_string(),
@@ -764,10 +888,9 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     body.insert("execution_truth".to_string(), execution_truth);
     body.insert("activation_evidence".to_string(), activation_evidence);
     body.insert("host_runtime".to_string(), host_runtime);
-    body.insert(
-        "role_selection_full".to_string(),
-        serde_json::to_value(role_selection).expect("role selection should serialize"),
-    );
+    let persisted_role_selection =
+        crate::runtime_dispatch_state::persisted_role_selection_projection(role_selection)?;
+    body.insert("role_selection_full".to_string(), persisted_role_selection);
     body.insert(
         "run_graph_bootstrap".to_string(),
         run_graph_bootstrap.clone(),
@@ -778,7 +901,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     let mut packet = serde_json::Value::Object(body);
     contract.apply_to_packet(&mut packet);
-    packet
+    Ok(packet)
 }
 
 fn runtime_assignment_activation_field(
@@ -815,13 +938,14 @@ pub(crate) fn write_runtime_downstream_dispatch_packet_at_with_owned_paths(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     implementation_owned_paths_override: &[String],
 ) -> Result<(), String> {
-    let body = downstream_dispatch_packet_body_with_owned_paths(
+    let mut body = downstream_dispatch_packet_body_with_owned_paths_result(
         role_selection,
         run_graph_bootstrap,
         receipt,
         Some(packet_path),
         implementation_owned_paths_override,
-    );
+    )?;
+    crate::runtime_dispatch_state::normalize_persisted_dispatch_packet_role_selection(&mut body)?;
     validate_runtime_dispatch_packet_contract(&body, "Runtime downstream dispatch packet")?;
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode downstream dispatch packet: {error}"))?;
@@ -886,7 +1010,11 @@ pub(crate) fn write_runtime_downstream_dispatch_packet_with_owned_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::downstream_dispatch_packet_body_with_owned_paths;
+    use super::{
+        downstream_dispatch_packet_body_with_owned_paths,
+        downstream_dispatch_packet_body_with_owned_paths_result,
+        exact_downstream_successor_selection, DownstreamDispatchPacketContract,
+    };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::PathBuf;
 
@@ -908,8 +1036,40 @@ mod tests {
         }
     }
 
+    fn select_current_node(
+        selection: &mut RuntimeConsumptionLaneSelection,
+        current_target: &str,
+    ) -> String {
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &selection.compiled_bundle,
+            None,
+            None,
+        )
+        .expect("test TeamFlow authority should compile");
+        let node = authority
+            .resolve_target(None, current_target)
+            .expect("test current target should resolve");
+        let flow_id = authority.projection().snapshot.flow_ref.clone();
+        let node_id = node.node_id.clone();
+        let authority_id = authority.projection().authority_id.clone();
+        let config_hash = authority.projection().config_authority_hash.clone();
+        let registry_hash = authority.projection().registry_authority_hash.clone();
+        selection.execution_plan["team_flow_authority_selected_flow_id"] =
+            serde_json::json!(flow_id);
+        selection.execution_plan["team_flow_authority_selected_node_id"] =
+            serde_json::json!(node_id);
+        let contract = &mut selection.execution_plan["development_flow"]["dispatch_contract"];
+        contract["selected_flow_set"] = serde_json::json!(flow_id);
+        contract["selected_node_id"] = serde_json::json!(node_id);
+        contract["team_flow_authority_selected_node_id"] = serde_json::json!(node_id);
+        contract["team_flow_authority_id"] = serde_json::json!(authority_id);
+        contract["team_flow_config_hash"] = serde_json::json!(config_hash);
+        contract["team_flow_registry_hash"] = serde_json::json!(registry_hash);
+        node_id
+    }
+
     fn role_selection_with_empty_request() -> RuntimeConsumptionLaneSelection {
-        RuntimeConsumptionLaneSelection {
+        let mut selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -922,7 +1082,10 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: Vec::new(),
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::runtime_dispatch_state::repository_team_flow_test_bundle_for_flow(Some(
+                    "default_delivery",
+                )),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {
                     "replanning": {
@@ -932,7 +1095,7 @@ mod tests {
                 "development_flow": {
                     "dispatch_contract": {
                         "lane_catalog": {
-                            "coach": {
+                            "coach_test_gate": {
                                 "packet_template_kind": "coach_review_packet",
                                 "task_class": "coach",
                                 "runtime_role": "coach",
@@ -957,7 +1120,9 @@ mod tests {
                 }
             }),
             reason: "test".to_string(),
-        }
+        };
+        select_current_node(&mut selection, "test_author");
+        selection
     }
 
     fn receipt_with_coach_downstream() -> crate::state_store::RunGraphDispatchReceipt {
@@ -974,7 +1139,7 @@ mod tests {
             dispatch_packet_path: Some("dispatch.json".to_string()),
             dispatch_result_path: Some("result.json".to_string()),
             blocker_code: None,
-            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_target: Some("coach_test_gate".to_string()),
             downstream_dispatch_command: Some("vida agent-init".to_string()),
             downstream_dispatch_note: Some("after test author evidence".to_string()),
             downstream_dispatch_ready: true,
@@ -994,15 +1159,110 @@ mod tests {
     }
 
     #[test]
+    fn selected_non_default_flow_replays_canonical_node_and_dispatch_target_through_alias() {
+        let mut role_selection = role_selection_with_empty_request();
+        let (flow_id, current_node_id) =
+            crate::runtime_dispatch_state::select_repository_non_default_flow(&mut role_selection)
+                .expect("repository should expose an enabled non-default flow");
+        let authority = crate::runtime_dispatch_state::require_team_flow_authority_for_selection(
+            &role_selection,
+        )
+        .expect("selected flow authority should compile");
+        let current = authority
+            .resolve_target(None, &current_node_id)
+            .expect("selected node should resolve");
+        let successor_id = current
+            .next_node
+            .as_deref()
+            .expect("selected flow fixture should expose a successor");
+        let successor = authority
+            .resolve_target(None, successor_id)
+            .expect("successor should resolve");
+        let current_replay = if current.dispatch_alias.trim().is_empty() {
+            current.dispatch_target.clone()
+        } else {
+            current.dispatch_alias.clone()
+        };
+        let successor_replay = if successor.dispatch_alias.trim().is_empty() {
+            successor.dispatch_target.clone()
+        } else {
+            successor.dispatch_alias.clone()
+        };
+        let progressed = exact_downstream_successor_selection(
+            &role_selection,
+            &current_replay,
+            &successor_replay,
+        )
+        .expect("alias replay should follow the selected flow successor");
+        assert_eq!(
+            crate::runtime_dispatch_state::selected_flow_ref(&progressed),
+            Some(flow_id.as_str())
+        );
+        let progressed_node_id = crate::runtime_dispatch_state::selected_flow_node_ref(&progressed)
+            .expect("successor node id should remain persisted");
+        assert_eq!(progressed_node_id, successor.node_id);
+        let canonical_successor =
+            crate::runtime_dispatch_state::require_team_flow_authority_for_selection(&progressed)
+                .expect("replayed selected flow authority should compile")
+                .resolve_target(None, progressed_node_id)
+                .expect("canonical successor node should resolve");
+        assert_eq!(canonical_successor.node_id, successor.node_id);
+        assert_eq!(
+            canonical_successor.dispatch_target,
+            successor.dispatch_target
+        );
+
+        let mut unknown = role_selection.clone();
+        unknown.execution_plan["team_flow_authority_selected_node_id"] =
+            serde_json::json!("unknown-persisted-node");
+        let unknown_node = crate::runtime_dispatch_state::selected_flow_node_ref(&unknown)
+            .expect("unknown node id should remain observable");
+        assert!(
+            crate::runtime_dispatch_state::require_team_flow_authority_for_selection(&unknown)
+                .expect("selected flow authority should still compile")
+                .resolve_target(None, unknown_node)
+                .is_err(),
+            "unknown persisted node must fail closed"
+        );
+
+        let contract = DownstreamDispatchPacketContract::for_dispatch_target(
+            &progressed,
+            current.dispatch_target.as_str(),
+            successor_replay.as_str(),
+            None,
+            None,
+            None,
+            &[],
+            std::path::Path::new("."),
+        )
+        .expect("downstream contract should canonicalize replayed alias");
+        assert_eq!(contract.dispatch_target, successor.dispatch_target);
+    }
+
+    #[test]
     fn coach_downstream_packet_synthesizes_non_empty_request_text_from_packet_body() {
+        let mut role_selection = role_selection_with_empty_request();
+        role_selection.execution_plan["team_flow_authority_selected_flow_id"] =
+            serde_json::json!("default_delivery");
+        role_selection.execution_plan["development_flow"]["dispatch_contract"] = serde_json::json!({
+            "selected_flow_set": "default_delivery",
+            "team_flow_authority_id": "authority-test",
+            "team_flow_config_hash": "config-hash-test",
+            "team_flow_registry_hash": "registry-hash-test"
+        });
+        let current_node_id =
+            role_selection.execution_plan["team_flow_authority_selected_node_id"].clone();
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["selected_node_id"] = current_node_id.clone();
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["team_flow_authority_selected_node_id"] = current_node_id;
         let packet = downstream_dispatch_packet_body_with_owned_paths(
-            &role_selection_with_empty_request(),
+            &role_selection,
             &serde_json::json!({ "run_id": "feature-test" }),
             &receipt_with_coach_downstream(),
             None,
             &[],
         );
-
         let request_text = packet["request_text"]
             .as_str()
             .expect("downstream packet should expose request_text");
@@ -1015,12 +1275,40 @@ mod tests {
         assert!(request_text.contains("blocking_question:"));
         assert!(prompt.contains("Request: review_goal:"));
         assert!(!prompt.trim_end().ends_with("Request:"));
+        let persisted_selection = &packet["role_selection_full"];
+        assert!(persisted_selection["compiled_bundle"].is_null());
+        assert_eq!(
+            persisted_selection["execution_plan"]["team_flow_authority_selected_flow_id"],
+            "default_delivery"
+        );
+        assert_eq!(
+            persisted_selection["execution_plan"]["development_flow"]["dispatch_contract"]
+                ["team_flow_authority_id"],
+            "authority-test"
+        );
+        assert_eq!(
+            persisted_selection["execution_plan"]["development_flow"]["dispatch_contract"]
+                ["team_flow_config_hash"],
+            "config-hash-test"
+        );
+        assert_eq!(
+            persisted_selection["execution_plan"]["development_flow"]["dispatch_contract"]
+                ["team_flow_registry_hash"],
+            "registry-hash-test"
+        );
+        assert!(
+            serde_json::to_vec(&packet)
+                .expect("downstream packet should serialize")
+                .len()
+                < 1024 * 1024
+        );
     }
 
     #[test]
     fn downstream_packet_canonicalizes_lane_id_to_top_level_dispatch_target() {
         let mut role_selection = role_selection_with_empty_request();
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]["coach_test_gate"] = serde_json::json!({
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            ["coach_test_gate"] = serde_json::json!({
             "dispatch_target": "coach",
             "task_class": "coach",
             "runtime_role": "coach",
@@ -1029,6 +1317,16 @@ mod tests {
         });
         let mut receipt = receipt_with_coach_downstream();
         receipt.downstream_dispatch_target = Some("coach_test_gate".to_string());
+        let expected_target =
+            crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                &role_selection.compiled_bundle,
+                Some("default_delivery"),
+                None,
+            )
+            .expect("default delivery authority should compile")
+            .resolve_target(None, "coach_test_gate")
+            .expect("coach test gate should resolve")
+            .dispatch_target;
 
         let packet = downstream_dispatch_packet_body_with_owned_paths(
             &role_selection,
@@ -1038,8 +1336,8 @@ mod tests {
             &[],
         );
 
-        assert_eq!(packet["dispatch_target"], "coach");
-        assert_eq!(packet["downstream_dispatch_target"], "coach");
+        assert_eq!(packet["dispatch_target"], expected_target);
+        assert_eq!(packet["downstream_dispatch_target"], expected_target);
         assert_eq!(
             packet["source_downstream_dispatch_target"],
             "coach_test_gate"
@@ -1142,7 +1440,7 @@ mod tests {
         ));
         std::fs::create_dir_all(project_root.join("test")).expect("test dir should exist");
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let role_selection = RuntimeConsumptionLaneSelection {
+        let mut role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -1156,7 +1454,10 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: Vec::new(),
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::runtime_dispatch_state::repository_team_flow_test_bundle_for_flow(Some(
+                    "default_delivery",
+                )),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {},
                 "runtime_assignment": {
@@ -1205,10 +1506,41 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (current_target, current_runtime_role, downstream_target, downstream_runtime_role) = {
+            let authority =
+                crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                    &role_selection.compiled_bundle,
+                    None,
+                    None,
+                )
+                .expect("test TeamFlow authority should compile");
+            let nodes = authority.ordered_nodes().collect::<Vec<_>>();
+            let (current, downstream) = nodes
+                .windows(2)
+                .find_map(|pair| {
+                    (pair[1].node.task_class == "test_authoring").then_some((&pair[0], &pair[1]))
+                })
+                .expect("fixture should expose a test-authoring successor");
+            (
+                current.node.node_id.clone(),
+                current.node.runtime_role.clone(),
+                downstream.node.node_id.clone(),
+                downstream.node.runtime_role.clone(),
+            )
+        };
+        select_current_node(&mut role_selection, &current_target);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            [&downstream_target] = serde_json::json!({
+            "dispatch_target": downstream_target.clone(),
+            "task_class": "test_authoring",
+            "runtime_role": downstream_runtime_role,
+            "closure_class": "implementation",
+            "packet_template_kind": "delivery_task_packet"
+        });
         let mut receipt = receipt_with_coach_downstream();
-        receipt.dispatch_target = "designer".to_string();
-        receipt.downstream_dispatch_target = Some("autotester".to_string());
-        receipt.activation_runtime_role = Some("designer".to_string());
+        receipt.dispatch_target = current_target;
+        receipt.downstream_dispatch_target = Some(downstream_target.clone());
+        receipt.activation_runtime_role = Some(current_runtime_role);
         receipt.activation_agent_type = Some("middle".to_string());
 
         let packet = downstream_dispatch_packet_body_with_owned_paths(
@@ -1223,22 +1555,18 @@ mod tests {
         assert_eq!(packet["activation_agent_type"], "middle");
         assert_eq!(
             packet["delivery_task_packet"]["handoff_task_class"],
-            "implementation_medium"
+            "test_authoring"
         );
         assert_eq!(
             packet["delivery_task_packet"]["handoff_runtime_role"],
             "worker"
-        );
-        assert_eq!(
-            packet["delivery_task_packet"]["implementation_isolation"]["canonical_worktree_writes_allowed"],
-            false
         );
         let owned_paths = packet["delivery_task_packet"]["owned_paths"]
             .as_array()
             .expect("owned paths should render");
         assert!(
             owned_paths.iter().any(|path| path == "test"),
-            "autotester owned scope should include a test write root: {owned_paths:?}"
+            "test-author owned scope should include a test write root: {owned_paths:?}"
         );
         assert!(
             owned_paths.iter().any(|path| path
@@ -1259,5 +1587,64 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn ambiguous_alias_resolves_only_through_exact_successor() {
+        let mut role_selection = role_selection_with_empty_request();
+        select_current_node(&mut role_selection, "duplication_reviewer");
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &role_selection.compiled_bundle,
+            Some("default_delivery"),
+            None,
+        )
+        .expect("default delivery authority should compile");
+        let successor = authority
+            .resolve_target(None, "tester")
+            .expect("exact successor should resolve");
+        assert!(
+            authority
+                .resolve_target(None, successor.dispatch_alias.as_str())
+                .is_err(),
+            "successor alias must remain ambiguous in this fixture"
+        );
+        let mut receipt = receipt_with_coach_downstream();
+        receipt.dispatch_target = "duplication_reviewer".to_string();
+        receipt.downstream_dispatch_target = Some(successor.dispatch_alias.clone());
+
+        let packet = downstream_dispatch_packet_body_with_owned_paths_result(
+            &role_selection,
+            &serde_json::json!({ "run_id": "ambiguous-successor" }),
+            &receipt,
+            None,
+            &[],
+        )
+        .expect("ambiguous alias should resolve through current exact successor");
+
+        assert_eq!(
+            packet["role_selection_full"]["execution_plan"]["team_flow_authority_selected_node_id"],
+            successor.node_id
+        );
+    }
+
+    #[test]
+    fn unknown_downstream_target_fails_closed_before_packet_write() {
+        let role_selection = role_selection_with_empty_request();
+        let mut receipt = receipt_with_coach_downstream();
+        receipt.downstream_dispatch_target = Some("tampered_missing_target".to_string());
+
+        let blocker = downstream_dispatch_packet_body_with_owned_paths_result(
+            &role_selection,
+            &serde_json::json!({ "run_id": "tamper" }),
+            &receipt,
+            None,
+            &[],
+        )
+        .expect_err("unknown downstream target must fail closed");
+
+        assert_eq!(
+            blocker,
+            "team_flow_downstream_target_successor_mismatch:test_author:coach_test_gate:tampered_missing_target"
+        );
     }
 }

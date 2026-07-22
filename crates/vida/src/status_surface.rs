@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use fs2::FileExt;
 
-use crate::{StatusArgs, state_store, state_store::StateStore};
+use crate::{state_store, state_store::StateStore, StatusArgs};
 
-use crate::status_surface_json_report::{StatusJsonReportInputs, build_status_json_report};
+use crate::status_surface_json_report::{build_status_json_report, StatusJsonReportInputs};
 use crate::status_surface_operator_contracts::{
-    StatusOperatorContractInputs, build_status_operator_contracts,
+    build_status_operator_contracts, StatusOperatorContractInputs,
 };
-use crate::status_surface_text_report::{StatusTextReportInputs, emit_status_text_report};
+use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1441,8 +1441,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 }
                             }
                         };
-                    let mut operator_contracts = match build_status_operator_contracts(
-                        StatusOperatorContractInputs {
+                    let mut operator_contracts =
+                        match build_status_operator_contracts(StatusOperatorContractInputs {
                             boot_compatibility: boot_compatibility.as_ref(),
                             migration_state: migration_state.as_ref(),
                             protocol_binding: &protocol_binding,
@@ -1478,27 +1478,28 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             root_session_write_guard_status: root_session_write_guard["status"]
                                 .as_str()
                                 .unwrap_or(""),
-                            root_local_write_allowed:
-                                root_session_write_guard["root_local_write_allowed"]
-                                    .as_bool()
-                                    .unwrap_or(false),
+                            root_local_write_allowed: root_session_write_guard
+                                ["root_local_write_allowed"]
+                                .as_bool()
+                                .unwrap_or(false),
                             root_local_write_allowed_for_only_these_paths:
-                                &root_session_write_guard["root_local_write_allowed_for_only_these_paths"],
+                                &root_session_write_guard
+                                    ["root_local_write_allowed_for_only_these_paths"],
                             activation_view_only_dispatch_blocker_active: root_session_write_guard
                                 ["activation_view_only_dispatch_blocker_active"]
                                 .as_bool()
                                 .unwrap_or(false),
-                            blocking_dispatch_blocker_code:
-                                root_session_write_guard["blocking_dispatch_blocker_code"].as_str(),
+                            blocking_dispatch_blocker_code: root_session_write_guard
+                                ["blocking_dispatch_blocker_code"]
+                                .as_str(),
                             operator_session_projection: &operator_session_projection,
-                        },
-                    ) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            eprintln!("Failed to render status json: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
+                        }) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                eprintln!("Failed to render status json: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                     if active_exception_takeover {
                         reclassify_retrieval_release_operator_contract_blockers(
                             &mut operator_contracts,
@@ -3308,7 +3309,7 @@ mod tests {
         run_graph_latest_snapshot_inconsistent_next_action,
     };
     use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;
-    use crate::{BlockerCode, blocker_code_str, state_store};
+    use crate::{blocker_code_str, state_store, BlockerCode};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -3824,12 +3825,10 @@ mod tests {
         assert_eq!(payload["state_access"]["retry_count"], 8);
         assert_eq!(payload["state_access"]["wait_budget_ms"], 2_000);
         assert_eq!(payload["state_access"]["retry_delay_ms"], 250);
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action")
-                .contains("waited up to 2000ms across 8 lock probes")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("waited up to 2000ms across 8 lock probes"));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -4370,14 +4369,13 @@ mod tests {
             false
         );
         assert!(payload["host_agents"].get("recent_events").is_none());
-        assert!(
-            payload["host_agents"]
-                .get("latest_feedback_event")
-                .is_none()
-        );
+        assert!(payload["host_agents"]
+            .get("latest_feedback_event")
+            .is_none());
         assert!(payload["host_agents"]["budget"].get("by_task_id").is_none());
         assert_eq!(
-            payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]["count"],
+            payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]
+                ["count"],
             2
         );
     }
@@ -4822,8 +4820,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status()
-     {
+    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status(
+    ) {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -6133,8 +6131,8 @@ host_environment:
     }
 
     #[test]
-    fn latest_run_graph_dispatch_receipt_checkpoint_leakage_has_explicit_next_action_and_contracts_remain_valid()
-     {
+    fn latest_run_graph_dispatch_receipt_checkpoint_leakage_has_explicit_next_action_and_contracts_remain_valid(
+    ) {
         let next_action =
             run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action().to_string();
         assert!(next_action.contains("checkpoint evidence"));

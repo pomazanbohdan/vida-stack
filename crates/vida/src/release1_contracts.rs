@@ -693,7 +693,11 @@ impl Release1ContractStatus {
     }
 
     pub(crate) const fn from_bool(ok: bool) -> Self {
-        if ok { Self::Pass } else { Self::Blocked }
+        if ok {
+            Self::Pass
+        } else {
+            Self::Blocked
+        }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
@@ -1715,6 +1719,11 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "crap_gt_1000_growth",
     "cyclic_dependency",
     "dev_team_disabled",
+    "team_flow_authority_invalid",
+    "team_flow_authority_unavailable",
+    "team_flow_authority_flow_policy_disabled",
+    "team_flow_authority_binding_invalid",
+    "pre_dispatch_bootstrap_error",
     "duplicate_task_id",
     "existing_task_conflict",
     "explicit_run_graph_continuation_binding_not_ready",
@@ -1886,6 +1895,14 @@ const RETRIEVAL_TRUST_EVIDENCE_KEYS: &[&str] = &[
 fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
     if value.is_empty() {
         return None;
+    }
+    if let Some(details) = value.strip_prefix("team_flow_authority_materialization_blocked:") {
+        let mut parts = details.splitn(2, ':');
+        let code = parts.next().unwrap_or_default().trim();
+        let path = parts.next().unwrap_or_default().trim();
+        if !code.is_empty() && !path.is_empty() {
+            return Some(value.to_string());
+        }
     }
     if BLOCKER_FAMILY_NAMES
         .iter()
@@ -2317,17 +2334,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        ApprovalStatus, BlockerCode, CanonicalApprovalArtifact, CanonicalApprovalRecord,
-        CanonicalArtifactHeader, CanonicalArtifactType, CanonicalClosureAdmissionArtifact,
-        CanonicalClosureAdmissionRecord, CanonicalEvaluationArtifact, CanonicalEvaluationRun,
-        CanonicalFeedbackArtifact, CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact,
-        CanonicalIncidentEvidenceBundle, CanonicalLaneExecutionReceipt,
-        CanonicalLaneExecutionReceiptArtifact, CanonicalMemoryArtifact, CanonicalMemoryRecord,
-        CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
-        CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
-        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus,
-        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
-        WorkflowClass, blocker_code_str, blocker_code_value, canonical_approval_status_str,
+        blocker_code_str, blocker_code_value, canonical_approval_status_str,
         canonical_artifact_type_str, canonical_blocker_code_list,
         canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
@@ -2336,7 +2343,17 @@ mod tests {
         cli_probe_incident_baseline_summary, cli_probe_tool_contract_summary,
         cli_probe_trace_baseline_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str,
+        release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
+        CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
+        CanonicalClosureAdmissionArtifact, CanonicalClosureAdmissionRecord,
+        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalFeedbackArtifact,
+        CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact, CanonicalIncidentEvidenceBundle,
+        CanonicalLaneExecutionReceipt, CanonicalLaneExecutionReceiptArtifact,
+        CanonicalMemoryArtifact, CanonicalMemoryRecord, CanonicalPolicyDecision,
+        CanonicalPolicyDecisionArtifact, CanonicalToolContract, CanonicalToolContractArtifact,
+        CanonicalTraceArtifact, CanonicalTraceEvent, CompatibilityBoundary, CompatibilityClass,
+        ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
+        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
     #[test]
@@ -3622,6 +3639,16 @@ mod tests {
             "missing_unknown_family",
         ]);
         assert!(codes.is_empty());
+    }
+
+    #[test]
+    fn blocker_code_normalization_preserves_team_flow_materialization_code_and_path() {
+        let value =
+            "team_flow_authority_materialization_blocked:team_flow_authority_work_item_flow_binding_target_missing:dev_team.work_item_flow_bindings[0].flow_id";
+        assert_eq!(
+            canonical_blocker_code_list([value]),
+            vec![value.to_string()]
+        );
     }
 
     #[test]

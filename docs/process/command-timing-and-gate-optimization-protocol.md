@@ -154,6 +154,17 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 22. After each coherent work pool, record whether root-token usage could have been reduced by earlier advisory prefetch, compact command output, task snapshot refresh, or batching TaskFlow mutations; create or update a TaskFlow optimization item when the answer is yes.
 23. Treat megabyte runtime JSON, unbounded `--json` defaults, raw host-bridge prompts in normal output, and missing field selectors as runtime defects when they materially increase root-token usage or make batch closure unreliable.
 
+### Cargo preflight gate
+
+Before any Cargo command or Cargo-built binary proof, run a cheap preflight and
+persist its result with the timing envelope. The preflight must validate the
+exact `cwd`, the effective `CARGO_TARGET_DIR` (including caller-provided or
+project-policy resolution), and one intentional package/filter expression.
+Reject the operation when the effective target silently falls back to Cargo's
+unintended default `<cwd>\target` or when cwd/target/filter cannot be stated
+exactly; do not start a broad gate to discover a preflight mistake. The proof
+record must retain the resolved paths, filter, policy, and rejection reason.
+
 ## Bounded-Cycle Execution Strategy
 
 For each bounded cycle, bind one authoritative runtime snapshot and reuse it for selection, routing, proof, and closure until an explicit invalidation event (state mutation, dispatch/rebind, failed gate, ownership change, or elapsed freshness boundary) requires one replacement snapshot. Do not refresh the same evidence ad hoc between steps.
@@ -167,6 +178,15 @@ Parallelize only independent read-only discovery, reproduction, and proof prepar
 When a host bridge fails or loses its activation, retry or rebind idempotently with the same request and idempotency key before creating a new packet. A retry is successful only with execution evidence and a terminal result; activation-only, view-only, admissible-but-not-active, or receipt-recorded responses are never success and never authorize a new write path.
 
 Use focused proof once per defect, one package-level proof for the compatible batch, and broader proof only at the coherent pack or epic gate. Do not rerun a broader gate to recover missing focused fields; repair selectors or artifact capture first.
+
+### Focused Batch Before Broad Gate
+
+Plan one complete focused batch before invoking any broad/full gate. The batch
+must list the intentional filters/scenarios for the bounded file or surface,
+run once as a coherent proof unit, and finish all planned rows after any
+production fix discovered during shaping. A broad gate is admissible only after
+that batch passes or records a typed blocker; never use the broad gate as a probe
+for missing focused evidence.
 
 After closure, run exactly one post-close runtime self-diagnostic for the coherent cycle. Record the truthful result, including blocker codes and a bounded blocker/rescope when any authority or projection is unavailable. When the diagnostic finds no reusable optimization, record `no_instruction_update_reason` explicitly; when it finds one, update the mapped canonical instruction/protocol owner in the same bounded batch.
 
@@ -338,10 +358,10 @@ These observations do not prove one root cause. They prove that timing diagnosti
 artifact_path: process/command-timing-and-gate-optimization-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-07-12
+artifact_revision: 2026-07-22
 schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-07-12T16:24:00+03:00
+updated_at: 2026-07-22T00:00:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl

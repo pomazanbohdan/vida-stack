@@ -3,9 +3,10 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    RenderMode, print_surface_header, print_surface_line,
+    print_surface_header, print_surface_line,
     state_store::{RunGraphContinuationBinding, RunGraphStatus, StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode,
 };
 
 pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
@@ -963,8 +964,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status()
-     {
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1037,8 +1038,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_after_automatic_dispatch_start()
-     {
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_after_automatic_dispatch_start(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1233,13 +1234,11 @@ mod tests {
             binding.is_none(),
             "closed stale run must not bind continuation"
         );
-        assert!(
-            store
-                .run_graph_continuation_binding("run-closed-stale")
-                .await
-                .expect("read closed stale binding")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_continuation_binding("run-closed-stale")
+            .await
+            .expect("read closed stale binding")
+            .is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

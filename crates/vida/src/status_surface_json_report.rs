@@ -1,4 +1,4 @@
-use crate::release1_contracts::{CompatibilityClass, canonical_compatibility_class_str};
+use crate::release1_contracts::{canonical_compatibility_class_str, CompatibilityClass};
 
 pub(crate) struct StatusJsonReportInputs<'a> {
     pub(crate) summary_only: bool,
@@ -767,40 +767,33 @@ mod tests {
         })
         .expect("full report should build");
 
-        assert!(
-            summary_json
-                .as_object()
-                .expect("summary JSON should be an object")
-                .get("latest_run_graph_mixed_posture")
-                .is_none()
-        );
-        assert!(
-            summary_json
-                .as_object()
-                .expect("summary JSON should be an object")
-                .get("latest_run_graph_activation_vs_execution_evidence")
-                .is_none()
-        );
-        assert!(
-            full_json
-                .as_object()
-                .expect("full JSON should be an object")
-                .get("latest_run_graph_mixed_posture")
-                .is_none()
-        );
-        assert!(
-            full_json
-                .as_object()
-                .expect("full JSON should be an object")
-                .get("latest_run_graph_activation_vs_execution_evidence")
-                .is_none()
-        );
+        assert!(summary_json
+            .as_object()
+            .expect("summary JSON should be an object")
+            .get("latest_run_graph_mixed_posture")
+            .is_none());
+        assert!(summary_json
+            .as_object()
+            .expect("summary JSON should be an object")
+            .get("latest_run_graph_activation_vs_execution_evidence")
+            .is_none());
+        assert!(full_json
+            .as_object()
+            .expect("full JSON should be an object")
+            .get("latest_run_graph_mixed_posture")
+            .is_none());
+        assert!(full_json
+            .as_object()
+            .expect("full JSON should be an object")
+            .get("latest_run_graph_activation_vs_execution_evidence")
+            .is_none());
         assert_eq!(
             full_json["latest_run_graph_status"]["mixed_posture"]["effective_execution_posture"],
             "hybrid_external_cli"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_receipt"]["activation_semantics"]["activation_kind"],
+            full_json["latest_run_graph_dispatch_receipt"]["activation_semantics"]
+                ["activation_kind"],
             "execution_evidence"
         );
         assert_eq!(
@@ -822,11 +815,9 @@ mod tests {
             false
         );
         assert!(summary_json["host_agents"].get("recent_events").is_none());
-        assert!(
-            summary_json["host_agents"]
-                .get("latest_feedback_event")
-                .is_none()
-        );
+        assert!(summary_json["host_agents"]
+            .get("latest_feedback_event")
+            .is_none());
         assert_eq!(
             full_json["host_agents"]["historical_evidence"]["recent_events_included"],
             true
@@ -852,7 +843,8 @@ mod tests {
             "claim-conflict"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]["projection_source"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_source"],
             "reconciled_run_graph_status"
         );
         assert_eq!(
@@ -864,11 +856,13 @@ mod tests {
             false
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]["dispatch_target"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["dispatch_target"],
             "implementer"
         );
         assert_eq!(
-            summary_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]["projection_vs_receipt_parity"],
+            summary_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_vs_receipt_parity"],
             "reconciled_from_receipt"
         );
     }
@@ -1043,11 +1037,13 @@ mod tests {
         .expect("full report should build");
 
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]["projection_source"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_source"],
             "persisted_run_graph_status"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]["projection_vs_receipt_parity"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_vs_receipt_parity"],
             "no_receipt"
         );
         assert_eq!(
@@ -1059,19 +1055,23 @@ mod tests {
             true
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]["dispatch_target"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["dispatch_target"],
             "business_analyst"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]["downstream_dispatch_target"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_target"],
             "implementer"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]["downstream_dispatch_status"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_status"],
             "resume_ready"
         );
         assert_eq!(
-            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]["downstream_dispatch_ready"],
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_ready"],
             true
         );
     }

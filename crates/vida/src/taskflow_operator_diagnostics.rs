@@ -379,12 +379,10 @@ mod tests {
             serde_json::json!(["stale_missing_task_run_graph"])
         );
         assert_eq!(payload["artifact_refs"]["run_id"], "run-stale");
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action should be text")
-                .contains("vida lane retire run-stale --receipt-id run-stale")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("vida lane retire run-stale --receipt-id run-stale"));
     }
 
     #[test]
@@ -403,11 +401,9 @@ mod tests {
             payload["diagnostic_kind"],
             "consume_continue_resume_blocked"
         );
-        assert!(
-            payload["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("expects dispatch_packet_path"))
-        );
+        assert!(payload["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("expects dispatch_packet_path")));
     }
 
     #[test]
@@ -441,14 +437,10 @@ mod tests {
         );
         assert_eq!(payload["artifact_refs"]["run_id"], "run-packet");
         assert_eq!(payload["artifact_refs"]["task_id"], "task-packet");
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action should be text")
-                .contains(
-                    "vida taskflow packet repair --run-id run-packet --from-task task-packet"
-                )
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("vida taskflow packet repair --run-id run-packet --from-task task-packet"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -491,12 +483,10 @@ mod tests {
         );
         assert!(payload["artifact_refs"]["run_id"].is_null());
         assert!(payload["artifact_refs"]["task_id"].is_null());
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action should be text")
-                .contains("canonical task metadata")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("canonical task metadata"));
 
         let _ = std::fs::remove_dir_all(&outside_root);
     }

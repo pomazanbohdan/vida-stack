@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use crate::{MemoryArgs, StateStore, print_surface_header, print_surface_line, state_store};
+use crate::{print_surface_header, print_surface_line, state_store, MemoryArgs, StateStore};
 
 const MEMORY_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 

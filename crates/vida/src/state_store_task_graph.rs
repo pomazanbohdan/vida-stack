@@ -1485,12 +1485,10 @@ mod tests {
 
         let critical_path =
             StateStore::critical_path_from_rows(&rows).expect("critical path should render");
-        assert!(
-            critical_path
-                .nodes
-                .iter()
-                .all(|node| node.issue_type != "step" && node.issue_type != "todo")
-        );
+        assert!(critical_path
+            .nodes
+            .iter()
+            .all(|node| node.issue_type != "step" && node.issue_type != "todo"));
     }
 
     #[test]
@@ -1558,16 +1556,12 @@ mod tests {
             }),
             "{graph_issues:?}"
         );
-        assert!(
-            !graph_issues
-                .iter()
-                .any(|issue| issue.issue_id == "step-under-task")
-        );
-        assert!(
-            !graph_issues
-                .iter()
-                .any(|issue| issue.issue_id == "step-under-subtask")
-        );
+        assert!(!graph_issues
+            .iter()
+            .any(|issue| issue.issue_id == "step-under-task"));
+        assert!(!graph_issues
+            .iter()
+            .any(|issue| issue.issue_id == "step-under-subtask"));
 
         let mut new_step_under_epic = task_record("new-step-under-epic", "open");
         new_step_under_epic.issue_type = "step".to_string();
@@ -1908,11 +1902,9 @@ mod tests {
         }));
         assert!(!issues.iter().any(|issue| issue.issue_id == "valid-subtask"));
         assert!(!issues.iter().any(|issue| issue.issue_id == "valid-step"));
-        assert!(
-            !issues
-                .iter()
-                .any(|issue| issue.issue_id == "valid-runtime-defect-step")
-        );
+        assert!(!issues
+            .iter()
+            .any(|issue| issue.issue_id == "valid-runtime-defect-step"));
         assert!(!issues.iter().any(|issue| {
             issue.issue_type == "invalid_parent_child_kind"
                 && issue.issue_id == "legacy-todo"
@@ -2286,12 +2278,10 @@ mod tests {
 
         assert!(legacy.ready_now);
         assert!(!legacy.ready_parallel_safe);
-        assert!(
-            legacy
-                .parallel_blockers
-                .iter()
-                .any(|value| value == "execution_mode_not_parallel_safe")
-        );
+        assert!(legacy
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "execution_mode_not_parallel_safe"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2336,12 +2326,10 @@ mod tests {
         assert!(!candidate.ready_parallel_safe);
         assert!(candidate.parallel_blockers.iter().any(|value| value
             == scheduler_dispatch::PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION));
-        assert!(
-            projection
-                .parallel_candidates_after_current
-                .iter()
-                .all(|task| task.id != "task-empty-owned-paths")
-        );
+        assert!(projection
+            .parallel_candidates_after_current
+            .iter()
+            .all(|task| task.id != "task-empty-owned-paths"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2384,18 +2372,14 @@ mod tests {
 
         assert!(candidate.ready_now);
         assert!(!candidate.ready_parallel_safe);
-        assert!(
-            candidate
-                .parallel_blockers
-                .iter()
-                .any(|value| value == scheduler_dispatch::PARALLEL_BLOCKER_OWNED_PATH_COLLISION)
-        );
-        assert!(
-            projection
-                .parallel_candidates_after_current
-                .iter()
-                .all(|task| task.id != "task-overlapping-owned-path")
-        );
+        assert!(candidate
+            .parallel_blockers
+            .iter()
+            .any(|value| value == scheduler_dispatch::PARALLEL_BLOCKER_OWNED_PATH_COLLISION));
+        assert!(projection
+            .parallel_candidates_after_current
+            .iter()
+            .all(|task| task.id != "task-overlapping-owned-path"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2554,12 +2538,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["task-b-candidate"]
         );
-        assert!(
-            projection
-                .ready
-                .iter()
-                .all(|candidate| candidate.task.id != "task-c-outside")
-        );
+        assert!(projection
+            .ready
+            .iter()
+            .all(|candidate| candidate.task.id != "task-c-outside"));
     }
 
     #[tokio::test]
@@ -2592,12 +2574,10 @@ mod tests {
             .expect("projection should render");
 
         assert_eq!(projection.current_task_id.as_deref(), Some("task-current"));
-        assert!(
-            projection
-                .ready
-                .iter()
-                .all(|candidate| candidate.task.id != "task-work-pool")
-        );
+        assert!(projection
+            .ready
+            .iter()
+            .all(|candidate| candidate.task.id != "task-work-pool"));
         let container = projection
             .blocked
             .iter()
@@ -2605,12 +2585,10 @@ mod tests {
             .expect("container-only task should be blocked from executable scheduling");
         assert!(!container.ready_now);
         assert!(!container.ready_parallel_safe);
-        assert!(
-            container
-                .blocked_by
-                .iter()
-                .any(|blocker| blocker.dependency_status == "container_only_task")
-        );
+        assert!(container
+            .blocked_by
+            .iter()
+            .any(|blocker| blocker.dependency_status == "container_only_task"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2668,12 +2646,10 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-collision")
             .expect("collision task should be present");
         assert!(!collision.ready_parallel_safe);
-        assert!(
-            collision
-                .parallel_blockers
-                .iter()
-                .any(|value| value == "conflict_domain_collision")
-        );
+        assert!(collision
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "conflict_domain_collision"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2715,11 +2691,9 @@ mod tests {
             .ready_tasks_scoped(None)
             .await
             .expect("ready tasks should render");
-        assert!(
-            ready
-                .iter()
-                .all(|task| task.id != "task-with-missing-dependency")
-        );
+        assert!(ready
+            .iter()
+            .all(|task| task.id != "task-with-missing-dependency"));
 
         let projection = store
             .scheduling_projection_scoped(None, None)
@@ -2731,12 +2705,10 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-with-missing-dependency")
             .expect("task should be blocked");
         assert!(!blocked.ready_now);
-        assert!(
-            blocked
-                .blocked_by
-                .iter()
-                .any(|dependency| dependency.dependency_status == "missing")
-        );
+        assert!(blocked
+            .blocked_by
+            .iter()
+            .any(|dependency| dependency.dependency_status == "missing"));
 
         let _ = fs::remove_dir_all(root);
     }

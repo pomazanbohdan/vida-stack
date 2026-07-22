@@ -5,9 +5,9 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
 
 pub(crate) const RECEIPT_HELPER_STATE_DIR_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_STATE_DIR";
 pub(crate) const RECEIPT_HELPER_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RUN_ID";
@@ -158,10 +158,11 @@ impl RuntimeReceiptFixture {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        fixture.downstream_active_target = std::env::var(RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        fixture.downstream_active_target =
+            std::env::var(RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
         fixture.dispatch_status = std::env::var(RECEIPT_HELPER_DISPATCH_STATUS_ENV)
             .unwrap_or_else(|_| "executed".to_string());
         fixture.lane_status = std::env::var(RECEIPT_HELPER_LANE_STATUS_ENV)
@@ -236,6 +237,16 @@ impl PersistentRuntimeFixture {
             project_root: Some(project_root),
             state_dir,
         }
+    }
+
+    pub(crate) fn project_bound_with_canonical_sources(label: &str, canonical_root: &Path) -> Self {
+        let fixture = Self::project_bound(label);
+        let project_root = fixture
+            .project_root
+            .as_deref()
+            .expect("project-bound fixture should expose a project root");
+        copy_canonical_project_sources(project_root, canonical_root);
+        fixture
     }
 
     pub(crate) fn project_shell(label: &str) -> Self {
@@ -383,10 +394,41 @@ impl PersistentRuntimeFixture {
         ])
     }
 
+    pub(crate) fn create_task_with_owned_path(
+        &self,
+        task_id: &str,
+        title: &str,
+        parent_id: &str,
+        owned_path: &str,
+    ) -> serde_json::Value {
+        self.json_success(&[
+            "task",
+            "create",
+            task_id,
+            title,
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            owned_path,
+            "--json",
+        ])
+    }
+
     pub(crate) fn create_run_graph_backing_task(&self, run_id: &str) {
         let epic_id = format!("{run_id}-epic");
         self.create_epic_parent(&epic_id, &format!("{run_id} epic"));
         self.create_task(run_id, &format!("{run_id} task"), &epic_id);
+    }
+
+    pub(crate) fn create_authority_bound_run_graph_task(&self, run_id: &str) {
+        let epic_id = format!("{run_id}-epic");
+        self.create_epic_parent(&epic_id, &format!("{run_id} epic"));
+        self.create_task_with_owned_path(
+            run_id,
+            &format!("{run_id} task"),
+            &epic_id,
+            &format!("docs/{run_id}.md"),
+        );
     }
 
     pub(crate) fn runtime_consumption_path(&self, kind: &str, name: &str) -> PathBuf {
@@ -778,6 +820,91 @@ fn write_project_files(project_root: &Path) {
         .expect("runtime fixture AGENTS.sidecar.md should be written");
     std::fs::write(project_root.join("vida.config.yaml"), "project_id: test\n")
         .expect("runtime fixture vida.config.yaml should be written");
+}
+
+fn copy_canonical_project_sources(project_root: &Path, canonical_root: &Path) {
+    let canonical_root = std::fs::canonicalize(canonical_root)
+        .expect("canonical source project root should resolve");
+    let canonical_config = canonical_root.join("vida.config.yaml");
+    let target_config = project_root.join("vida.config.yaml");
+    std::fs::copy(&canonical_config, &target_config)
+        .expect("canonical vida.config.yaml should copy into project fixture");
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(&canonical_config)
+            .expect("canonical vida.config.yaml should be readable"),
+    )
+    .expect("canonical vida.config.yaml should parse");
+    let registries = config
+        .get("agent_extensions")
+        .and_then(|value| value.get("registries"))
+        .and_then(serde_yaml::Value::as_mapping)
+        .expect("canonical config should declare agent extension registries");
+    for relative in registries.values().filter_map(serde_yaml::Value::as_str) {
+        copy_canonical_source_file(&canonical_root, project_root, relative);
+    }
+    for relative in [
+        "vida/config/instructions/bundles/framework-source",
+        "vida/config/instructions/bundles/framework-memory-source",
+    ] {
+        copy_canonical_source_tree(&canonical_root, project_root, relative);
+    }
+}
+
+fn copy_canonical_source_file(canonical_root: &Path, project_root: &Path, relative: &str) {
+    let source = canonical_root.join(relative);
+    let target = project_root.join(relative);
+    assert!(
+        source.starts_with(canonical_root),
+        "canonical registry source must remain under canonical project root: {relative}"
+    );
+    assert!(
+        target.starts_with(project_root),
+        "fixture registry target must remain under fixture project root: {relative}"
+    );
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).expect("fixture registry target parent should exist");
+    }
+    std::fs::copy(&source, &target).unwrap_or_else(|error| {
+        panic!("canonical registry source should copy ({relative}): {error}")
+    });
+}
+
+fn copy_canonical_source_tree(canonical_root: &Path, project_root: &Path, relative: &str) {
+    let source = canonical_root.join(relative);
+    let target = project_root.join(relative);
+    assert!(
+        source.starts_with(canonical_root),
+        "canonical instruction source must remain under canonical project root: {relative}"
+    );
+    assert!(
+        target.starts_with(project_root),
+        "fixture instruction target must remain under fixture project root: {relative}"
+    );
+    copy_canonical_source_tree_at(&source, &target, relative);
+}
+
+fn copy_canonical_source_tree_at(source: &Path, target: &Path, relative: &str) {
+    std::fs::create_dir_all(target).unwrap_or_else(|error| {
+        panic!("canonical instruction target should be creatable ({relative}): {error}")
+    });
+    for entry in std::fs::read_dir(source).unwrap_or_else(|error| {
+        panic!("canonical instruction source should be readable ({relative}): {error}")
+    }) {
+        let entry = entry.expect("canonical instruction source entry should resolve");
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("canonical instruction source entry type should resolve")
+            .is_dir()
+        {
+            copy_canonical_source_tree_at(&source_path, &target_path, relative);
+        } else {
+            std::fs::copy(&source_path, &target_path).unwrap_or_else(|error| {
+                panic!("canonical instruction source should copy ({relative}): {error}")
+            });
+        }
+    }
 }
 
 fn vida_command() -> Command {

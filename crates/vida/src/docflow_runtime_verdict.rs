@@ -1,4 +1,4 @@
-use crate::contract_profile_adapter::{BlockerCode, blocker_code};
+use crate::contract_profile_adapter::{blocker_code, BlockerCode};
 use crate::runtime_consumption_surface::{
     DOCFLOW_PROOF_CURRENT_PATH, DOCFLOW_READINESS_CURRENT_PATH,
 };

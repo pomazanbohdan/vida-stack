@@ -948,11 +948,9 @@ agent_extensions:
         assert_eq!(command_parity.source_alias_count, 1);
         assert_eq!(command_parity.runtime_alias_count, 1);
         assert!(runtime_projection.is_file());
-        assert!(
-            fs::read_to_string(runtime_projection)
-                .expect("runtime command projection should be readable")
-                .contains("command_id: agent-init-worker")
-        );
+        assert!(fs::read_to_string(runtime_projection)
+            .expect("runtime command projection should be readable")
+            .contains("command_id: agent-init-worker"));
     }
 
     #[test]
@@ -1076,11 +1074,9 @@ agent_extensions:
         .expect_err("malformed later family should fail closed");
 
         assert!(error.contains("malformed skill registry"));
-        assert!(
-            fs::read_to_string(roles_runtime)
-                .expect("roles runtime should remain readable")
-                .contains("role_id: stable")
-        );
+        assert!(fs::read_to_string(roles_runtime)
+            .expect("roles runtime should remain readable")
+            .contains("role_id: stable"));
         assert_eq!(
             fs::read_to_string(skills_runtime).expect("skills runtime should remain readable"),
             "version: 1\nskills: []\n"

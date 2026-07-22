@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const REQUIRED_EXECUTION_PREPARATION_ARTIFACTS: &[&str] = &[
     "architecture_preparation_report",
@@ -373,11 +373,9 @@ fn with_artifact_operator_contract(
     )
     .unwrap_or_else(|_| {
         crate::release1_operator_output::finalize_release1_operator_truth(
-            vec![
-                crate::release1_contracts::BlockerCode::Unsupported
-                    .as_str()
-                    .to_string(),
-            ],
+            vec![crate::release1_contracts::BlockerCode::Unsupported
+                .as_str()
+                .to_string()],
             vec!["inspect execution-preparation artifact operator contract output".to_string()],
             json!({}),
         )

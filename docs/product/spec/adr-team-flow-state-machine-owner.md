@@ -31,6 +31,26 @@ TeamFlow uses one authority chain:
 
 The template and schema are co-versioned canonical surfaces. This ADR explains their ownership boundary and must not repeat their option lists.
 
+The persisted `team_flow_authority.resolved_all_flow_payload` is the schema-complete
+resolved authority source. The current catalog example contains 13 flows and 51
+lanes; counts remain project-configurable and are recorded in the payload.
+
+## Field-Source Authority
+
+Every executable flow step declares one non-empty `dispatch_alias`; it resolves to exactly one row in the configured dispatch-alias registry. The selected step owns node/lane/dispatch identity, alias, task class, command ref, inclusion, proof, approval, lifecycle, resume/rework, and transition declarations. The selected team role owns runtime role, packet template kind, closure class, stage, completion blocker, and carrier policy. Registry rows own command mappings, alias admissibility, profile identity, and aggregate registry identity. The carrier catalog owns carrier/model-profile selection; the selected host system owns executor-backend relation. Carrier relation and executor-backend relation are distinct typed relations and neither may substitute for the other.
+
+Each authority field has exactly one source. Each alias, command, profile, and model-profile ref has exactly one effective registry/catalog match. Duplicate, shadowed, empty, missing, cross-role-inadmissible, or multiply sourced values block projection. The master catalog owns the exhaustive source map and architect-context alias resolution; project config selects instances and may not create another option catalog.
+
+Relation shape is strict after materialization: `carrier_relation` has only
+`relation_kind`, `source_path`, and `selected_id` (`carrier_catalog`);
+`executor_backend_relation` has exactly those fields plus `backend_class` and
+`required_backend_class` (`executor_backend`). Loose backend fields are not an
+alternative resolved source. The host-system source DSL may retain `backend_id`
+and `required_backend_class`; materialization must resolve those inputs into the
+strict lane relation.
+
+The resolved node must explicitly contain every schema-required routing, role, packet, closure, proof/evidence, approval/lifecycle, resume/rework, policy, activation, relation, authority-identity, and execution-identity field. A concise source step is executable only after that complete typed projection exists.
+
 ## Ownership Boundary
 
 ### TaskFlow authority owner
@@ -66,6 +86,13 @@ Routing, resume, dispatch, status, and receipt consumers may use provider-neutra
 
 Each registry and the selected `dev_team` config receives a content identity over canonical JSON. The aggregate TeamFlow authority identity covers the config identity and all registry identities, including packs and commands. Ordered arrays remain ordered because step order is semantic; registry rows are sorted by their declared identifier before hashing because registry source order is not semantic.
 
+Identity is computed in two phases. Phase 1 hashes the selected config and registry
+identities without embedding the resolved payload. Phase 2 hashes the canonical
+persisted `resolved_all_flow_payload`; `resolved_all_flow_payload_blake3` and
+`authority_source.payload_blake3` must match on reload. A payload may reference
+phase-1 identities or its own phase-2 hash only as an external field; recursive
+self-embedding is rejected to prevent circular authority.
+
 Receipts and projections may carry the aggregate identity and component identities. A mismatch is a stale-authority blocker, not a compatibility fallback.
 
 ## Migration
@@ -78,6 +105,11 @@ Receipts and projections may carry the aggregate identity and component identiti
 6. Enable closure only after all consumers pass the same authority identity through their receipts.
 
 During migration, missing or inconsistent authority blocks execution. Compatibility code may parse an old input only to return a typed migration blocker; it may not create an executable fallback shape.
+
+Persisted migration must widen selected-flow snapshots to the all-flow payload,
+verify its hash before consumption, and preserve the old snapshot only as
+read-only migration input. Missing payload, hash mismatch, missing authority source,
+or circular identity is a fail-closed blocker.
 
 ## Consequences
 
@@ -99,17 +131,23 @@ Static and executable proof must cover:
 - config-only terminal admission;
 - explicit rework/resume targets;
 - duplicate or shadowing alias rejection;
+- exact-one field-source and registry-ref resolution;
+- explicit architect-context dispatch resolution;
+- distinct carrier and executor-backend relations;
+- complete authority and execution identity refs;
 - packs/commands participation in deterministic authority identity;
+- persisted all-flow payload reload/hash parity and two-phase identity ordering;
+- rejection of circular identity references and loose backend fields;
 - absence of concrete authority literals in runtime consumers.
 
 -----
 artifact_path: product/spec/adr-team-flow-state-machine-owner
 artifact_type: architecture_decision
 artifact_version: '1'
-artifact_revision: '2026-07-19'
+artifact_revision: '2026-07-20'
 schema_version: '1'
 status: accepted
 source_path: docs/product/spec/adr-team-flow-state-machine-owner.md
 created_at: '2026-07-01T00:00:00+03:00'
-updated_at: '2026-07-19T00:00:00+03:00'
+updated_at: '2026-07-20T00:00:00+03:00'
 changelog_ref: adr-team-flow-state-machine-owner.changelog.jsonl

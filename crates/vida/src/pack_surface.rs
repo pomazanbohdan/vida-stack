@@ -305,11 +305,9 @@ mod tests {
                     })
             }));
             if let Some(blocker) = blocker {
-                assert!(
-                    payload["blocker_codes"]
-                        .as_array()
-                        .is_some_and(|codes| codes.iter().any(|code| code == blocker))
-                );
+                assert!(payload["blocker_codes"]
+                    .as_array()
+                    .is_some_and(|codes| codes.iter().any(|code| code == blocker)));
             }
         }
     }

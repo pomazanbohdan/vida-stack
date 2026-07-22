@@ -3511,19 +3511,48 @@ fn has_protocol_compression_audit_marker(content: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("audit_passed"))
 }
 
-fn is_protocol_instruction_or_bootstrap_doc(rel: &str, content: &str) -> bool {
-    let rel = rel.to_ascii_lowercase();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootstrapRoutingSurface {
+    CanonicalProjectSidecar,
+    Other,
+    None,
+}
+
+fn classify_bootstrap_routing_surface(rel: &str, content: &str) -> BootstrapRoutingSurface {
+    if rel == "AGENTS.sidecar.md"
+        && metadata_value(content, "artifact_path")
+            .is_some_and(|value| value == "project/repository/agents.sidecar")
+        && metadata_value(content, "artifact_type").is_some_and(|value| value == "bootstrap_doc")
+    {
+        return BootstrapRoutingSurface::CanonicalProjectSidecar;
+    }
+
+    let rel_lower = rel.to_ascii_lowercase();
     let artifact_type = metadata_value(content, "artifact_type")
         .unwrap_or_default()
         .to_ascii_lowercase();
     if artifact_type == "product_research_doc" {
-        return false;
+        return BootstrapRoutingSurface::None;
     }
-    rel.contains("protocol")
-        || rel.contains("instruction")
-        || rel.contains("bootstrap")
+
+    if rel == "AGENTS.sidecar.md"
+        || rel_lower.contains("protocol")
+        || rel_lower.contains("instruction")
+        || rel_lower.contains("bootstrap")
         || artifact_type.contains("instruction")
         || artifact_type.contains("bootstrap")
+    {
+        BootstrapRoutingSurface::Other
+    } else {
+        BootstrapRoutingSurface::None
+    }
+}
+
+fn is_protocol_instruction_or_bootstrap_doc(rel: &str, content: &str) -> bool {
+    !matches!(
+        classify_bootstrap_routing_surface(rel, content),
+        BootstrapRoutingSurface::None
+    )
 }
 
 fn is_protocol_authoring_gate_subject(rel: &str, content: &str) -> bool {
@@ -3531,7 +3560,10 @@ fn is_protocol_authoring_gate_subject(rel: &str, content: &str) -> bool {
         || (has_protocol_authoring_opt_in(content)
             && !has_protocol_compression_audit_marker(content))
         || (is_project_visible_doc(rel)
-            && is_protocol_instruction_or_bootstrap_doc(rel, content)
+            && matches!(
+                classify_bootstrap_routing_surface(rel, content),
+                BootstrapRoutingSurface::Other
+            )
             && (metadata_date_at_or_after(content, "created_at", PROTOCOL_AUTHORING_GATE_DATE)
                 || metadata_date_at_or_after(
                     content,
@@ -5748,11 +5780,11 @@ mod tests {
     #[cfg(unix)]
     use super::trusted_tokenizer_path_for;
     use super::{
-        Cli, activation_issue_for, activation_rows, check_rows, fastcheck_rows,
-        normalize_path_for_root, normalize_source_path_coordinate,
-        protocol_compression_hash_content, protocol_coverage_issue_for, protocol_coverage_rows,
-        readiness_rows, resolve_validation_scope, run, run_with_exit, sha256_hex,
-        validation_coordinates,
+        Cli, activation_issue_for, activation_rows, check_rows, classify_bootstrap_routing_surface,
+        fastcheck_rows, is_protocol_authoring_gate_subject, normalize_path_for_root,
+        normalize_source_path_coordinate, protocol_compression_hash_content,
+        protocol_coverage_issue_for, protocol_coverage_rows, readiness_rows,
+        resolve_validation_scope, run, run_with_exit, sha256_hex, validation_coordinates,
     };
     use clap::Parser;
     use serde_json::Value;
@@ -7432,6 +7464,72 @@ mod tests {
         assert!(rendered.contains("verdict: ok"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn protocol_authoring_gate_zombie_d_bootstrap_routing_surface_matrix() {
+        let exact_sidecar = "# Project Docs Map\n\n-----\nartifact_path: project/repository/agents.sidecar\nartifact_type: bootstrap_doc\nartifact_version: '1'\nartifact_revision: 2026-07-03\ncreated_at: 2026-07-03T00:00:00+03:00\n";
+        assert_eq!(
+            classify_bootstrap_routing_surface("AGENTS.sidecar.md", exact_sidecar),
+            super::BootstrapRoutingSurface::CanonicalProjectSidecar
+        );
+        assert!(!is_protocol_authoring_gate_subject(
+            "AGENTS.sidecar.md",
+            exact_sidecar
+        ));
+
+        let explicit_sidecar = format!("{exact_sidecar}protocol_authoring_gate: enforced\n");
+        assert!(is_protocol_authoring_gate_subject(
+            "AGENTS.sidecar.md",
+            &explicit_sidecar
+        ));
+        assert!(
+            super::protocol_authoring_validation_issues("AGENTS.sidecar.md", &explicit_sidecar)
+                .iter()
+                .any(|issue| issue.code == "missing_protocol_authoring_block")
+        );
+
+        let metadata_lookalike = exact_sidecar.replace(
+            "project/repository/agents.sidecar",
+            "project/repository/not-the-sidecar",
+        );
+        assert_eq!(
+            classify_bootstrap_routing_surface("AGENTS.sidecar.md", &metadata_lookalike),
+            super::BootstrapRoutingSurface::Other
+        );
+        assert!(is_protocol_authoring_gate_subject(
+            "AGENTS.sidecar.md",
+            &metadata_lookalike
+        ));
+
+        let bootstrap_protocol = exact_sidecar.replace(
+            "artifact_path: project/repository/agents.sidecar",
+            "artifact_path: process/bootstrap-protocol",
+        );
+        assert_eq!(
+            classify_bootstrap_routing_surface(
+                "docs/process/bootstrap-protocol.md",
+                &bootstrap_protocol
+            ),
+            super::BootstrapRoutingSurface::Other
+        );
+        assert!(is_protocol_authoring_gate_subject(
+            "docs/process/bootstrap-protocol.md",
+            &bootstrap_protocol
+        ));
+    }
+
+    #[test]
+    fn protocol_authoring_gate_skips_compression_audited_owner_docs() {
+        let audited_footer =
+            "protocol_authoring_gate: enforced\nprotocol_compression_status: audit_passed\n";
+        for path in [
+            "vida/config/instructions/system-maps/framework.map.md",
+            "vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md",
+        ] {
+            assert!(!is_protocol_authoring_gate_subject(path, audited_footer));
+            assert!(protocol_authoring_validation_issues(path, audited_footer).is_empty());
+        }
     }
 
     #[test]

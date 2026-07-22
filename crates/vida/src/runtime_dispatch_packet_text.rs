@@ -1,4 +1,4 @@
-use crate::{RuntimeConsumptionLaneSelection, build_design_first_tracked_flow_bootstrap};
+use crate::RuntimeConsumptionLaneSelection;
 
 fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
     value
@@ -301,44 +301,99 @@ pub(crate) fn runtime_tracked_flow_packet(
     run_id: &str,
     dispatch_target: &str,
 ) -> serde_json::Value {
-    let tracked_packet_key = match dispatch_target {
-        "spec-pack" => "spec_task",
-        "work-pool-pack" => "work_pool_task",
-        "dev-pack" => "dev_task",
-        _ => "",
+    let relation = configured_tracked_flow_relation(role_selection, dispatch_target);
+    let (tracked_packet_key, lane) = match relation {
+        Ok(relation) => relation,
+        Err(blocker) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": [blocker],
+                "packet_id": format!("{run_id}::{dispatch_target}::tracked-flow"),
+                "dispatch_target": dispatch_target,
+                "activation_semantics": "configured_team_flow_relation_required",
+                "view_only": true,
+                "executes_packet": false,
+                "transfers_root_session_write_authority": false,
+                "request": role_selection.request,
+            });
+        }
     };
-    let tracked_flow_bootstrap = if role_selection.execution_plan["tracked_flow_bootstrap"]
-        [tracked_packet_key]["task_id"]
-        .as_str()
-        .is_some()
-    {
-        role_selection.execution_plan["tracked_flow_bootstrap"].clone()
-    } else {
-        build_design_first_tracked_flow_bootstrap(&role_selection.request)
-    };
-    let tracked = tracked_flow_bootstrap
-        .get(tracked_packet_key)
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let required = lane.get("required").cloned().unwrap_or(serde_json::Value::Null);
     serde_json::json!({
+        "status": "ready",
+        "blocker_codes": [],
         "packet_id": format!("{run_id}::{dispatch_target}::tracked-flow"),
         "dispatch_target": dispatch_target,
         "tracked_packet_key": tracked_packet_key,
-        "activation_semantics": "tracked_flow_materialization_only",
+        "packet_template_kind": tracked_packet_key,
+        "task_class": lane["task_class"],
+        "owner_runtime_role": lane["runtime_role"],
+        "activation_semantics": "configured_team_flow_relation_view",
         "view_only": true,
         "executes_packet": false,
         "transfers_root_session_write_authority": false,
-        "task_id": tracked["task_id"],
-        "title": tracked["title"],
-        "runtime": tracked["runtime"],
-        "inspect_command": tracked["inspect_command"],
-        "ensure_command": tracked["ensure_command"],
-        "next_command": tracked["ensure_command"],
-        "create_command": tracked["create_command"],
-        "close_command": tracked["close_command"],
-        "required": tracked["required"],
+        "task_id": serde_json::Value::Null,
+        "title": serde_json::Value::Null,
+        "runtime": serde_json::Value::Null,
+        "inspect_command": serde_json::Value::Null,
+        "ensure_command": serde_json::Value::Null,
+        "next_command": serde_json::Value::Null,
+        "create_command": serde_json::Value::Null,
+        "close_command": serde_json::Value::Null,
+        "required": required,
         "request": role_selection.request,
     })
+}
+
+fn configured_tracked_flow_relation(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+) -> Result<(String, serde_json::Value), String> {
+    let dispatch_target = dispatch_target.trim();
+    if dispatch_target.is_empty() {
+        return Err("team_flow_authority_tracked_flow_dispatch_target_missing".to_string());
+    }
+    let dispatch_contract = role_selection.execution_plan["development_flow"]["dispatch_contract"]
+        .as_object()
+        .or_else(|| role_selection.execution_plan["dispatch_contract"].as_object())
+        .ok_or_else(|| "team_flow_authority_tracked_flow_dispatch_contract_missing".to_string())?;
+    let candidates = dispatch_contract
+        .get("dispatch_target_index")
+        .and_then(|index| index.get(dispatch_target))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            format!("team_flow_authority_tracked_flow_relation_missing:{dispatch_target}")
+        })?;
+    let node_id = match candidates.as_slice() {
+        [] => {
+            return Err(format!(
+                "team_flow_authority_tracked_flow_relation_missing:{dispatch_target}"
+            ));
+        }
+        [node_id] => node_id.as_str().ok_or_else(|| {
+            format!("team_flow_authority_tracked_flow_relation_invalid:{dispatch_target}")
+        })?,
+        _ => {
+            return Err(format!(
+                "team_flow_authority_tracked_flow_relation_ambiguous:{dispatch_target}"
+            ));
+        }
+    };
+    let lane = dispatch_contract
+        .get("lane_catalog")
+        .and_then(|catalog| catalog.get(node_id))
+        .ok_or_else(|| {
+            format!("team_flow_authority_tracked_flow_lane_missing:{dispatch_target}:{node_id}")
+        })?;
+    let packet_template_kind = lane
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!("team_flow_authority_tracked_flow_packet_family_missing:{node_id}")
+        })?;
+    Ok((packet_template_kind.to_string(), lane.clone()))
 }
 
 pub(crate) fn runtime_packet_prompt(
@@ -394,11 +449,8 @@ mod tests {
             }),
         );
 
-        assert!(
-            prompt.contains(
-                "This delegated lane does not hold root-session orchestration authority."
-            )
-        );
+        assert!(prompt
+            .contains("This delegated lane does not hold root-session orchestration authority."));
         assert!(prompt.contains(
             "You are already inside the delegated lane activation; do not call `vida agent-init` again from this lane."
         ));
@@ -528,10 +580,8 @@ mod tests {
             "That host-tool permission is scoped to this run, runtime role, packet, owned paths, and receipt mode"
         ));
         assert!(prompt.contains("receipt-backed closure rules, or root write guard boundaries"));
-        assert!(
-            !prompt
-                .contains("If the user explicitly ordered agent-first or parallel-agent execution")
-        );
+        assert!(!prompt
+            .contains("If the user explicitly ordered agent-first or parallel-agent execution"));
     }
 
     #[test]
@@ -562,15 +612,12 @@ mod tests {
         assert!(prompt.contains(
             "restate `active_bounded_unit`, `why_this_unit`, and sequential-vs-parallel posture"
         ));
-        assert!(
-            !prompt.contains(
-                "This delegated lane does not hold root-session orchestration authority."
-            )
-        );
+        assert!(!prompt
+            .contains("This delegated lane does not hold root-session orchestration authority."));
     }
 
     #[test]
-    fn runtime_tracked_flow_packet_marks_view_only_materialization_semantics() {
+    fn runtime_tracked_flow_packet_uses_configured_relation_without_task_graph() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -580,35 +627,43 @@ mod tests {
             selected_role: "pm".to_string(),
             conversational_mode: Some("pbi_discussion".to_string()),
             single_task_only: true,
-            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            tracked_flow_entry: Some("configured-entry".to_string()),
             allow_freeform_chat: true,
             confidence: "high".to_string(),
             matched_terms: vec!["development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
-                "tracked_flow_bootstrap": {
-                    "work_pool_task": {
-                        "task_id": "feature-x-work-pool",
-                        "title": "Work-pool pack: Feature X",
-                        "runtime": "vida taskflow",
-                        "inspect_command": "vida task show feature-x-work-pool",
-                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
-                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
-                        "close_command": "vida task close feature-x-work-pool --reason 'closed' --json",
-                        "required": true
+                "development_flow": {
+                    "dispatch_contract": {
+                        "dispatch_target_index": {"configured-target": ["configured-node"]},
+                        "lane_catalog": {
+                            "configured-node": {
+                                "packet_template_kind": "configured-work",
+                                "task_class": "implementation",
+                                "runtime_role": "worker",
+                                "required": true
+                            }
+                        }
                     }
                 }
             }),
             reason: "test".to_string(),
         };
 
-        let packet = runtime_tracked_flow_packet(&role_selection, "run-1", "work-pool-pack");
+        let packet = runtime_tracked_flow_packet(&role_selection, "run-1", "configured-target");
+        assert_eq!(packet["status"], "ready");
+        assert_eq!(packet["tracked_packet_key"], "configured-work");
+        assert_eq!(packet["task_class"], "implementation");
+        assert_eq!(packet["owner_runtime_role"], "worker");
         assert_eq!(
             packet["activation_semantics"],
-            "tracked_flow_materialization_only"
+            "configured_team_flow_relation_view"
         );
         assert_eq!(packet["view_only"], true);
         assert_eq!(packet["executes_packet"], false);
         assert_eq!(packet["transfers_root_session_write_authority"], false);
+        assert!(packet["task_id"].is_null());
+        assert!(packet["ensure_command"].is_null());
     }
 }

@@ -21,8 +21,9 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
     host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
-    validate_dispatch_receipt_binding, DispatchReceiptBindingInput, HostBridgeAdapterOperations,
-    HostBridgeReceiptIdentityV1, HostBridgeRequest, HostBridgeRequestPath, read_host_bridge_request,
+    read_host_bridge_request, validate_dispatch_receipt_binding, DispatchReceiptBindingInput,
+    HostBridgeAdapterOperations, HostBridgeReceiptIdentityV1, HostBridgeRequest,
+    HostBridgeRequestPath,
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -33,10 +34,149 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String 
     .into_string()
 }
 
-/// Check whether a backend is admissible for a given dispatch target (lane).
-/// When no admissibility matrix is present, keep fail-open behavior for backward
-/// compatibility. Once a matrix exists, write-producing lanes fail closed if the
-/// backend row, lane mapping, or canonical lane key is missing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DispatchTargetCapability {
+    node_id: String,
+    dispatch_target: String,
+    runtime_role: String,
+    task_class: String,
+    owned_scope_required: bool,
+    backend_admissibility_key: String,
+    rework_targets: Vec<String>,
+}
+
+fn scope_policy_requires_owned_paths(value: &serde_json::Value) -> bool {
+    let guarded = [
+        "guard_required",
+        "guard-required",
+        "guard_required_owned_paths",
+        "guard-required-owned-paths",
+        "guard_required_packet_owned_paths",
+        "guard-required-packet-owned-paths",
+    ];
+    for key in [
+        "owned_scope_required",
+        "owned_write_scope_required",
+        "write_scope_guard_required",
+    ] {
+        if value.get(key).and_then(serde_json::Value::as_bool) == Some(true) {
+            return true;
+        }
+    }
+    for key in ["write_scope", "effective_write_scope"] {
+        if value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|scope| guarded.iter().any(|candidate| candidate == &scope.trim()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn dispatch_target_capability(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    requested_target: &str,
+) -> Result<DispatchTargetCapability, String> {
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.to_string())?;
+    let selected_node_id = crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let node = if let Some(selected_node_id) = selected_node_id {
+        authority
+            .resolve_target(Some(&role_selection.execution_plan), selected_node_id)
+            .map_err(|blocker| blocker.to_string())?
+    } else {
+        authority
+            .resolve_target(Some(&role_selection.execution_plan), requested_target)
+            .map_err(|blocker| blocker.to_string())?
+    };
+    if selected_node_id.is_some() {
+        let requested = requested_target.trim();
+        if !requested.is_empty()
+            && ![
+                node.node_id.as_str(),
+                node.dispatch_target.as_str(),
+                node.dispatch_alias.as_str(),
+                node.runtime_role.as_str(),
+                node.task_class.as_str(),
+            ]
+            .into_iter()
+            .any(|candidate| candidate == requested)
+        {
+            return Err(format!(
+                "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
+                node.node_id, requested
+            ));
+        }
+    }
+    let lane = DispatchContractLane {
+        task_class: Some(node.task_class.as_str()),
+    };
+    let dispatch_target = node.dispatch_target.clone();
+    let task_class = node.task_class.clone();
+    let backend_admissibility_key =
+        crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+            &dispatch_target,
+            Some(&lane),
+        )
+        .into_string();
+    let route = role_selection.execution_plan["development_flow"]["dispatch_contract"]
+        ["lane_catalog"]
+        .get(&node.node_id)
+        .or_else(|| {
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+                .get(&node.dispatch_target)
+        });
+    let owned_scope_required = route.is_some_and(scope_policy_requires_owned_paths)
+        || scope_policy_requires_owned_paths(&node.assignment)
+        || scope_policy_requires_owned_paths(&node.execution_identity)
+        || node
+            .proof_gates
+            .get("required_outputs")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|outputs| {
+                outputs.iter().any(|output| {
+                    output.as_str().is_some_and(|output| {
+                        output.trim() == "owned_write_scope" || output.trim() == "owned_paths"
+                    })
+                })
+            });
+    Ok(DispatchTargetCapability {
+        node_id: node.node_id,
+        dispatch_target,
+        runtime_role: node.runtime_role,
+        task_class,
+        owned_scope_required,
+        backend_admissibility_key,
+        rework_targets: node.rework_targets,
+    })
+}
+
+/// Check backend admissibility using the strict TeamFlow node projection.
+fn backend_is_admissible_for_role_selection(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    backend_id: &str,
+    dispatch_target: &str,
+) -> bool {
+    let Ok(capability) = dispatch_target_capability(role_selection, dispatch_target) else {
+        return false;
+    };
+    let lane = DispatchContractLane {
+        task_class: Some(capability.task_class.as_str()),
+    };
+    crate::runtime_assignment_policy::backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        backend_id,
+        &capability.backend_admissibility_key,
+        Some(&lane),
+    )
+}
+
+#[cfg(test)]
 fn backend_is_admissible_for_dispatch_target(
     execution_plan: &serde_json::Value,
     backend_id: &str,
@@ -47,8 +187,11 @@ fn backend_is_admissible_for_dispatch_target(
             execution_plan,
             dispatch_target,
         );
-    let lane = crate::dispatch_contract_lane(execution_plan, &policy_dispatch_target)
-        .map(DispatchContractLane::from_value);
+    let lane = crate::taskflow_routing::dispatch_contract_lane_diagnostic(
+        execution_plan,
+        &policy_dispatch_target,
+    )
+    .map(DispatchContractLane::from_value);
     crate::runtime_assignment_policy::backend_is_admissible_for_dispatch_target(
         execution_plan,
         backend_id,
@@ -463,12 +606,8 @@ fn readiness_fallback_internal_backend(
     {
         return None;
     }
-    backend_is_admissible_for_dispatch_target(
-        &role_selection.execution_plan,
-        &fallback_backend,
-        dispatch_target,
-    )
-    .then_some(fallback_backend)
+    backend_is_admissible_for_role_selection(role_selection, &fallback_backend, dispatch_target)
+        .then_some(fallback_backend)
 }
 
 fn push_unique_backend_candidate(candidates: &mut Vec<String>, candidate: Option<String>) {
@@ -494,28 +633,7 @@ fn external_readiness_blocker_allows_default_profile_retry(
         || readiness_verdict["model_catalog"]["status"].as_str() == Some("model_not_found")
 }
 
-fn dispatch_profile_target_candidates(
-    dispatch_target: &str,
-) -> (Vec<&'static str>, Vec<&'static str>) {
-    match canonical_dispatch_target_for_admissibility(dispatch_target).as_str() {
-        "coach" => (vec!["coach"], vec!["coach", "review"]),
-        "verification" | "verifier" => (vec!["verifier"], vec!["verification", "review"]),
-        "analysis" => (
-            vec!["business_analyst", "worker"],
-            vec!["analysis", "planning", "specification"],
-        ),
-        "architecture" => (
-            vec!["solution_architect"],
-            vec!["architecture", "execution_preparation"],
-        ),
-        _ => (
-            vec!["worker"],
-            vec!["implementation", "delivery_task", "execution_block"],
-        ),
-    }
-}
-
-fn profile_list_allows(profile: &serde_json::Value, key: &str, candidates: &[&str]) -> bool {
+fn profile_list_allows(profile: &serde_json::Value, key: &str, candidate: &str) -> bool {
     let Some(rows) = profile.get(key).and_then(serde_json::Value::as_array) else {
         return true;
     };
@@ -524,32 +642,26 @@ fn profile_list_allows(profile: &serde_json::Value, key: &str, candidates: &[&st
     }
     rows.iter()
         .filter_map(serde_json::Value::as_str)
-        .any(|row| {
-            let row = row.trim();
-            !row.is_empty() && candidates.iter().any(|candidate| row == *candidate)
-        })
+        .any(|row| row.trim() == candidate)
 }
 
-fn profile_supports_dispatch_target(profile: &serde_json::Value, dispatch_target: &str) -> bool {
-    let (role_candidates, task_class_candidates) =
-        dispatch_profile_target_candidates(dispatch_target);
-    profile_list_allows(profile, "runtime_roles", &role_candidates)
-        && profile_list_allows(profile, "task_classes", &task_class_candidates)
-}
-
-fn dispatch_target_requires_owned_scope(dispatch_target: &str) -> bool {
-    canonical_dispatch_target_for_admissibility(dispatch_target) == "implementation"
+fn profile_supports_dispatch_target(
+    profile: &serde_json::Value,
+    capability: &DispatchTargetCapability,
+) -> bool {
+    profile_list_allows(profile, "runtime_roles", &capability.runtime_role)
+        && profile_list_allows(profile, "task_classes", &capability.task_class)
 }
 
 fn profile_compatible_with_packet_scope(
     profile: &serde_json::Value,
-    dispatch_target: &str,
+    capability: &DispatchTargetCapability,
     packet_has_concrete_owned_paths: bool,
 ) -> bool {
     if !crate::runtime_dispatch_state::selected_profile_requires_owned_path_guard(profile) {
         return true;
     }
-    packet_has_concrete_owned_paths || dispatch_target_requires_owned_scope(dispatch_target)
+    packet_has_concrete_owned_paths || capability.owned_scope_required
 }
 
 fn profile_id(profile: &serde_json::Value) -> Option<&str> {
@@ -577,7 +689,7 @@ fn selected_profile_for_backend(
 fn ready_external_profile_for_dispatch_target(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
-    policy_dispatch_target: &str,
+    capability: &DispatchTargetCapability,
     packet_has_concrete_owned_paths: bool,
     excluded_profile_id: Option<&str>,
 ) -> Option<(serde_json::Value, String)> {
@@ -606,12 +718,12 @@ fn ready_external_profile_for_dispatch_target(
         if excluded_profile_id == Some(candidate_profile_id) {
             continue;
         }
-        if !profile_supports_dispatch_target(&profile, &policy_dispatch_target) {
+        if !profile_supports_dispatch_target(&profile, capability) {
             continue;
         }
         if !profile_compatible_with_packet_scope(
             &profile,
-            &policy_dispatch_target,
+            capability,
             packet_has_concrete_owned_paths,
         ) {
             continue;
@@ -629,11 +741,11 @@ fn ready_external_profile_for_dispatch_target(
     None
 }
 
-fn external_cli_dispatch_readiness_verdict(
+fn external_cli_dispatch_readiness_verdict_for_capability(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
     selected_model_profile_id: Option<String>,
-    policy_dispatch_target: &str,
+    capability: &DispatchTargetCapability,
     packet_has_concrete_owned_paths: bool,
 ) -> (serde_json::Value, Option<String>) {
     let selected_readiness =
@@ -656,7 +768,7 @@ fn external_cli_dispatch_readiness_verdict(
         .is_some_and(|profile| {
             !profile_compatible_with_packet_scope(
                 profile,
-                policy_dispatch_target,
+                capability,
                 packet_has_concrete_owned_paths,
             )
         });
@@ -665,7 +777,7 @@ fn external_cli_dispatch_readiness_verdict(
             ready_external_profile_for_dispatch_target(
                 backend_id,
                 backend_entry,
-                policy_dispatch_target,
+                capability,
                 packet_has_concrete_owned_paths,
                 selected_profile.as_deref(),
             )
@@ -675,8 +787,8 @@ fn external_cli_dispatch_readiness_verdict(
                     "guarded_write_profile_retry".to_string(),
                     serde_json::json!({
                         "selected_model_profile": selected_profile,
-                        "reason": "selected_profile_requires_owned_paths_but_packet_has_no_owned_scope",
-                        "dispatch_target": policy_dispatch_target,
+                    "reason": "selected_profile_requires_owned_paths_but_packet_has_no_owned_scope",
+                        "dispatch_target": capability.dispatch_target,
                     }),
                 );
             }
@@ -714,7 +826,7 @@ fn external_cli_dispatch_readiness_verdict(
         ready_external_profile_for_dispatch_target(
             backend_id,
             backend_entry,
-            policy_dispatch_target,
+            capability,
             packet_has_concrete_owned_paths,
             selected_profile.as_deref(),
         )
@@ -758,21 +870,34 @@ fn external_cli_dispatch_readiness_verdict(
     (default_readiness, default_profile)
 }
 
+#[cfg(test)]
+fn external_cli_dispatch_readiness_verdict(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    selected_model_profile_id: Option<String>,
+    capability: &DispatchTargetCapability,
+    packet_has_concrete_owned_paths: bool,
+) -> (serde_json::Value, Option<String>) {
+    external_cli_dispatch_readiness_verdict_for_capability(
+        backend_id,
+        backend_entry,
+        selected_model_profile_id,
+        capability,
+        packet_has_concrete_owned_paths,
+    )
+}
+
 pub(crate) fn internal_host_external_fallback_backend(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
     blocked_backend_id: &str,
     overlay: &serde_yaml::Value,
 ) -> Option<String> {
+    let capability = dispatch_target_capability(role_selection, dispatch_target).ok()?;
     let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
         &role_selection.execution_plan,
         dispatch_target,
     )?;
-    let policy_dispatch_target =
-        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
-            &role_selection.execution_plan,
-            dispatch_target,
-        );
     let mut candidates = Vec::new();
     push_unique_backend_candidate(
         &mut candidates,
@@ -800,11 +925,7 @@ pub(crate) fn internal_host_external_fallback_backend(
         if !backend_is_external_cli_bridge(role_selection, Some(overlay), candidate) {
             return false;
         }
-        if !backend_is_admissible_for_dispatch_target(
-            &role_selection.execution_plan,
-            candidate,
-            dispatch_target,
-        ) {
+        if !backend_is_admissible_for_role_selection(role_selection, candidate, dispatch_target) {
             return false;
         }
         let Some(backend_entry) =
@@ -826,12 +947,12 @@ pub(crate) fn internal_host_external_fallback_backend(
                 dispatch_target,
                 Some(candidate),
             );
-        let (readiness, _) = external_cli_dispatch_readiness_verdict(
+        let (readiness, _) = external_cli_dispatch_readiness_verdict_for_capability(
             candidate,
             backend_entry,
             selected_model_profile_id,
-            &policy_dispatch_target,
-            dispatch_target_requires_owned_scope(&policy_dispatch_target),
+            &capability,
+            capability.owned_scope_required,
         );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
@@ -844,15 +965,11 @@ fn ready_external_readiness_fallback_backend(
     overlay: &serde_yaml::Value,
     inherited_selected_backend: Option<&str>,
 ) -> Option<String> {
+    let capability = dispatch_target_capability(role_selection, dispatch_target).ok()?;
     let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
         &role_selection.execution_plan,
         dispatch_target,
     )?;
-    let policy_dispatch_target =
-        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
-            &role_selection.execution_plan,
-            dispatch_target,
-        );
     let mut candidates = Vec::new();
     push_unique_backend_candidate(
         &mut candidates,
@@ -884,11 +1001,7 @@ fn ready_external_readiness_fallback_backend(
         if !backend_is_external_cli_bridge(role_selection, Some(overlay), candidate) {
             return false;
         }
-        if !backend_is_admissible_for_dispatch_target(
-            &role_selection.execution_plan,
-            candidate,
-            dispatch_target,
-        ) {
+        if !backend_is_admissible_for_role_selection(role_selection, candidate, dispatch_target) {
             return false;
         }
         let Some(backend_entry) =
@@ -910,12 +1023,12 @@ fn ready_external_readiness_fallback_backend(
                 dispatch_target,
                 Some(candidate),
             );
-        let (readiness, _) = external_cli_dispatch_readiness_verdict(
+        let (readiness, _) = external_cli_dispatch_readiness_verdict_for_capability(
             candidate,
             backend_entry,
             selected_model_profile_id,
-            &policy_dispatch_target,
-            dispatch_target_requires_owned_scope(&policy_dispatch_target),
+            &capability,
+            capability.owned_scope_required,
         );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
@@ -2133,7 +2246,7 @@ fn selected_internal_host_carrier(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
     overlay: Option<&serde_yaml::Value>,
-) -> Option<serde_json::Value> {
+) -> Result<Option<serde_json::Value>, String> {
     let carriers =
         crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(selected_cli_entry);
     let find_carrier = |candidate_id: &str| {
@@ -2153,12 +2266,12 @@ fn selected_internal_host_carrier(
     let direct_ids = [preferred_backend, receipt.selected_backend.as_deref()];
     for candidate_id in direct_ids.into_iter().flatten() {
         if let Some(carrier) = find_carrier(candidate_id) {
-            return Some(
+            return Ok(Some(
                 crate::model_profile_contract::apply_selected_model_profile_to_row(
                     &carrier,
                     preferred_profile_id.as_deref(),
                 ),
-            );
+            ));
         }
     }
 
@@ -2167,21 +2280,24 @@ fn selected_internal_host_carrier(
         .flatten()
         .any(|backend_id| backend_is_internal_host_bridge(role_selection, overlay, backend_id));
     if !prefers_internal_backend {
-        return None;
+        return Ok(None);
     }
 
-    let internal_backend_id = effective_backend?;
+    let Some(internal_backend_id) = effective_backend else {
+        return Ok(None);
+    };
     let selected_backend_entry =
         overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, internal_backend_id));
-    let requested_runtime_role = receipt
-        .activation_runtime_role
-        .clone()
-        .or_else(|| {
-            crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
-                role_selection,
-                &receipt.dispatch_target,
-            )
-        })
+    let requested_runtime_role = if let Some(runtime_role) = receipt.activation_runtime_role.clone()
+    {
+        Some(runtime_role)
+    } else {
+        crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
+            role_selection,
+            &receipt.dispatch_target,
+        )?
+    };
+    let requested_runtime_role = requested_runtime_role
         .or_else(|| {
             role_selection
                 .execution_plan
@@ -2226,12 +2342,12 @@ fn selected_internal_host_carrier(
                 carrier,
                 preferred_profile_id.as_deref(),
             );
-        return Some(apply_internal_subagent_profile_overlay(
+        return Ok(Some(apply_internal_subagent_profile_overlay(
             &host_profile_carrier,
             internal_backend_id,
             selected_backend_entry,
             preferred_profile_id.as_deref(),
-        ));
+        )));
     }
 
     let internal_bridge_ids = [
@@ -2265,6 +2381,8 @@ fn selected_internal_host_carrier(
                 preferred_profile_id.as_deref(),
             )
         })
+        .map(Some)
+        .ok_or_else(|| "team_flow_host_carrier_not_configured".to_string())
 }
 
 fn configured_internal_host_runtime_env(
@@ -2808,15 +2926,8 @@ fn configured_lane_rework_target(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> Option<String> {
-    crate::dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)?
-        .get("rework_transitions")
-        .and_then(serde_json::Value::as_object)
-        .into_iter()
-        .flat_map(|transitions| transitions.values())
-        .find_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|target| !target.is_empty())
-        .map(str::to_string)
+    let capability = dispatch_target_capability(role_selection, dispatch_target).ok()?;
+    (capability.rework_targets.len() == 1).then(|| capability.rework_targets[0].clone())
 }
 
 fn host_bridge_blocked_result_contract(
@@ -3236,6 +3347,7 @@ fn materialize_host_tool_bridge_request(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
+    let capability = dispatch_target_capability(role_selection, &receipt.dispatch_target)?;
     let selected_cli_entry = selected_cli_entry.ok_or_else(|| {
         "host_bridge_adapter_registry_missing: selected host CLI registry entry is required before request materialization"
             .to_string()
@@ -3272,27 +3384,8 @@ fn materialize_host_tool_bridge_request(
     let adapter_capability_id = adapter_contract.adapter_capability_id.clone();
     let invocation_mode = adapter_contract.invocation_mode.clone();
     let receipt_mode = adapter_contract.receipt_mode.clone();
-    let configured_runtime_role =
-        crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
-            role_selection,
-            &receipt.dispatch_target,
-        );
-    let request_runtime_role = configured_runtime_role
-        .clone()
-        .or_else(|| dispatch_packet_handoff_runtime_role(dispatch_packet_path))
-        .or_else(|| receipt.activation_runtime_role.clone());
-    let request_task_class = configured_runtime_role
-        .as_deref()
-        .map(|runtime_role| {
-            crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
-                &role_selection.execution_plan,
-                &receipt.dispatch_target,
-                runtime_role,
-            )
-        })
-        .filter(|task_class| !task_class.trim().is_empty())
-        .or_else(|| dispatch_packet_handoff_task_class(dispatch_packet_path))
-        .unwrap_or_else(|| canonical_dispatch_target_for_admissibility(&receipt.dispatch_target));
+    let request_runtime_role = Some(capability.runtime_role.clone());
+    let request_task_class = capability.task_class.clone();
     let mut request_owned_paths = dispatch_packet_string_list(dispatch_packet_path, "owned_paths");
     if crate::runtime_dispatch_downstream_packets::test_lane_requires_test_write_scope(
         &receipt.dispatch_target,
@@ -3797,10 +3890,11 @@ pub(crate) fn validated_host_bridge_receipt_identity(
             .map_err(|error| format!("host_bridge_receipt_identity_recorded_at_invalid:{error}"))?,
     )?;
     identity.validate_paths(state_root)?;
-    let blockers = identity.compact_receipt_blockers(
-        &serde_json::to_value(receipt)
-            .map_err(|error| format!("host_bridge_receipt_identity_receipt_invalid:{error}"))?,
-    );
+    let blockers =
+        identity
+            .compact_receipt_blockers(&serde_json::to_value(receipt).map_err(|error| {
+                format!("host_bridge_receipt_identity_receipt_invalid:{error}")
+            })?);
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }
@@ -4072,7 +4166,12 @@ fn ingest_completed_host_bridge_result(
             "host_tool_bridge_receipt_path": receipt_path.display().to_string()
         }),
     );
-    mark_dispatch_result_execution_evidence(body, "host_tool_bridge_receipt", backend_id);
+    mark_dispatch_result_execution_evidence(
+        body,
+        "host_tool_bridge_receipt",
+        backend_id,
+        Some(carrier_id),
+    );
     refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "recorded");
     Ok(Some(result))
 }
@@ -4497,6 +4596,7 @@ fn mark_dispatch_result_execution_evidence(
     body: &mut serde_json::Map<String, serde_json::Value>,
     evidence_kind: &str,
     backend_id: &str,
+    carrier_id: Option<&str>,
 ) {
     let completion_receipt_id = body
         .get("completion_receipt_id")
@@ -4548,6 +4648,11 @@ fn mark_dispatch_result_execution_evidence(
         serde_json::json!(evidence_kind),
     );
     execution_evidence.insert("backend_id".to_string(), serde_json::json!(backend_id));
+    if let Some(carrier_id) = carrier_id.map(str::trim).filter(|value| !value.is_empty()) {
+        execution_evidence.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
+    } else {
+        execution_evidence.remove("carrier_id");
+    }
     execution_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
     if let Some(receipt_id) = completion_receipt_id {
         execution_evidence.insert("receipt_id".to_string(), serde_json::json!(receipt_id));
@@ -4636,8 +4741,8 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             receipt.dispatch_target
         ));
     };
-    if !backend_is_admissible_for_dispatch_target(
-        &role_selection.execution_plan,
+    if !backend_is_admissible_for_role_selection(
+        role_selection,
         backend_id,
         &receipt.dispatch_target,
     ) {
@@ -4671,7 +4776,8 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         receipt,
         role_selection,
         Some(&overlay),
-    ) else {
+    )?
+    else {
         return Ok(None);
     };
 
@@ -5092,7 +5198,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         .and_then(serde_json::Value::as_object_mut)
     {
         dispatch.insert("backend_class".to_string(), serde_json::json!("internal"));
-        dispatch.insert("backend_id".to_string(), serde_json::json!(carrier_id));
+        dispatch.insert("backend_id".to_string(), serde_json::json!(backend_id));
         dispatch.insert(
             "carrier_id".to_string(),
             serde_json::json!(carrier["role_id"].clone()),
@@ -5174,8 +5280,13 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     if success {
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
-        mark_dispatch_result_execution_evidence(body, "internal_carrier_completion", carrier_id);
-        refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "recorded");
+        mark_dispatch_result_execution_evidence(
+            body,
+            "internal_carrier_completion",
+            backend_id,
+            Some(carrier_id),
+        );
+        refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "recorded");
     } else if activation_only {
         if timed_out {
             let timeout_seconds = wrapped_command
@@ -5272,6 +5383,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     host_runtime: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
+    let capability = dispatch_target_capability(role_selection, &receipt.dispatch_target)?;
     let (selected_cli_system, _) =
         crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
     let preferred_external_backend = preferred_backend.and_then(|backend_id| {
@@ -5424,9 +5536,9 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     }
 
     // Admissibility gate: refuse to dispatch to an external backend that is not
-    // admissible for the target lane (e.g. a read-only backend for an implementer lane).
-    if !backend_is_admissible_for_dispatch_target(
-        &role_selection.execution_plan,
+    // admissible for the selected TeamFlow capability.
+    if !backend_is_admissible_for_role_selection(
+        role_selection,
         &backend_id,
         &receipt.dispatch_target,
     ) {
@@ -5464,8 +5576,11 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         body.insert(
             "blocker_reason".to_string(),
             serde_json::json!(format!(
-                "Backend `{backend_id}` is not admissible for dispatch target `{}` (lane_admissibility denies this lane); an implementation-capable backend is required",
-                receipt.dispatch_target
+                "Backend `{backend_id}` is not admissible for TeamFlow node `{}` (dispatch_target={}, runtime_role={}, task_class={})",
+                capability.node_id,
+                capability.dispatch_target,
+                capability.runtime_role,
+                capability.task_class,
             )),
         );
         body.insert("status".to_string(), serde_json::json!("blocked"));
@@ -5487,18 +5602,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             .is_some_and(
                 crate::runtime_dispatch_state::runtime_dispatch_packet_has_concrete_owned_paths,
             );
-    let policy_dispatch_target =
-        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
-            &role_selection.execution_plan,
-            &receipt.dispatch_target,
+    let (readiness_verdict, selected_model_profile_id) =
+        external_cli_dispatch_readiness_verdict_for_capability(
+            &backend_id,
+            &backend_entry,
+            route_selected_model_profile_id,
+            &capability,
+            packet_has_concrete_owned_paths,
         );
-    let (readiness_verdict, selected_model_profile_id) = external_cli_dispatch_readiness_verdict(
-        &backend_id,
-        &backend_entry,
-        route_selected_model_profile_id,
-        &policy_dispatch_target,
-        packet_has_concrete_owned_paths,
-    );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
         if let Some(fallback_backend) = ready_external_readiness_fallback_backend(
             role_selection,
@@ -5820,7 +5931,36 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     if success {
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
-        mark_dispatch_result_execution_evidence(body, "external_backend_completion", &backend_id);
+        let carrier_id = body
+            .get("backend_dispatch")
+            .and_then(|value| value.get("carrier_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                role_selection
+                    .execution_plan
+                    .pointer("/runtime_assignment/selected_carrier_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            });
+        if let Some(carrier_id) = carrier_id.as_deref() {
+            if let Some(dispatch) = body
+                .get_mut("backend_dispatch")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                dispatch.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
+            }
+        }
+        mark_dispatch_result_execution_evidence(
+            body,
+            "external_backend_completion",
+            &backend_id,
+            carrier_id.as_deref(),
+        );
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "recorded");
     } else if timed_out
         || parsed_output
@@ -5930,6 +6070,41 @@ mod tests {
     use std::process::Stdio;
     #[cfg(any(unix, windows))]
     use std::time::{Duration, Instant};
+
+    fn capability_from_backend_profile(
+        backend_entry: &serde_yaml::Value,
+        profile_id: &str,
+        dispatch_target: &str,
+    ) -> super::DispatchTargetCapability {
+        let profile = yaml_lookup(backend_entry, &["model_profiles", profile_id])
+            .expect("fixture profile should exist");
+        let runtime_role = crate::yaml_string_list(crate::yaml_lookup(profile, &["runtime_roles"]))
+            .into_iter()
+            .next()
+            .expect("fixture profile should declare a runtime role");
+        let task_class = crate::yaml_string_list(crate::yaml_lookup(profile, &["task_classes"]))
+            .into_iter()
+            .next()
+            .expect("fixture profile should declare a task class");
+        let lane = super::DispatchContractLane {
+            task_class: Some(task_class.as_str()),
+        };
+        let backend_admissibility_key =
+            crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+                dispatch_target,
+                Some(&lane),
+            )
+            .into_string();
+        super::DispatchTargetCapability {
+            node_id: dispatch_target.to_string(),
+            dispatch_target: dispatch_target.to_string(),
+            runtime_role,
+            task_class,
+            owned_scope_required: false,
+            backend_admissibility_key,
+            rework_targets: Vec::new(),
+        }
+    }
 
     #[test]
     fn parse_external_provider_output_extracts_qwen_json_success_result() {
@@ -7069,7 +7244,9 @@ dispatch:
         .expect_err("missing selected CLI entry must block before materialization");
 
         assert!(error.starts_with("host_bridge_adapter_registry_missing:"));
-        assert!(!project_root.join(".vida/data/state/host-tool-bridge").exists());
+        assert!(!project_root
+            .join(".vida/data/state/host-tool-bridge")
+            .exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -7523,11 +7700,7 @@ host_tool_bridge:
                 "request_path": "/tmp/vida/host-tool-bridge/REQUESTS/request.json"
             });
             assert!(
-                !super::host_bridge_request_value_matches(
-                    &substituted,
-                    &expected,
-                    "request_path"
-                ),
+                !super::host_bridge_request_value_matches(&substituted, &expected, "request_path"),
                 "case-variant host bridge request paths must remain distinct on case-sensitive filesystems"
             );
         }
@@ -9102,10 +9275,8 @@ agent_system:
             "status": "blocked",
             "blocker_code": "host_tool_bridge_adapter_required"
         });
-        std::fs::write(&result_path, retryable_artifact.to_string())
-            .expect("write stale result");
-        std::fs::write(&receipt_path, retryable_artifact.to_string())
-            .expect("write stale receipt");
+        std::fs::write(&result_path, retryable_artifact.to_string()).expect("write stale result");
+        std::fs::write(&receipt_path, retryable_artifact.to_string()).expect("write stale receipt");
         let configured_entry = configured_host_bridge_test_entry();
 
         let error = materialize_host_tool_bridge_request(
@@ -9808,11 +9979,13 @@ agent_system:
             crate::yaml_lookup(&overlay, &["agent_system", "subagents", "qwen_cli"])
                 .expect("backend should exist");
 
+        let capability =
+            capability_from_backend_profile(backend_entry, "qwen_gpt54_low", "implementer");
         let (readiness, selected_profile) = super::external_cli_dispatch_readiness_verdict(
             "qwen_cli",
             backend_entry,
             Some("qwen_gpt54_low".to_string()),
-            "implementer",
+            &capability,
             true,
         );
 
@@ -9888,11 +10061,13 @@ agent_system:
             crate::yaml_lookup(&overlay, &["agent_system", "subagents", "qwen_cli"])
                 .expect("backend should exist");
 
+        let capability =
+            capability_from_backend_profile(backend_entry, "qwen_gpt55_medium_guarded", "coach");
         let (readiness, selected_profile) = super::external_cli_dispatch_readiness_verdict(
             "qwen_cli",
             backend_entry,
             Some("qwen_gpt55_medium_guarded".to_string()),
-            "coach",
+            &capability,
             false,
         );
 
@@ -10307,7 +10482,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan,
             reason: "test".to_string(),
         }
@@ -10491,7 +10667,8 @@ host_tool_bridge:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["continue".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({}),
             reason: "test".to_string(),
         };
@@ -10586,7 +10763,12 @@ dispatch:
             }),
         )]);
 
-        mark_dispatch_result_execution_evidence(&mut body, "internal_carrier_completion", "junior");
+        mark_dispatch_result_execution_evidence(
+            &mut body,
+            "internal_carrier_completion",
+            "backend-token",
+            Some("carrier-token"),
+        );
 
         assert_eq!(
             body["activation_semantics"]["activation_kind"],
@@ -10603,7 +10785,8 @@ dispatch:
             body["execution_evidence"]["evidence_kind"],
             "internal_carrier_completion"
         );
-        assert_eq!(body["execution_evidence"]["backend_id"], "junior");
+        assert_eq!(body["execution_evidence"]["backend_id"], "backend-token");
+        assert_eq!(body["execution_evidence"]["carrier_id"], "carrier-token");
         assert_eq!(body["execution_evidence"]["receipt_backed"], true);
     }
 
@@ -10631,7 +10814,8 @@ dispatch:
                 allow_freeform_chat: false,
                 confidence: "high".to_string(),
                 matched_terms: vec![],
-                compiled_bundle: serde_json::Value::Null,
+                compiled_bundle:
+                    crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
                 execution_plan: serde_json::json!({
                     "backend_admissibility_matrix": [
                         {
@@ -10738,7 +10922,8 @@ carriers:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["continue".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "runtime_assignment": {
                     "activation_agent_type": "middle",
@@ -10795,6 +10980,7 @@ carriers:
             &role_selection,
             None,
         )
+        .expect("strict TeamFlow carrier lookup should succeed")
         .expect("internal backend alias should bridge to activation tier");
 
         assert_eq!(carrier["role_id"].as_str(), Some("middle"));
@@ -10834,7 +11020,8 @@ carriers:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["architecture".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "runtime_assignment": {
                     "activation_agent_type": "junior",
@@ -10886,6 +11073,7 @@ carriers:
             &role_selection,
             None,
         )
+        .expect("strict TeamFlow carrier lookup should succeed")
         .expect("runtime-role-compatible carrier should be selected");
 
         assert_eq!(carrier["role_id"].as_str(), Some("architect"));
@@ -10934,7 +11122,8 @@ carriers:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["continue".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "runtime_assignment": {
                     "activation_agent_type": "middle",
@@ -10992,6 +11181,7 @@ carriers:
             &role_selection,
             None,
         )
+        .expect("strict TeamFlow carrier lookup should succeed")
         .expect("internal backend alias should bridge to activation tier");
 
         assert_eq!(carrier["role_id"].as_str(), Some("middle"));
@@ -11061,7 +11251,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["continue".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
@@ -11117,6 +11308,7 @@ agent_system:
             &role_selection,
             Some(&overlay),
         )
+        .expect("strict TeamFlow carrier lookup should succeed")
         .expect("internal route profile should bridge through host carrier");
 
         assert_eq!(carrier["role_id"].as_str(), Some("middle"));
@@ -11528,7 +11720,8 @@ host_tool_bridge:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: Vec::new(),
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {},
                 "runtime_assignment": {
@@ -12418,7 +12611,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "backend_admissibility_matrix": [
                     {
@@ -12550,7 +12744,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "backend_admissibility_matrix": [
                     {
@@ -12702,7 +12897,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "backend_admissibility_matrix": [
                     {
@@ -13044,7 +13240,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "backend_admissibility_matrix": [
                     {
@@ -13116,7 +13313,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
@@ -13165,7 +13363,8 @@ agent_system:
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "verification": {
@@ -13193,6 +13392,185 @@ agent_system:
                 "hermes_cli"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn backend_admissibility_resolves_selected_non_default_flow_alias() {
+        let mut role_selection =
+            crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        let (_, node_id) =
+            crate::runtime_dispatch_state::select_repository_non_default_flow(&mut role_selection)
+                .expect("repository should expose an enabled non-default flow");
+        let authority = crate::runtime_dispatch_state::require_team_flow_authority_for_selection(
+            &role_selection,
+        )
+        .expect("selected flow authority should compile");
+        let node = authority
+            .resolve_target(None, &node_id)
+            .expect("selected node should resolve");
+        let backend_id = node.executor_backend_relation["selected_id"]
+            .as_str()
+            .or_else(|| node.assignment["selected_backend_id"].as_str())
+            .filter(|value| !value.trim().is_empty())
+            .expect("selected node should expose its configured backend")
+            .to_string();
+        let target_key = crate::runtime_assignment_policy::canonical_dispatch_target_name(
+            node.dispatch_target.as_str(),
+        );
+        let mut lane_admissibility = serde_json::Map::new();
+        lane_admissibility.insert(target_key, serde_json::Value::Bool(true));
+        role_selection.execution_plan["backend_admissibility_matrix"] = serde_json::json!([{
+            "backend_id": backend_id,
+            "backend_class": node.executor_backend_class.clone(),
+            "lane_admissibility": lane_admissibility
+        }]);
+        let replay_target = if node.dispatch_alias.trim().is_empty() {
+            node.dispatch_target.as_str()
+        } else {
+            node.dispatch_alias.as_str()
+        };
+        assert!(super::backend_is_admissible_for_role_selection(
+            &role_selection,
+            backend_id.as_str(),
+            replay_target,
+        ));
+    }
+
+    #[test]
+    fn dispatch_capability_matches_custom_role_and_task_profile() {
+        let capability = super::DispatchTargetCapability {
+            node_id: "custom-node".to_string(),
+            dispatch_target: "custom-target".to_string(),
+            runtime_role: "custom-role".to_string(),
+            task_class: "custom-task".to_string(),
+            owned_scope_required: false,
+            backend_admissibility_key: "custom-task".to_string(),
+            rework_targets: Vec::new(),
+        };
+        let profile = serde_json::json!({
+            "runtime_roles": ["custom-role"],
+            "task_classes": ["custom-task"]
+        });
+        assert!(super::profile_supports_dispatch_target(
+            &profile,
+            &capability
+        ));
+        assert_eq!(capability.backend_admissibility_key, capability.task_class);
+        let mismatch = serde_json::json!({
+            "runtime_roles": ["custom-role"],
+            "task_classes": ["other-task"]
+        });
+        assert!(!super::profile_supports_dispatch_target(
+            &mismatch,
+            &capability
+        ));
+    }
+
+    #[test]
+    fn dispatch_capability_owned_guard_is_derived_from_scope_policy() {
+        assert!(super::scope_policy_requires_owned_paths(
+            &serde_json::json!({
+                "write_scope_guard_required": true
+            })
+        ));
+        assert!(super::scope_policy_requires_owned_paths(
+            &serde_json::json!({
+                "write_scope": "guard_required_packet_owned_paths"
+            })
+        ));
+        assert!(!super::scope_policy_requires_owned_paths(
+            &serde_json::json!({
+                "write_scope": "read-only"
+            })
+        ));
+        let guarded = super::DispatchTargetCapability {
+            node_id: "guarded".to_string(),
+            dispatch_target: "guarded".to_string(),
+            runtime_role: "custom-role".to_string(),
+            task_class: "custom-task".to_string(),
+            owned_scope_required: true,
+            backend_admissibility_key: "custom-task".to_string(),
+            rework_targets: Vec::new(),
+        };
+        let profile = serde_json::json!({
+            "write_scope": "guard_required_packet_owned_paths"
+        });
+        assert!(super::profile_compatible_with_packet_scope(
+            &profile, &guarded, false
+        ));
+    }
+
+    #[test]
+    fn dispatch_capability_fails_closed_when_authority_fields_are_missing() {
+        let mut selection = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        selection.compiled_bundle = serde_json::json!({});
+        let blocker = super::dispatch_target_capability(&selection, "missing-target")
+            .expect_err("missing persisted TeamFlow fields must block capability resolution");
+        assert!(!blocker.trim().is_empty());
+    }
+
+    #[test]
+    fn dispatch_capability_exact_selected_node_wins_duplicate_alias_and_alias_only_is_ambiguous() {
+        let bundle = crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let projection =
+            crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
+                .expect("canonical authority should compile");
+        let (alias, exact_node_id) = projection
+            .nodes
+            .iter()
+            .filter(|node| node.node.included)
+            .find_map(|node| {
+                projection
+                    .nodes
+                    .iter()
+                    .find(|other| {
+                        other.node.included
+                            && other.node.node_id != node.node.node_id
+                            && other.dispatch_alias == node.dispatch_alias
+                    })
+                    .map(|_| (node.dispatch_alias.clone(), node.node.node_id.clone()))
+            })
+            .expect("canonical authority should expose duplicate alias");
+
+        let mut selected = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        selected.compiled_bundle = bundle.clone();
+        selected.execution_plan = serde_json::json!({
+            "team_flow_authority_selected_node_id": exact_node_id
+        });
+        let capability = super::dispatch_target_capability(&selected, &alias)
+            .expect("exact selected node must win duplicate alias");
+        assert_eq!(capability.node_id, exact_node_id);
+
+        let mut alias_only = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        alias_only.compiled_bundle = bundle;
+        alias_only.execution_plan = serde_json::json!({});
+        let blocker = super::dispatch_target_capability(&alias_only, &alias)
+            .expect_err("duplicate alias without selected node must fail closed");
+        assert!(
+            blocker.contains("ambiguous"),
+            "unexpected blocker: {blocker}"
+        );
+    }
+
+    #[test]
+    fn configured_rework_target_requires_one_explicit_transition() {
+        let bundle = crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let projection =
+            crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
+                .expect("canonical authority should compile");
+        let source = projection
+            .nodes
+            .iter()
+            .find(|node| node.node.included && node.node.rework_targets.len() == 1)
+            .expect("canonical authority should expose a single rework transition");
+        let mut selection = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        selection.compiled_bundle = bundle;
+        selection.execution_plan = serde_json::json!({});
+        let expected = source.node.rework_targets[0].clone();
+        assert_eq!(
+            super::configured_lane_rework_target(&selection, &source.dispatch_target),
+            Some(expected)
         );
     }
 }

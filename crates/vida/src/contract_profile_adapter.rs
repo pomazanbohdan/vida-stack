@@ -4,7 +4,7 @@ pub(crate) use crate::release1_contracts::{
     BlockerCode, CompatibilityBoundary, CompatibilityClass,
 };
 
-use crate::contract_profile_registry::{ContractProfileId, selected_contract_profile_id};
+use crate::contract_profile_registry::{selected_contract_profile_id, ContractProfileId};
 use crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC;
 
 pub(crate) fn blocker_code(code: BlockerCode) -> Option<String> {

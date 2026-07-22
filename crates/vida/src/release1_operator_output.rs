@@ -1,14 +1,14 @@
 use serde_json::Value;
 
 pub(crate) use operator_output::operator_contracts::{
-    OperatorContractSpec, OperatorSurfaceVerdict, canonical_blocker_code_entries,
-    canonical_next_action_entries, canonical_operator_contract_status,
-    canonical_operator_contract_status_str, canonical_pass_blocked_contract_status_str,
-    finalize_operator_surface_verdict, is_canonical_blocker_code_entries,
-    is_canonical_next_action_entries, is_canonical_operator_contract_status,
-    normalize_blocker_codes, operator_contract_status_for_blockers,
-    operator_contract_status_is_blocked, operator_contracts_consistency_error,
-    operator_output_contract_parity_error, render_operator_contract_envelope,
+    canonical_blocker_code_entries, canonical_next_action_entries,
+    canonical_operator_contract_status, canonical_operator_contract_status_str,
+    canonical_pass_blocked_contract_status_str, finalize_operator_surface_verdict,
+    is_canonical_blocker_code_entries, is_canonical_next_action_entries,
+    is_canonical_operator_contract_status, normalize_blocker_codes,
+    operator_contract_status_for_blockers, operator_contract_status_is_blocked,
+    operator_contracts_consistency_error, operator_output_contract_parity_error,
+    render_operator_contract_envelope, OperatorContractSpec, OperatorSurfaceVerdict,
 };
 
 pub(crate) const RELEASE1_OPERATOR_CONTRACT_SPEC: OperatorContractSpec = OperatorContractSpec {
@@ -371,12 +371,11 @@ pub(crate) fn shared_operator_output_contract_parity_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        Release1OperatorOutputBuilder, build_release1_operator_output_payload,
-        canonical_release1_blocker_code_entries, canonical_release1_operator_blocker_codes,
-        canonical_release1_operator_contract_status,
+        build_release1_operator_output_payload, canonical_release1_blocker_code_entries,
+        canonical_release1_operator_blocker_codes, canonical_release1_operator_contract_status,
         finalize_release1_operator_surface_verdict_with_status, finalize_release1_operator_truth,
         release1_operator_contracts_consistency_error,
-        shared_operator_output_contract_parity_error,
+        shared_operator_output_contract_parity_error, Release1OperatorOutputBuilder,
     };
     use serde_json::json;
 

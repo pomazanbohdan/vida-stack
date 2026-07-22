@@ -1,11 +1,11 @@
 use crate::vida_client::{
-    VidaClient, pass_response, problem_response, unsupported_operation_response,
+    pass_response, problem_response, unsupported_operation_response, VidaClient,
 };
 use serde_json::json;
 use vida_contracts::{
-    VidaCommandEnvelope, VidaCommandResponse, VidaEvent, VidaEventCursor, VidaProblem,
-    VidaProblemSeverity, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
-    mvp_operation_catalog, operation_input_schema, operations,
+    mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
+    VidaCommandResponse, VidaEvent, VidaEventCursor, VidaProblem, VidaProblemSeverity,
+    VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
 };
 
 #[derive(Debug, Clone)]
@@ -1034,7 +1034,7 @@ fn project_not_found_response(
             code: "project_not_registered".to_string(),
             scope: Some(registry_entry_id.to_string()),
             next_actions: vec![
-                "Use a registry_entry_id from vida.project.registry.list.".to_string(),
+                "Use a registry_entry_id from vida.project.registry.list.".to_string()
             ],
         }],
         remediation: vec!["Call vida.project.registry.list and retry.".to_string()],

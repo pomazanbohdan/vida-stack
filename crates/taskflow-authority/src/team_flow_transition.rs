@@ -80,6 +80,7 @@ pub struct TeamFlowSnapshot {
     pub config_hash: String,
     pub registry_hash: String,
     pub snapshot_ref: String,
+    pub entry_node_id: String,
     pub ordered_nodes: Vec<String>,
     pub nodes: Vec<TeamFlowNode>,
 }
@@ -162,6 +163,20 @@ pub enum TeamFlowSnapshotError {
         field: &'static str,
         values: Vec<String>,
     },
+    #[error(
+        "team-flow snapshot node `{node}` task class `{task_class}` is not declared in role capabilities"
+    )]
+    TaskClassNotInRoleCapabilities { node: String, task_class: String },
+    #[error(
+        "team-flow snapshot node `{node}` command ref `{command_ref}` does not resolve in the command catalog"
+    )]
+    UnresolvedCommandReference { node: String, command_ref: String },
+    #[error("team-flow snapshot sequence field `{field}` is missing, malformed, or inconsistent")]
+    InvalidSequence { field: &'static str },
+    #[error(
+        "team-flow snapshot node `{node}` approval contract field `{field}` is missing or inconsistent"
+    )]
+    InvalidApprovalContract { node: String, field: &'static str },
     #[error("team-flow snapshot node `{node}` has malformed evidence field `{field}`")]
     MalformedEvidence { node: String, field: &'static str },
     #[error("team-flow snapshot node `{node}` points to unknown node `{target}`")]
@@ -184,15 +199,26 @@ impl TeamFlowSnapshot {
         let flow_ref = required_metadata(input.flow_ref, "flow_ref")?;
         let registry_hash = required_metadata(input.registry_hash, "registry_hash")?;
         let flow = select_flow(config, &flow_ref)?;
-        let flow_id = match strict_string_aliases(flow, &["flow_id", "id"], "flow_id", "flow")? {
-            Some(value) => value,
-            None => flow_ref.clone(),
-        };
+        let flow_id = strict_string_aliases(flow, &["flow_id", "id"], "flow_id", "flow")?
+            .ok_or(TeamFlowSnapshotError::MissingField("flow_id"))?;
         if flow_id != flow_ref {
             return Err(TeamFlowSnapshotError::FlowIdentityMismatch {
                 expected: flow_ref,
                 actual: flow_id,
             });
+        }
+        if let Some(selected_flow) = strict_string_aliases(
+            config,
+            &["selected_flow_set", "selected_flow_id"],
+            "selected_flow_set",
+            "config",
+        )? {
+            if selected_flow != flow_ref {
+                return Err(TeamFlowSnapshotError::FlowIdentityMismatch {
+                    expected: flow_ref.clone(),
+                    actual: selected_flow,
+                });
+            }
         }
         if let Some(config_value) =
             strict_string_aliases(config, &["config_id", "id"], "config_id", "config")?
@@ -228,14 +254,22 @@ impl TeamFlowSnapshot {
         if steps.is_empty() {
             return Err(TeamFlowSnapshotError::EmptyFlow);
         }
+        let entry_node_id = strict_string_aliases(
+            flow,
+            &["entry_node_id"],
+            "entry_node_id",
+            "flow",
+        )?
+        .ok_or(TeamFlowSnapshotError::MissingField("entry_node_id"))?;
 
         let roles_value = strict_source(
             config,
             &["roles", "role_registry", "registry"],
             "roles",
             "registry",
-        )?;
-        let roles = role_index(roles_value)?;
+        )?
+        .ok_or(TeamFlowSnapshotError::MissingField("roles"))?;
+        let roles = role_index(Some(roles_value))?;
         let mut seen = BTreeSet::new();
         let mut nodes = Vec::with_capacity(steps.len());
 
@@ -260,10 +294,12 @@ impl TeamFlowSnapshot {
             if !seen.insert(node_id.clone()) {
                 return Err(TeamFlowSnapshotError::DuplicateNode(node_id));
             }
-            let role = match roles.get(&node_id) {
-                Some(role) => role.clone(),
-                None => Value::Null,
-            };
+            let role = roles.get(&node_id).cloned().ok_or_else(|| {
+                TeamFlowSnapshotError::MissingNodeField {
+                    node: node_id.clone(),
+                    field: "role",
+                }
+            })?;
             let runtime_role =
                 merged_string(&step, &role, "runtime_role", &node_id)?.ok_or_else(|| {
                     TeamFlowSnapshotError::MissingNodeField {
@@ -277,26 +313,23 @@ impl TeamFlowSnapshot {
                     node: node_id.clone(),
                     field: "inclusion_rule",
                 })?;
-            let included = match strict_bool_aliases(
+            let included = strict_bool_aliases(
                 &step,
                 &role,
                 &["included", "lane_template_included"],
                 &node_id,
-            )? {
-                Some(value) => value,
-                None => match inclusion_rule.as_str() {
-                    "always" => true,
-                    "never" => false,
-                    _ => {
-                        return Err(TeamFlowSnapshotError::MissingNodeField {
-                            node: node_id.clone(),
-                            field: "included",
-                        });
+            )?
+            .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+                node: node_id.clone(),
+                field: "included",
+            })?;
+            let required =
+                strict_bool_aliases(&step, &role, &["required"], &node_id)?.ok_or_else(|| {
+                    TeamFlowSnapshotError::MissingNodeField {
+                        node: node_id.clone(),
+                        field: "required",
                     }
-                },
-            };
-            let required = strict_bool_aliases(&step, &role, &["required"], &node_id)?
-                .unwrap_or(included && inclusion_rule != "optional" && inclusion_rule != "never");
+                })?;
 
             let command = strict_source(
                 &step,
@@ -305,33 +338,71 @@ impl TeamFlowSnapshot {
                 &node_id,
             )?;
             let command_mapping = match command {
+                Some(value) if value.is_null() => None,
                 Some(value) => Some(strict_object_value(value, "command_mapping", &node_id)?),
                 None => None,
             };
             let command_ref = resolve_command_ref(&step, command_mapping, &node_id)?;
+            validate_command_reference(
+                config,
+                &step,
+                command_mapping,
+                command_ref.as_deref(),
+                &node_id,
+            )?;
             let command_mapping_hash = command_mapping.map(hash_json);
             let rework_targets = parse_targets(
                 strict_source(
                     &step,
-                    &["rework_transitions"],
-                    "rework_transitions",
+                    &["rework", "rework_transitions"],
+                    "rework/rework_transitions",
                     &node_id,
                 )?,
                 &node_id,
             )?;
-            let evidence_requirements = parse_evidence_requirements(&step, &node_id)?;
-            let next_node =
-                strict_string_aliases(&step, &["next_node", "next"], "next_node", &node_id)?;
+            let evidence_requirements = parse_evidence_requirements(
+                &step,
+                required,
+                is_projection_config(config, &step),
+                &node_id,
+            )?;
+            let next_node = strict_nullable_string_aliases(
+                &step,
+                &["next_node", "next"],
+                "next_node",
+                &node_id,
+            )?
+            .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+                node: node_id.clone(),
+                field: "next_node",
+            })?;
             let terminal = strict_bool_aliases(
                 &step,
                 &role,
                 &["terminal", "terminal_closure", "closes_workflow"],
                 &node_id,
             )?
-            .unwrap_or(false);
+            .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+                node: node_id.clone(),
+                field: "terminal",
+            })?;
             let requires_user_approval =
                 strict_bool_aliases(&step, &role, &["requires_user_approval"], &node_id)?
-                    .unwrap_or(false);
+                    .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+                        node: node_id.clone(),
+                        field: "requires_user_approval",
+                    })?;
+            validate_inclusion_rule(&inclusion_rule, &node_id)?;
+            validate_terminal_edge(&node_id, terminal, next_node.as_deref())?;
+            validate_approval_contract(
+                config,
+                &step,
+                &node_id,
+                requires_user_approval,
+                next_node.as_deref(),
+                &rework_targets,
+            )?;
+            validate_projection_metadata(config, &step, required, &node_id)?;
 
             nodes.push(TeamFlowNode {
                 node_id,
@@ -354,6 +425,7 @@ impl TeamFlowSnapshot {
             .iter()
             .map(|node| node.node_id.clone())
             .collect::<Vec<_>>();
+        validate_execution_sequences(config, flow, &nodes)?;
         let mut snapshot = Self {
             config_id,
             profile,
@@ -361,10 +433,23 @@ impl TeamFlowSnapshot {
             config_hash: hash_json(config),
             registry_hash,
             snapshot_ref: String::new(),
+            entry_node_id,
             ordered_nodes,
             nodes,
         };
         validate_edges(&snapshot.nodes)?;
+        let Some(entry_node) = snapshot.node(&snapshot.entry_node_id) else {
+            return Err(TeamFlowSnapshotError::InvalidEdge {
+                node: "entry_node_id".to_string(),
+                target: snapshot.entry_node_id.clone(),
+            });
+        };
+        if !entry_node.included {
+            return Err(TeamFlowSnapshotError::InvalidEdge {
+                node: "entry_node_id".to_string(),
+                target: snapshot.entry_node_id.clone(),
+            });
+        }
         snapshot.snapshot_ref = hash_snapshot(&snapshot);
         Ok(snapshot)
     }
@@ -532,15 +617,21 @@ pub fn required_evidence_satisfied(requirements: &[String], evidence: &[String])
 }
 
 fn missing_evidence(requirements: &[String], evidence: &[String]) -> Vec<String> {
-    let actual = evidence
-        .iter()
-        .filter_map(|value| nonempty(value))
-        .collect::<BTreeSet<_>>();
-    requirements
-        .iter()
-        .filter_map(|required| nonempty(required))
-        .filter(|required| !actual.contains(required))
-        .collect()
+    let mut actual = BTreeSet::new();
+    for value in evidence {
+        if let Some(value) = nonempty(value) {
+            actual.insert(value);
+        }
+    }
+    let mut missing = Vec::new();
+    for required in requirements {
+        if let Some(required) = nonempty(required) {
+            if !actual.contains(&required) {
+                missing.push(required);
+            }
+        }
+    }
+    missing
 }
 
 fn required_remaining(snapshot: &TeamFlowSnapshot, current: &str) -> Vec<String> {
@@ -739,14 +830,19 @@ fn parse_targets(value: Option<&Value>, node: &str) -> Result<Vec<String>, TeamF
                 node: node.to_string(),
                 field: "rework_transitions",
             })?,
-        Value::Object(values) => values
-            .values()
-            .map(|value| value.as_str().and_then(nonempty))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(TeamFlowSnapshotError::MalformedEvidence {
-                node: node.to_string(),
-                field: "rework_transitions",
-            })?,
+        Value::Object(values) => {
+            if let Some(targets) = values.get("targets") {
+                return parse_targets(Some(targets), node);
+            }
+            values
+                .values()
+                .map(|value| value.as_str().and_then(nonempty))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(TeamFlowSnapshotError::MalformedEvidence {
+                    node: node.to_string(),
+                    field: "rework_transitions",
+                })?
+        }
         Value::String(value) => {
             vec![
                 nonempty(value).ok_or(TeamFlowSnapshotError::MalformedEvidence {
@@ -762,11 +858,22 @@ fn parse_targets(value: Option<&Value>, node: &str) -> Result<Vec<String>, TeamF
             });
         }
     };
+    let mut seen = BTreeSet::new();
+    for value in &values {
+        if !seen.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "rework/rework_transitions",
+                values: vec![value.clone()],
+            });
+        }
+    }
     Ok(values)
 }
 
 fn parse_evidence_requirements(
     step: &Value,
+    required: bool,
+    projection: bool,
     node: &str,
 ) -> Result<Vec<String>, TeamFlowSnapshotError> {
     let flat = strict_source(
@@ -794,6 +901,24 @@ fn parse_evidence_requirements(
         None => None,
     };
     let selected = match (flat, nested) {
+        (Some(flat), Some(nested)) if projection => {
+            let flat_values = parse_evidence_value(flat, node)?;
+            let nested_values = parse_evidence_value(nested, node)?;
+            if flat_values != nested_values {
+                return Err(TeamFlowSnapshotError::ConflictingAliases {
+                    field: "evidence_requirements",
+                    values: vec!["flat".to_string(), "proof_gates".to_string()],
+                });
+            }
+            ensure_unique_evidence(&flat_values, node)?;
+            if required && flat_values.is_empty() {
+                return Err(TeamFlowSnapshotError::MissingNodeField {
+                    node: node.to_string(),
+                    field: "evidence_requirements",
+                });
+            }
+            return Ok(flat_values);
+        }
         (Some(_), Some(_)) => {
             return Err(TeamFlowSnapshotError::ConflictingAliases {
                 field: "evidence_requirements",
@@ -801,9 +926,36 @@ fn parse_evidence_requirements(
             });
         }
         (Some(value), None) | (None, Some(value)) => value,
-        (None, None) => return Ok(Vec::new()),
+        (None, None) => {
+            return Err(TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field: "proof_gates/evidence_requirements",
+            });
+        }
     };
-    parse_evidence_value(selected, node)
+    let evidence = parse_evidence_value(selected, node)?;
+    ensure_unique_evidence(&evidence, node)?;
+    if required && evidence.is_empty() {
+        return Err(TeamFlowSnapshotError::MissingNodeField {
+            node: node.to_string(),
+            field: "evidence_requirements",
+        });
+    }
+    Ok(evidence)
+}
+
+fn ensure_unique_evidence(evidence: &[String], node: &str) -> Result<(), TeamFlowSnapshotError> {
+    let mut seen = BTreeSet::new();
+    for value in evidence {
+        if !seen.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "evidence_requirements",
+                values: vec![value.clone()],
+            });
+        }
+    }
+    let _ = node;
+    Ok(())
 }
 
 fn parse_evidence_value(value: &Value, node: &str) -> Result<Vec<String>, TeamFlowSnapshotError> {
@@ -896,6 +1048,33 @@ fn strict_string_aliases(
         })
 }
 
+fn strict_nullable_string_aliases(
+    value: &Value,
+    keys: &[&'static str],
+    field: &'static str,
+    node: &str,
+) -> Result<Option<Option<String>>, TeamFlowSnapshotError> {
+    let Some(value) = strict_source(value, keys, field, node)? else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let Some(value) = value.as_str() else {
+        return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field,
+        });
+    };
+    nonempty(value)
+        .map(Some)
+        .map(Some)
+        .ok_or(TeamFlowSnapshotError::MissingNodeField {
+            node: node.to_string(),
+            field,
+        })
+}
+
 fn strict_object_value<'a>(
     value: &'a Value,
     field: &'static str,
@@ -934,6 +1113,34 @@ fn strict_array_value<'a>(
     }
 }
 
+fn strict_string_values(
+    value: &Value,
+    field: &'static str,
+    node: &str,
+) -> Result<Vec<String>, TeamFlowSnapshotError> {
+    let values = strict_array_value(value, field, node)?
+        .as_array()
+        .expect("strict_array_value returned an array");
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(value) = value.as_str().and_then(nonempty) else {
+            return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+                node: node.to_string(),
+                field,
+            });
+        };
+        if !seen.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field,
+                values: vec![value],
+            });
+        }
+        result.push(value);
+    }
+    Ok(result)
+}
+
 fn merged_string(
     step: &Value,
     role: &Value,
@@ -960,13 +1167,32 @@ fn resolve_task_class(
     let direct = merged_string(step, role, "task_class", node)?;
     let step_classes = strict_source(step, &["task_classes"], "task_classes", node)?;
     let role_classes = strict_source(role, &["task_classes"], "task_classes", node)?;
-    if direct.is_some() && (step_classes.is_some() || role_classes.is_some()) {
+    if role.get("task_class").is_some() && role_classes.is_some() {
         return Err(TeamFlowSnapshotError::ConflictingAliases {
             field: "task_class/task_classes",
-            values: vec!["task_class".to_string(), "task_classes".to_string()],
+            values: vec![
+                "role.task_class".to_string(),
+                "role.task_classes".to_string(),
+            ],
         });
     }
     if let Some(value) = direct {
+        if step_classes.is_some() {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "task_class/task_classes",
+                values: vec!["task_class".to_string(), "task_classes".to_string()],
+            });
+        }
+        if let Some(role_classes) = role_classes {
+            let classes = strict_string_values(role_classes, "task_classes", node)?;
+            let compatible = classes.iter().any(|class| class == &value);
+            if !compatible {
+                return Err(TeamFlowSnapshotError::TaskClassNotInRoleCapabilities {
+                    node: node.to_string(),
+                    task_class: value,
+                });
+            }
+        }
         return Ok(value);
     }
     let classes = match (step_classes, role_classes) {
@@ -987,26 +1213,14 @@ fn resolve_task_class(
             });
         }
     };
-    let classes = strict_array_value(classes, "task_classes", node)?
-        .as_array()
-        .expect("strict_array_value returned an array");
+    let classes = strict_string_values(classes, "task_classes", node)?;
     if classes.is_empty() {
         return Err(TeamFlowSnapshotError::MissingNodeField {
             node: node.to_string(),
             field: "task_class",
         });
     }
-    let mut values = Vec::with_capacity(classes.len());
-    for class in classes {
-        let Some(class) = class.as_str().and_then(nonempty) else {
-            return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
-                node: node.to_string(),
-                field: "task_classes",
-            });
-        };
-        values.push(class);
-    }
-    match values.as_slice() {
+    match classes.as_slice() {
         [value] => Ok(value.clone()),
         [] => Err(TeamFlowSnapshotError::MissingNodeField {
             node: node.to_string(),
@@ -1014,7 +1228,7 @@ fn resolve_task_class(
         }),
         _ => Err(TeamFlowSnapshotError::ConflictingAliases {
             field: "task_classes",
-            values,
+            values: classes,
         }),
     }
 }
@@ -1024,17 +1238,36 @@ fn resolve_command_ref(
     command: Option<&Value>,
     node: &str,
 ) -> Result<Option<String>, TeamFlowSnapshotError> {
-    let direct = strict_string_aliases(
+    let direct = strict_nullable_string_aliases(
         step,
         &["command_ref", "command_mapping_ref"],
         "command_ref",
         node,
-    )?;
+    )?
+    .flatten();
     let nested = match command {
-        Some(value) => strict_string_aliases(value, &["surface", "ref"], "command_ref", node)?,
+        Some(value) => {
+            let command_id = strict_string_aliases(value, &["command_id"], "command_ref", node)?;
+            let reference = strict_string_aliases(value, &["ref"], "command_ref", node)?;
+            let _surface = strict_string_aliases(value, &["surface"], "command_ref", node)?;
+            if command_id.is_some() && reference.is_some() {
+                return Err(TeamFlowSnapshotError::ConflictingAliases {
+                    field: "command_ref",
+                    values: vec!["command_id".to_string(), "ref".to_string()],
+                });
+            }
+            if command_id.is_none() && reference.is_some() && value.get("surface").is_some() {
+                return Err(TeamFlowSnapshotError::ConflictingAliases {
+                    field: "command_ref",
+                    values: vec!["surface".to_string(), "ref".to_string()],
+                });
+            }
+            command_id.or(reference)
+        }
         None => None,
     };
     match (direct, nested) {
+        (Some(direct), Some(nested)) if direct == nested => Ok(Some(direct)),
         (Some(_), Some(_)) => Err(TeamFlowSnapshotError::ConflictingAliases {
             field: "command_ref",
             values: vec!["direct".to_string(), "command_mapping".to_string()],
@@ -1042,6 +1275,747 @@ fn resolve_command_ref(
         (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
         (None, None) => Ok(None),
     }
+}
+
+fn validate_command_reference(
+    config: &Value,
+    step: &Value,
+    command_mapping: Option<&Value>,
+    command_ref: Option<&str>,
+    node: &str,
+) -> Result<(), TeamFlowSnapshotError> {
+    let Some(command_ref) = command_ref else {
+        if step
+            .get("command_ref")
+            .is_some_and(|value| !value.is_null())
+            || step
+                .get("command_mapping_ref")
+                .is_some_and(|value| !value.is_null())
+        {
+            return Err(TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field: "command_ref",
+            });
+        }
+        return Ok(());
+    };
+    if let Some(mapping) = command_mapping {
+        let command_id = strict_string_aliases(mapping, &["command_id"], "command_id", node)?
+            .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field: "command_mapping.command_id",
+            })?;
+        if command_id != command_ref {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "command_ref",
+                values: vec![command_ref.to_string(), command_id],
+            });
+        }
+        strict_string_aliases(mapping, &["surface"], "surface", node)?.ok_or_else(|| {
+            TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field: "command_mapping.surface",
+            }
+        })?;
+    }
+    let catalog = match strict_source(
+        config,
+        &["command_catalog", "commands"],
+        "command_catalog",
+        node,
+    )? {
+        Some(catalog) => catalog,
+        None => config
+            .get("registries")
+            .and_then(|registries| registries.get("commands"))
+            .ok_or_else(|| TeamFlowSnapshotError::UnresolvedCommandReference {
+                node: node.to_string(),
+                command_ref: command_ref.to_string(),
+            })?,
+    };
+    let entry = strict_command_catalog_entry(catalog, command_ref, node)?;
+    let entry_id =
+        strict_string_aliases(entry, &["command_id"], "command_id", node)?.ok_or_else(|| {
+            TeamFlowSnapshotError::UnresolvedCommandReference {
+                node: node.to_string(),
+                command_ref: command_ref.to_string(),
+            }
+        })?;
+    if entry_id != command_ref {
+        return Err(TeamFlowSnapshotError::UnresolvedCommandReference {
+            node: node.to_string(),
+            command_ref: command_ref.to_string(),
+        });
+    }
+    strict_string_aliases(entry, &["surface"], "surface", node)?.ok_or_else(|| {
+        TeamFlowSnapshotError::UnresolvedCommandReference {
+            node: node.to_string(),
+            command_ref: command_ref.to_string(),
+        }
+    })?;
+    Ok(())
+}
+
+fn strict_command_catalog_entry<'a>(
+    catalog: &'a Value,
+    command_ref: &str,
+    node: &str,
+) -> Result<&'a Value, TeamFlowSnapshotError> {
+    let mut found = None;
+    let mut inspect = |entry: &'a Value, key: Option<&str>| -> Result<(), TeamFlowSnapshotError> {
+        let entry = strict_object_value(entry, "command_catalog", node)?;
+        let entry_id = strict_string_aliases(entry, &["command_id"], "command_id", node)?
+            .ok_or_else(|| TeamFlowSnapshotError::UnresolvedCommandReference {
+                node: node.to_string(),
+                command_ref: command_ref.to_string(),
+            })?;
+        if let Some(key) = key {
+            if key != entry_id {
+                return Err(TeamFlowSnapshotError::ConflictingAliases {
+                    field: "command_catalog.command_id",
+                    values: vec![key.to_string(), entry_id],
+                });
+            }
+        }
+        strict_string_aliases(entry, &["surface"], "surface", node)?.ok_or_else(|| {
+            TeamFlowSnapshotError::UnresolvedCommandReference {
+                node: node.to_string(),
+                command_ref: command_ref.to_string(),
+            }
+        })?;
+        if entry_id == command_ref {
+            if found.is_some() {
+                return Err(TeamFlowSnapshotError::ConflictingAliases {
+                    field: "command_catalog.command_id",
+                    values: vec![command_ref.to_string()],
+                });
+            }
+            found = Some(entry);
+        }
+        Ok(())
+    };
+    match catalog {
+        Value::Object(entries) => {
+            for (key, entry) in entries {
+                inspect(entry, Some(key))?;
+            }
+        }
+        Value::Array(entries) => {
+            for entry in entries {
+                inspect(entry, None)?;
+            }
+        }
+        _ => {
+            return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+                node: node.to_string(),
+                field: "command_catalog",
+            });
+        }
+    }
+    found.ok_or_else(|| TeamFlowSnapshotError::UnresolvedCommandReference {
+        node: node.to_string(),
+        command_ref: command_ref.to_string(),
+    })
+}
+
+fn validate_inclusion_rule(inclusion_rule: &str, node: &str) -> Result<(), TeamFlowSnapshotError> {
+    if matches!(
+        inclusion_rule,
+        "always"
+            | "never"
+            | "optional"
+            | "when_proof_required"
+            | "when_review_triggered"
+            | "when_architecture_triggered"
+            | "when_rework_required"
+    ) {
+        Ok(())
+    } else {
+        Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "inclusion_rule",
+        })
+    }
+}
+
+fn validate_terminal_edge(
+    node: &str,
+    terminal: bool,
+    next_node: Option<&str>,
+) -> Result<(), TeamFlowSnapshotError> {
+    if terminal && next_node.is_some() {
+        return Err(TeamFlowSnapshotError::InvalidTerminalEdge(node.to_string()));
+    }
+    if !terminal && next_node.is_none() {
+        return Err(TeamFlowSnapshotError::MissingNodeField {
+            node: node.to_string(),
+            field: "next_node",
+        });
+    }
+    Ok(())
+}
+
+fn approval_policy_catalog(
+    config: &Value,
+    field: &'static str,
+    node: &str,
+) -> Result<BTreeSet<String>, TeamFlowSnapshotError> {
+    let values = config
+        .get("authority_catalog")
+        .and_then(Value::as_object)
+        .or_else(|| {
+            config
+                .get("dev_team")
+                .and_then(Value::as_object)
+                .and_then(|dev_team| dev_team.get("authority_catalog"))
+                .and_then(Value::as_object)
+        })
+        .and_then(|catalog| catalog.get(field))
+        .and_then(Value::as_array)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field,
+        })?;
+    let mut result = BTreeSet::new();
+    for value in values {
+        let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) else {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field,
+            });
+        };
+        if !result.insert(value.to_string()) {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field,
+            });
+        }
+    }
+    if result.is_empty() {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field,
+        });
+    }
+    Ok(result)
+}
+
+fn validate_approval_contract(
+    config: &Value,
+    step: &Value,
+    node: &str,
+    requires_user_approval: bool,
+    next_node: Option<&str>,
+    rework_targets: &[String],
+) -> Result<(), TeamFlowSnapshotError> {
+    let Some(policy) = step.get("approval_policy") else {
+        if requires_user_approval {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy",
+            });
+        }
+        return Ok(());
+    };
+    let policy = strict_object_value(policy, "approval_policy", node)?;
+    let mode = strict_string_aliases(policy, &["mode"], "approval_policy.mode", node)?;
+    if mode.is_none() && !policy.as_object().is_some_and(|object| object.is_empty()) {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field: "approval_policy.mode",
+        });
+    }
+    let mode_catalog = if mode.is_some() || requires_user_approval {
+        Some(approval_policy_catalog(
+            config,
+            "approval_policy_modes",
+            node,
+        )?)
+    } else {
+        None
+    };
+    if let Some(mode) = mode.as_deref() {
+        if !mode_catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.contains(mode))
+        {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy.mode",
+            });
+        }
+    }
+    let prompt = strict_string_aliases(
+        policy,
+        &["prompt_template"],
+        "approval_policy.prompt_template",
+        node,
+    )?;
+    let decisions = policy.get("allowed_decisions");
+    let decision_catalog = if mode.is_some() || requires_user_approval || decisions.is_some() {
+        Some(approval_policy_catalog(
+            config,
+            "approval_policy_allowed_decisions",
+            node,
+        )?)
+    } else {
+        None
+    };
+    if mode.is_some() && decisions.is_none() {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field: "approval_policy.allowed_decisions",
+        });
+    }
+    if let Some(decisions) = decisions {
+        let decisions =
+            decisions
+                .as_array()
+                .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.allowed_decisions",
+                })?;
+        if mode.is_some() && decisions.is_empty() {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy.allowed_decisions",
+            });
+        }
+        let mut seen = BTreeSet::new();
+        for value in decisions {
+            let Some(value) = value.as_str() else {
+                return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.allowed_decisions",
+                });
+            };
+            if !seen.insert(value) {
+                return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.allowed_decisions",
+                });
+            }
+            if !decision_catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.contains(value))
+            {
+                return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.allowed_decisions",
+                });
+            }
+            if value == "rework" && rework_targets.is_empty() {
+                return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.allowed_decisions",
+                });
+            }
+        }
+    }
+    if requires_user_approval {
+        if mode.as_deref() != Some("user_review_required") || prompt.is_none() {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy.mode/prompt_template",
+            });
+        }
+        let decisions = decisions.and_then(Value::as_array).ok_or_else(|| {
+            TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy.allowed_decisions",
+            }
+        })?;
+        if !decisions.iter().all(|value| {
+            value.as_str().is_some_and(|value| {
+                decision_catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.contains(value))
+            })
+        }) || !decisions
+            .iter()
+            .any(|value| value.as_str() == Some("approved"))
+        {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "approval_policy.allowed_decisions",
+            });
+        }
+        let transitions = step
+            .get("resume_transitions")
+            .and_then(Value::as_object)
+            .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "resume_transitions.approved",
+            })?;
+        let approved = transitions
+            .get("approved")
+            .and_then(Value::as_str)
+            .and_then(nonempty)
+            .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "resume_transitions.approved",
+            })?;
+        if Some(approved.as_str()) != next_node {
+            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                node: node.to_string(),
+                field: "resume_transitions.approved",
+            });
+        }
+    } else {
+        match mode.as_deref() {
+            Some("user_review_required") => {
+                return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                    node: node.to_string(),
+                    field: "approval_policy.mode",
+                });
+            }
+            Some("not_required") => {
+                if requires_user_approval || prompt.is_some() {
+                    return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                        node: node.to_string(),
+                        field: "approval_policy.mode/prompt_template",
+                    });
+                }
+                if step
+                    .get("resume_transitions")
+                    .and_then(Value::as_object)
+                    .is_some_and(|transitions| transitions.contains_key("approved"))
+                {
+                    return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                        node: node.to_string(),
+                        field: "resume_transitions.approved",
+                    });
+                }
+            }
+            Some("optional_user_review") => {
+                if requires_user_approval {
+                    return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+                        node: node.to_string(),
+                        field: "approval_policy.mode",
+                    });
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    Ok(())
+}
+
+fn is_projection_config(config: &Value, step: &Value) -> bool {
+    config
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .is_some_and(|version| version == "team-flow-authority.v1")
+        || step.get("lane_id").is_some()
+}
+
+fn validate_projection_metadata(
+    config: &Value,
+    step: &Value,
+    required: bool,
+    node: &str,
+) -> Result<(), TeamFlowSnapshotError> {
+    if !is_projection_config(config, step) {
+        return Ok(());
+    }
+    for field in [
+        "lane_id",
+        "dispatch_target",
+        "dispatch_alias",
+        "packet_template_kind",
+        "closure_class",
+        "stage",
+        "completion_blocker",
+        "evidence_requirements",
+        "proof_gates",
+        "command_ref",
+        "command_mapping",
+        "lifecycle_hook_templates",
+        "resume_transitions",
+        "policy_diagnostics",
+        "activation",
+        "runtime_assignment",
+        "carrier_runtime_assignment",
+        "profile_authority",
+        "selected_model_profile",
+        "approval_policy",
+        "rework",
+    ] {
+        if !step.get(field).is_some() {
+            return Err(TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field,
+            });
+        }
+    }
+    let proof_gates = step
+        .get("proof_gates")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "proof_gates",
+        })?;
+    let proof_outputs = proof_gates
+        .get("required_outputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+            node: node.to_string(),
+            field: "proof_gates.required_outputs",
+        })?;
+    let mut proof_ids = BTreeSet::new();
+    for value in proof_outputs {
+        let Some(value) = value.as_str().and_then(nonempty) else {
+            return Err(TeamFlowSnapshotError::MalformedEvidence {
+                node: node.to_string(),
+                field: "proof_gates.required_outputs",
+            });
+        };
+        if !proof_ids.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "proof_gates.required_outputs",
+                values: vec![value.to_string()],
+            });
+        }
+    }
+    if required && proof_outputs.is_empty() {
+        return Err(TeamFlowSnapshotError::MalformedEvidence {
+            node: node.to_string(),
+            field: "proof_gates.required_outputs",
+        });
+    }
+    let rework = step
+        .get("rework")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "rework",
+        })?;
+    let targets = rework
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| TeamFlowSnapshotError::MissingNodeField {
+            node: node.to_string(),
+            field: "rework.targets",
+        })?;
+    let mut target_ids = BTreeSet::new();
+    for value in targets {
+        let Some(value) = value.as_str().and_then(nonempty) else {
+            return Err(TeamFlowSnapshotError::MalformedEvidence {
+                node: node.to_string(),
+                field: "rework.targets",
+            });
+        };
+        if !target_ids.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "rework.targets",
+                values: vec![value.to_string()],
+            });
+        }
+    }
+    for field in [
+        "proof_gates",
+        "approval_policy",
+        "resume_transitions",
+        "policy_diagnostics",
+        "activation",
+        "runtime_assignment",
+        "carrier_runtime_assignment",
+        "profile_authority",
+        "selected_model_profile",
+        "rework",
+    ] {
+        if !step.get(field).is_some_and(Value::is_object) {
+            return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+                node: node.to_string(),
+                field,
+            });
+        }
+    }
+    for field in [
+        "activation",
+        "runtime_assignment",
+        "carrier_runtime_assignment",
+    ] {
+        if step
+            .get(field)
+            .and_then(Value::as_object)
+            .is_some_and(|object| object.is_empty())
+        {
+            return Err(TeamFlowSnapshotError::MissingNodeField {
+                node: node.to_string(),
+                field,
+            });
+        }
+    }
+    let profile_fields = ["team_role_id", "runtime_role", "task_class", "source_path"];
+    let selected_profile_fields = ["profile_id", "selection_source"];
+    for (field, required_fields) in [
+        ("profile_authority", profile_fields.as_slice()),
+        ("selected_model_profile", selected_profile_fields.as_slice()),
+    ] {
+        let object = step.get(field).and_then(Value::as_object).ok_or_else(|| {
+            TeamFlowSnapshotError::InvalidNodeFieldType {
+                node: node.to_string(),
+                field,
+            }
+        })?;
+        for required_field in required_fields {
+            if object
+                .get(*required_field)
+                .and_then(Value::as_str)
+                .and_then(nonempty)
+                .is_none()
+            {
+                return Err(TeamFlowSnapshotError::MissingNodeField {
+                    node: node.to_string(),
+                    field: required_field,
+                });
+            }
+        }
+    }
+    let hooks = step
+        .get("lifecycle_hook_templates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "lifecycle_hook_templates",
+        })?;
+    let mut hook_ids = BTreeSet::new();
+    for value in hooks {
+        let Some(value) = value.as_str().and_then(nonempty) else {
+            return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+                node: node.to_string(),
+                field: "lifecycle_hook_templates",
+            });
+        };
+        if !hook_ids.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "lifecycle_hook_templates",
+                values: vec![value.to_string()],
+            });
+        }
+    }
+    if hooks.len() != hook_ids.len() {
+        return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "lifecycle_hook_templates",
+        });
+    }
+    let resume = step
+        .get("resume_transitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "resume_transitions",
+        })?;
+    if resume
+        .values()
+        .any(|value| value.as_str().and_then(nonempty).is_none())
+    {
+        return Err(TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "resume_transitions",
+        });
+    }
+    let diagnostics = step
+        .get("policy_diagnostics")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TeamFlowSnapshotError::InvalidNodeFieldType {
+            node: node.to_string(),
+            field: "policy_diagnostics",
+        })?;
+    if diagnostics.get("source").and_then(Value::as_str)
+        != Some("team_flow_authority.selected_config")
+        || diagnostics.get("fallback_used") != Some(&Value::Bool(false))
+        || diagnostics
+            .get("fallback_fields")
+            .and_then(Value::as_array)
+            .map_or(true, |fields| !fields.is_empty())
+    {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field: "policy_diagnostics",
+        });
+    }
+    if step.get("requires_user_approval").and_then(Value::as_bool) == Some(true)
+        && !resume.contains_key("approved")
+    {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field: "resume_transitions.approved",
+        });
+    }
+    Ok(())
+}
+
+fn validate_execution_sequences(
+    config: &Value,
+    flow: &Value,
+    nodes: &[TeamFlowNode],
+) -> Result<(), TeamFlowSnapshotError> {
+    let ordered = nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    for source in [config, flow] {
+        for field in ["execution_lane_sequence", "lane_sequence"] {
+            let Some(value) = source.get(field) else {
+                continue;
+            };
+            let values = strict_sequence_values(value, field)?;
+            if values != ordered {
+                return Err(TeamFlowSnapshotError::InvalidSequence { field });
+            }
+        }
+        for (field, expected) in [
+            (
+                "included_nodes",
+                nodes
+                    .iter()
+                    .filter(|node| node.included)
+                    .map(|node| node.node_id.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "required_nodes",
+                nodes
+                    .iter()
+                    .filter(|node| node.required)
+                    .map(|node| node.node_id.clone())
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            let Some(value) = source.get(field) else {
+                continue;
+            };
+            let values = strict_sequence_values(value, field)?;
+            if values != expected {
+                return Err(TeamFlowSnapshotError::InvalidSequence { field });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn strict_sequence_values(
+    value: &Value,
+    field: &'static str,
+) -> Result<Vec<String>, TeamFlowSnapshotError> {
+    let values = value
+        .as_array()
+        .ok_or(TeamFlowSnapshotError::InvalidSequence { field })?;
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(value) = value.as_str().and_then(nonempty) else {
+            return Err(TeamFlowSnapshotError::InvalidSequence { field });
+        };
+        if !seen.insert(value.clone()) {
+            return Err(TeamFlowSnapshotError::InvalidSequence { field });
+        }
+        result.push(value);
+    }
+    Ok(result)
 }
 
 fn strict_bool_aliases(
@@ -1094,7 +2068,7 @@ fn nonempty(value: &str) -> Option<String> {
 fn hash_snapshot(snapshot: &TeamFlowSnapshot) -> String {
     let mut copy = snapshot.clone();
     copy.snapshot_ref.clear();
-    hash_json(&serde_json::to_value(copy).unwrap_or(Value::Null))
+    hash_json(&serde_json::to_value(copy).expect("TeamFlowSnapshot is serializable"))
 }
 
 #[must_use]
@@ -1109,7 +2083,7 @@ fn canonical_json(value: &Value) -> String {
         Value::Null => "null".to_string(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
-        Value::String(value) => serde_json::to_string(value).unwrap_or_default(),
+        Value::String(value) => serde_json::to_string(value).expect("JSON string is serializable"),
         Value::Array(values) => format!(
             "[{}]",
             values
@@ -1127,7 +2101,7 @@ fn canonical_json(value: &Value) -> String {
                     .into_iter()
                     .map(|(key, value)| format!(
                         "{}:{}",
-                        serde_json::to_string(key).unwrap_or_default(),
+                        serde_json::to_string(key).expect("JSON object key is serializable"),
                         canonical_json(value)
                     ))
                     .collect::<Vec<_>>()
@@ -1144,15 +2118,16 @@ mod tests {
     fn fixture() -> Value {
         serde_json::json!({
             "flow_id": "flow-a",
+            "entry_node_id": "node-a",
             "roles": {
                 "node-a": {"runtime_role": "runtime-a", "task_classes": ["class-a"]},
                 "node-b": {"runtime_role": "runtime-b", "task_classes": ["class-b"]},
                 "node-c": {"runtime_role": "runtime-c", "task_classes": ["class-c"]}
             },
             "ordered_steps": [
-                {"role_id": "node-a", "inclusion_rule": "always", "required_outputs": ["proof-a"], "rework_transitions": {"rework": "node-a"}, "next_node": "node-b"},
-                {"role_id": "node-b", "inclusion_rule": "conditional", "included": false, "next_node": "node-c"},
-                {"role_id": "node-c", "inclusion_rule": "always", "terminal": true}
+                {"role_id": "node-a", "inclusion_rule": "always", "included": true, "required": true, "required_outputs": ["proof-a"], "rework_transitions": {"rework": "node-a"}, "next_node": "node-b", "terminal": false, "requires_user_approval": false},
+                {"role_id": "node-b", "inclusion_rule": "optional", "included": false, "required": false, "evidence_requirements": [], "next_node": "node-c", "terminal": false, "requires_user_approval": false},
+                {"role_id": "node-c", "inclusion_rule": "always", "included": true, "required": true, "evidence_requirements": ["proof-a"], "next_node": null, "terminal": true, "requires_user_approval": false}
             ]
         })
     }
@@ -1191,6 +2166,137 @@ mod tests {
                 registry_hash: "registry-a",
             },
         )
+    }
+
+    fn projection_fixture() -> Value {
+        let mut config = fixture();
+        config["schema_version"] = serde_json::json!("team-flow-authority.v1");
+        config["config_id"] = serde_json::json!("cfg-a");
+        config["profile"] = serde_json::json!("profile-a");
+        config["registry_hash"] = serde_json::json!("registry-a");
+        config["selected_flow_set"] = serde_json::json!("flow-a");
+
+        let steps = config["ordered_steps"].as_array().expect("steps");
+        let node_ids = steps
+            .iter()
+            .map(|step| {
+                step.get("role_id")
+                    .and_then(Value::as_str)
+                    .expect("role_id")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        let included_nodes = steps
+            .iter()
+            .zip(node_ids.iter())
+            .filter_map(|(step, node)| {
+                step.get("included")
+                    .and_then(Value::as_bool)
+                    .filter(|included| *included)
+                    .map(|_| node.clone())
+            })
+            .collect::<Vec<_>>();
+        let required_nodes = steps
+            .iter()
+            .zip(node_ids.iter())
+            .filter_map(|(step, node)| {
+                step.get("required")
+                    .and_then(Value::as_bool)
+                    .filter(|required| *required)
+                    .map(|_| node.clone())
+            })
+            .collect::<Vec<_>>();
+        config["execution_lane_sequence"] = serde_json::json!(node_ids.clone());
+        config["lane_sequence"] = serde_json::json!(node_ids.clone());
+        config["included_nodes"] = serde_json::json!(included_nodes);
+        config["required_nodes"] = serde_json::json!(required_nodes);
+
+        let roles = config["roles"].clone();
+        let profile = config["profile"].clone();
+        for (index, raw_step) in config["ordered_steps"]
+            .as_array_mut()
+            .expect("steps")
+            .iter_mut()
+            .enumerate()
+        {
+            let node = node_ids[index].clone();
+            let runtime_role = roles[&node]["runtime_role"].clone();
+            let task_class = roles[&node]["task_classes"][0].clone();
+            let evidence = format!("proof-{node}");
+            let step = raw_step.as_object_mut().expect("step");
+            step.remove("required_outputs");
+            step.remove("rework_transitions");
+            step.insert("lane_id".to_string(), serde_json::json!(node));
+            step.insert("dispatch_target".to_string(), serde_json::json!(node));
+            step.insert("dispatch_alias".to_string(), serde_json::json!(node));
+            step.insert(
+                "packet_template_kind".to_string(),
+                serde_json::json!("packet"),
+            );
+            step.insert("closure_class".to_string(), serde_json::json!("proof"));
+            step.insert("stage".to_string(), serde_json::json!("execution"));
+            step.insert(
+                "completion_blocker".to_string(),
+                serde_json::json!("pending"),
+            );
+            step.insert(
+                "evidence_requirements".to_string(),
+                serde_json::json!([evidence.clone()]),
+            );
+            step.insert(
+                "proof_gates".to_string(),
+                serde_json::json!({"required_outputs": [evidence]}),
+            );
+            step.insert("command_ref".to_string(), Value::Null);
+            step.insert("command_mapping".to_string(), Value::Null);
+            step.insert(
+                "lifecycle_hook_templates".to_string(),
+                serde_json::json!(["timing"]),
+            );
+            step.insert("resume_transitions".to_string(), serde_json::json!({}));
+            step.insert(
+                "policy_diagnostics".to_string(),
+                serde_json::json!({
+                    "source": "team_flow_authority.selected_config",
+                    "fallback_used": false,
+                    "fallback_fields": []
+                }),
+            );
+            step.insert(
+                "activation".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "runtime_assignment".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "carrier_runtime_assignment".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "profile_authority".to_string(),
+                serde_json::json!({
+                    "team_role_id": node,
+                    "runtime_role": runtime_role,
+                    "task_class": task_class,
+                    "source_path": "config"
+                }),
+            );
+            step.insert(
+                "selected_model_profile".to_string(),
+                serde_json::json!({
+                    "profile_id": profile.clone(),
+                    "selection_source": "configured"
+                }),
+            );
+            step.insert("approval_policy".to_string(), serde_json::json!({}));
+            step.insert(
+                "rework".to_string(),
+                serde_json::json!({"targets": [node_ids[index].clone()]}),
+            );
+        }
+        config
     }
 
     #[test]
@@ -1288,6 +2394,21 @@ mod tests {
     fn approval_requirement_distinguishes_pass_from_approve() {
         let mut config = fixture();
         config["ordered_steps"][0]["requires_user_approval"] = serde_json::json!(true);
+        config["ordered_steps"][0]["next_node"] = serde_json::json!("node-c");
+        config["ordered_steps"][0]["approval_policy"] = serde_json::json!({
+            "mode": "user_review_required",
+            "prompt_template": "approve",
+            "allowed_decisions": ["approved", "rework"]
+        });
+        config["dev_team"]["authority_catalog"]["approval_policy_allowed_decisions"] =
+            serde_json::json!(["approved", "rework"]);
+        config["dev_team"]["authority_catalog"]["approval_policy_modes"] = serde_json::json!([
+            "user_review_required",
+            "optional_user_review",
+            "not_required"
+        ]);
+        config["ordered_steps"][0]["resume_transitions"] =
+            serde_json::json!({"approved": "node-c"});
         let snapshot = TeamFlowSnapshot::from_config(
             &config,
             TeamFlowSnapshotInput {
@@ -1315,6 +2436,79 @@ mod tests {
             "node-c",
         );
         assert!(approve.allowed);
+    }
+
+    #[test]
+    fn approval_mode_contract_matrix_is_exhaustive() {
+        let mut missing_mode = fixture();
+        missing_mode["ordered_steps"][0]["approval_policy"] =
+            serde_json::json!({"allowed_decisions": ["approved"]});
+        missing_mode["dev_team"]["authority_catalog"] = serde_json::json!({
+            "approval_policy_modes": [
+                "user_review_required",
+                "optional_user_review",
+                "not_required"
+            ],
+            "approval_policy_allowed_decisions": ["approved", "rework"]
+        });
+        assert!(compile(&missing_mode).is_err());
+
+        for mode in [
+            "user_review_required",
+            "optional_user_review",
+            "not_required",
+        ] {
+            for requires_user_approval in [false, true] {
+                for prompt in [false, true] {
+                    for decisions in [false, true] {
+                        for approved_resume in [false, true] {
+                            let mut config = fixture();
+                            let step = &mut config["ordered_steps"][0];
+                            step["requires_user_approval"] =
+                                serde_json::json!(requires_user_approval);
+                            let mut policy = serde_json::json!({"mode": mode});
+                            if prompt {
+                                policy["prompt_template"] = serde_json::json!("review");
+                            }
+                            if decisions {
+                                policy["allowed_decisions"] = serde_json::json!(["approved"]);
+                            }
+                            step["approval_policy"] = policy;
+                            if approved_resume {
+                                step["resume_transitions"] =
+                                    serde_json::json!({"approved": "node-b"});
+                            }
+                            config["dev_team"]["authority_catalog"] = serde_json::json!({
+                                "approval_policy_modes": [
+                                    "user_review_required",
+                                    "optional_user_review",
+                                    "not_required"
+                                ],
+                                "approval_policy_allowed_decisions": ["approved", "rework"]
+                            });
+                            let valid = match mode {
+                                "user_review_required" => {
+                                    requires_user_approval && prompt && decisions && approved_resume
+                                }
+                                "optional_user_review" => !requires_user_approval && decisions,
+                                "not_required" => {
+                                    !requires_user_approval
+                                        && decisions
+                                        && !prompt
+                                        && !approved_resume
+                                }
+                                _ => false,
+                            };
+                            assert_eq!(
+                                compile(&config).is_ok(),
+                                valid,
+                                "mode={mode} requires={requires_user_approval} prompt={prompt} decisions={decisions} approved_resume={approved_resume}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1515,6 +2709,7 @@ mod tests {
             ),
             Err(TeamFlowSnapshotError::InvalidNode(_))
                 | Err(TeamFlowSnapshotError::MissingNodeField { .. })
+                | Err(TeamFlowSnapshotError::MissingField("flow_id"))
         ));
 
         let mut conflicting_node_alias = fixture();
@@ -1758,8 +2953,26 @@ mod tests {
 
         let mut task_class_sources = fixture();
         task_class_sources["ordered_steps"][0]["task_class"] = serde_json::json!("class-a");
+        assert_eq!(
+            compile(&task_class_sources)
+                .expect("node task class should use role capability")
+                .nodes[0]
+                .task_class,
+            "class-a"
+        );
+        let mut incompatible_task_class = task_class_sources.clone();
+        incompatible_task_class["ordered_steps"][0]["task_class"] = serde_json::json!("class-z");
         assert!(matches!(
-            compile(&task_class_sources),
+            compile(&incompatible_task_class),
+            Err(TeamFlowSnapshotError::TaskClassNotInRoleCapabilities { .. })
+        ));
+        let mut two_node_task_class_sources = fixture();
+        two_node_task_class_sources["ordered_steps"][0]["task_class"] =
+            serde_json::json!("class-a");
+        two_node_task_class_sources["ordered_steps"][0]["task_classes"] =
+            serde_json::json!(["class-a"]);
+        assert!(matches!(
+            compile(&two_node_task_class_sources),
             Err(TeamFlowSnapshotError::ConflictingAliases {
                 field: "task_class/task_classes",
                 ..
@@ -1870,6 +3083,366 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn typed_authority_rejects_missing_flags_sequences_and_selected_flow_drift() {
+        let mut missing_included = fixture();
+        missing_included["ordered_steps"][0]
+            .as_object_mut()
+            .expect("step")
+            .remove("included");
+        assert!(matches!(
+            compile(&missing_included),
+            Err(TeamFlowSnapshotError::MissingNodeField {
+                field: "included",
+                ..
+            })
+        ));
+
+        let mut invalid_sequence = fixture();
+        invalid_sequence["execution_lane_sequence"] = serde_json::json!(["node-a", "node-c"]);
+        assert!(matches!(
+            compile(&invalid_sequence),
+            Err(TeamFlowSnapshotError::InvalidSequence {
+                field: "execution_lane_sequence"
+            })
+        ));
+
+        let mut selected_flow_drift = fixture();
+        selected_flow_drift["selected_flow_set"] = serde_json::json!("other-flow");
+        assert!(matches!(
+            compile(&selected_flow_drift),
+            Err(TeamFlowSnapshotError::FlowIdentityMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn command_ref_requires_registry_resolution_and_consistent_mapping() {
+        let mut config = fixture();
+        config["ordered_steps"][0]["command_ref"] = serde_json::json!("command-a");
+        config["ordered_steps"][0]["command_mapping"] =
+            serde_json::json!({"command_id": "command-a", "surface": "test.surface"});
+        assert!(matches!(
+            compile(&config),
+            Err(TeamFlowSnapshotError::UnresolvedCommandReference {
+                command_ref,
+                ..
+            }) if command_ref == "command-a"
+        ));
+        config["command_catalog"] = serde_json::json!({
+            "command-a": {"command_id": "command-a", "surface": "test.surface"}
+        });
+        assert!(compile(&config).is_ok());
+
+        config["ordered_steps"][0]["command_mapping"]["command_id"] =
+            serde_json::json!("command-b");
+        assert!(matches!(
+            compile(&config),
+            Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "command_ref",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn canonical_projection_requires_lifecycle_resume_and_policy_diagnostics() {
+        let mut config = fixture();
+        config["schema_version"] = serde_json::json!("team-flow-authority.v1");
+        config["config_id"] = serde_json::json!("cfg-a");
+        config["profile"] = serde_json::json!("profile-a");
+        config["registry_hash"] = serde_json::json!("registry-a");
+        config["flow_ref"] = serde_json::json!("flow-a");
+        config["selected_flow_set"] = serde_json::json!("flow-a");
+        config["execution_lane_sequence"] = serde_json::json!(["node-a", "node-b", "node-c"]);
+        config["lane_sequence"] = serde_json::json!(["node-a", "node-b", "node-c"]);
+        config["included_nodes"] = serde_json::json!(["node-a", "node-c"]);
+        config["required_nodes"] = serde_json::json!(["node-a", "node-c"]);
+        for (index, raw_step) in config["ordered_steps"]
+            .as_array_mut()
+            .expect("steps")
+            .iter_mut()
+            .enumerate()
+        {
+            let step = raw_step.as_object_mut().expect("step");
+            let node = format!("node-{}", (b'a' + index as u8) as char);
+            let evidence = if index == 1 { "proof-b" } else { "proof-a" };
+            step.remove("required_outputs");
+            step.remove("rework_transitions");
+            step.insert("lane_id".to_string(), serde_json::json!(node));
+            step.insert("dispatch_target".to_string(), serde_json::json!(node));
+            step.insert("dispatch_alias".to_string(), serde_json::json!(node));
+            step.insert(
+                "packet_template_kind".to_string(),
+                serde_json::json!("packet"),
+            );
+            step.insert("closure_class".to_string(), serde_json::json!("proof"));
+            step.insert("stage".to_string(), serde_json::json!("execution"));
+            step.insert(
+                "completion_blocker".to_string(),
+                serde_json::json!("pending"),
+            );
+            step.insert(
+                "evidence_requirements".to_string(),
+                serde_json::json!([evidence]),
+            );
+            step.insert(
+                "proof_gates".to_string(),
+                serde_json::json!({"required_outputs": [evidence]}),
+            );
+            step.insert("command_ref".to_string(), Value::Null);
+            step.insert("command_mapping".to_string(), Value::Null);
+            step.insert(
+                "lifecycle_hook_templates".to_string(),
+                serde_json::json!(["timing"]),
+            );
+            step.insert("resume_transitions".to_string(), serde_json::json!({}));
+            step.insert(
+                "policy_diagnostics".to_string(),
+                serde_json::json!({
+                    "source": "team_flow_authority.selected_config",
+                    "fallback_used": false,
+                    "fallback_fields": []
+                }),
+            );
+            step.insert(
+                "activation".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "runtime_assignment".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "carrier_runtime_assignment".to_string(),
+                serde_json::json!({"source": "configured"}),
+            );
+            step.insert(
+                "profile_authority".to_string(),
+                serde_json::json!({
+                    "team_role_id": node,
+                    "runtime_role": "runtime",
+                    "task_class": "class",
+                    "source_path": "config"
+                }),
+            );
+            step.insert(
+                "selected_model_profile".to_string(),
+                serde_json::json!({
+                    "profile_id": "profile",
+                    "selection_source": "configured"
+                }),
+            );
+            step.insert(
+                "carrier_relation".to_string(),
+                serde_json::json!({
+                    "relation_kind": "carrier_catalog",
+                    "source_path": "config.carriers",
+                    "selected_id": node
+                }),
+            );
+            step.insert(
+                "executor_backend_relation".to_string(),
+                serde_json::json!({
+                    "relation_kind": "executor_backend",
+                    "source_path": "config.backends",
+                    "selected_id": "backend"
+                }),
+            );
+            step.insert(
+                "authority_identities".to_string(),
+                serde_json::json!([{
+                    "kind": "team_flow_node",
+                    "id": node,
+                    "source_path": "config.ordered_steps"
+                }]),
+            );
+            step.insert(
+                "execution_identity".to_string(),
+                serde_json::json!({
+                    "id": node,
+                    "source_fields": ["flow_id", "lane_id", "dispatch_alias"]
+                }),
+            );
+            step.insert("approval_policy".to_string(), serde_json::json!({}));
+            step.insert(
+                "rework".to_string(),
+                serde_json::json!({"targets": vec![node.clone()]}),
+            );
+        }
+        let result = compile(&config);
+        assert!(result.is_ok(), "{result:?}");
+
+        config["ordered_steps"][0]
+            .as_object_mut()
+            .expect("step")
+            .remove("policy_diagnostics");
+        assert!(matches!(
+            compile(&config),
+            Err(TeamFlowSnapshotError::MissingNodeField {
+                field: "policy_diagnostics",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn projection_proof_outputs_matrix_enforces_requiredness_and_transition_acceptance() {
+        let template = projection_fixture();
+        let cases = [
+            ("required_empty", true, Vec::<&str>::new(), false),
+            ("required_nonempty", true, vec!["proof-b"], true),
+            ("optional_empty", false, Vec::<&str>::new(), true),
+            ("optional_nonempty", false, vec!["proof-b"], true),
+        ];
+
+        for (label, required, outputs, accepted) in cases {
+            let mut config = template.clone();
+            let output_values = outputs
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>();
+            config["ordered_steps"][1]["required"] = serde_json::json!(required);
+            config["ordered_steps"][1]["evidence_requirements"] =
+                serde_json::json!(output_values.clone());
+            config["ordered_steps"][1]["proof_gates"]["required_outputs"] =
+                serde_json::json!(output_values.clone());
+            let required_nodes = config["ordered_steps"]
+                .as_array()
+                .expect("steps")
+                .iter()
+                .filter(|step| step["required"].as_bool() == Some(true))
+                .map(|step| step["role_id"].as_str().expect("role_id").to_string())
+                .collect::<Vec<_>>();
+            config["required_nodes"] = serde_json::json!(required_nodes);
+
+            let result = compile(&config);
+            if !accepted {
+                assert!(
+                    matches!(
+                        &result,
+                        Err(TeamFlowSnapshotError::MissingNodeField {
+                            field: "evidence_requirements",
+                            ..
+                        }) | Err(TeamFlowSnapshotError::MalformedEvidence {
+                            field: "proof_gates.required_outputs",
+                            ..
+                        })
+                    ),
+                    "{label}: expected required proof output rejection, got {result:?}"
+                );
+                continue;
+            }
+
+            let snapshot = result.expect("projection proof matrix case should compile");
+            assert_eq!(snapshot.nodes[1].required, required, "{label}");
+            assert_eq!(
+                snapshot.nodes[1].evidence_requirements, output_values,
+                "{label}"
+            );
+            let roundtrip = serde_json::from_str::<TeamFlowSnapshot>(
+                &serde_json::to_string(&snapshot).expect("snapshot should serialize"),
+            )
+            .expect("snapshot should roundtrip");
+            assert_eq!(roundtrip, snapshot, "{label}");
+
+            let verdict = admit_transition(
+                &snapshot,
+                "node-a",
+                Some(&receipt(&snapshot, "node-a", "pass")),
+                "node-c",
+            );
+            assert!(verdict.allowed, "{label}: {verdict:?}");
+            assert_eq!(verdict.next_node.as_deref(), Some("node-c"), "{label}");
+        }
+    }
+
+    #[test]
+    fn projection_rework_targets_accept_empty_and_reject_invalid_shapes() {
+        let template = projection_fixture();
+        let steps = template["ordered_steps"].as_array().expect("steps");
+        let node_ids = steps
+            .iter()
+            .map(|step| step["role_id"].as_str().expect("role_id").to_string())
+            .collect::<Vec<_>>();
+        let terminal_index = steps
+            .iter()
+            .position(|step| step["terminal"].as_bool() == Some(true))
+            .expect("terminal node");
+        let nonterminal_index = steps
+            .iter()
+            .position(|step| step["terminal"].as_bool() == Some(false))
+            .expect("nonterminal node");
+        let valid_target = serde_json::json!([node_ids[terminal_index].clone()]);
+        let duplicate_target = serde_json::json!([
+            node_ids[nonterminal_index].clone(),
+            node_ids[nonterminal_index].clone()
+        ]);
+        let cases = vec![
+            (
+                "terminal_empty_targets",
+                terminal_index,
+                serde_json::json!([]),
+                "accept",
+            ),
+            (
+                "nonterminal_empty_targets",
+                nonterminal_index,
+                serde_json::json!([]),
+                "accept",
+            ),
+            (
+                "nonempty_valid_targets",
+                nonterminal_index,
+                valid_target,
+                "accept",
+            ),
+            (
+                "malformed_target_type",
+                nonterminal_index,
+                serde_json::json!([42]),
+                "malformed",
+            ),
+            (
+                "duplicate_targets",
+                nonterminal_index,
+                duplicate_target,
+                "duplicate",
+            ),
+        ];
+
+        for (label, index, targets, expected) in cases {
+            let mut config = template.clone();
+            config["ordered_steps"][index]["rework"]["targets"] = targets.clone();
+            match (expected, compile(&config)) {
+                ("accept", Ok(snapshot)) => {
+                    let expected_targets = targets
+                        .as_array()
+                        .expect("targets")
+                        .iter()
+                        .map(|target| target.as_str().expect("target string").to_string())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        snapshot.nodes[index].rework_targets, expected_targets,
+                        "{label}"
+                    );
+                }
+                ("malformed", Err(error)) => {
+                    assert!(
+                        matches!(error, TeamFlowSnapshotError::MalformedEvidence { .. }),
+                        "{label}: {error:?}"
+                    );
+                }
+                ("duplicate", Err(error)) => {
+                    assert!(
+                        matches!(error, TeamFlowSnapshotError::ConflictingAliases { .. }),
+                        "{label}: {error:?}"
+                    );
+                }
+                (expected, result) => panic!("{label}: expected {expected}, got {result:?}"),
+            }
+        }
     }
 
     #[test]

@@ -86,11 +86,9 @@ mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_result_evidence;
 mod runtime_dispatch_state;
 pub(crate) use runtime_dispatch_state::{
-    INTERNAL_CODEX_CARRIER_UNAVAILABLE, INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
-    ModelProfileCatalog, RuntimeAgentLaneDispatch, RuntimeDispatchPacketContext,
-    RuntimeDispatchTargetResolution, active_downstream_dispatch_target,
-    admissible_selected_backend_for_dispatch_target, agent_init_command_for_packet_path,
-    agent_init_execute_command_for_packet_path, apply_dispatch_execution_timeout_to_receipt,
+    active_downstream_dispatch_target, admissible_selected_backend_for_dispatch_target,
+    agent_init_command_for_packet_path, agent_init_execute_command_for_packet_path,
+    apply_dispatch_execution_timeout_to_receipt,
     apply_dispatch_handoff_timeout_to_receipt_for_state_root,
     apply_existing_executed_dispatch_result_to_receipt,
     apply_first_handoff_execution_to_run_graph_status,
@@ -135,7 +133,7 @@ pub(crate) use runtime_dispatch_state::{
     receipt_waiting_on_specification_evidence,
     reconcile_executed_dispatch_result_state_best_effort, record_dispatch_execution_started,
     refresh_downstream_dispatch_preview, refresh_downstream_dispatch_preview_with_owned_paths,
-    render_command_display, resolve_runtime_dispatch_target, resolved_tracked_design_doc_path,
+    render_command_display, resolved_tracked_design_doc_path,
     resolved_tracked_flow_bootstrap_for_scope, route_assignment_catalog_drift_payload,
     route_selected_model_profile_for_backend, runtime_agent_lane_dispatch_for_root,
     runtime_consumption_run_id, runtime_dispatch_command_for_target,
@@ -152,7 +150,9 @@ pub(crate) use runtime_dispatch_state::{
     try_bridge_bounded_implementer_completion_to_downstream_receipt,
     try_bridge_bounded_specification_completion_to_downstream_receipt,
     validate_runtime_dispatch_packet_contract, write_runtime_dispatch_packet,
-    write_runtime_dispatch_result,
+    write_runtime_dispatch_result, ModelProfileCatalog, RuntimeAgentLaneDispatch,
+    RuntimeDispatchPacketContext, RuntimeDispatchTargetResolution,
+    INTERNAL_CODEX_CARRIER_UNAVAILABLE, INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
 };
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
@@ -202,10 +202,11 @@ mod taskflow_runtime_bundle;
 mod taskflow_spec_bootstrap;
 mod taskflow_task_bridge;
 mod team_flow_authority_adapter;
+mod team_flow_authority_projection;
 mod team_flow_state_machine;
 mod temp_state;
 #[cfg(test)]
-mod test_cli_support;
+pub(crate) mod test_cli_support;
 mod vida_client;
 #[cfg(test)]
 mod vida_client_fixture;
@@ -214,16 +215,11 @@ mod vida_transport_tarpc;
 mod vida_tui_shell;
 mod zombie_d_gate;
 
-use std::env;
-use std::ffi::OsString;
-use std::path::PathBuf;
-use std::process::ExitCode;
-
 use crate::contract_profile_adapter::{
-    BlockerCode, blocker_code as blocker_code_value, blocker_code_str,
+    blocker_code as blocker_code_value, blocker_code_str, BlockerCode,
 };
 use agent_extension_bundle_validation::{
-    AgentExtensionBundleValidationInput, extend_agent_extension_bundle_validation_errors,
+    extend_agent_extension_bundle_validation_errors, AgentExtensionBundleValidationInput,
 };
 use agent_extension_catalog_projection::build_agent_extension_catalog_projection;
 use agent_extension_registry_projection::build_agent_extension_registry_projection;
@@ -232,7 +228,7 @@ pub(crate) use bootstrap_value_utils::{
     normalize_root_arg, slugify_project_id, trimmed_non_empty,
 };
 use carrier_runtime_projection::build_carrier_runtime_projection;
-use clap::{Parser, error::ErrorKind};
+use clap::{error::ErrorKind, Parser};
 pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
@@ -259,12 +255,12 @@ pub(crate) use docflow_runtime_verdict::{
 };
 use hook_template_registry_projection::build_hook_template_registry_projection;
 pub(crate) use host_agent_state::{
-    HOST_AGENT_OBSERVABILITY_STATE, HostAgentFeedbackInput, HostAgentHandleStateInput,
-    PROMPT_LIFECYCLE_STATE, WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
     append_host_agent_observability_event, host_agent_observability_state_path,
     load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
     read_json_file_if_present, record_host_agent_handle_state, refresh_worker_strategy,
-    worker_scorecards_state_path, worker_strategy_state_path,
+    worker_scorecards_state_path, worker_strategy_state_path, HostAgentFeedbackInput,
+    HostAgentHandleStateInput, HOST_AGENT_OBSERVABILITY_STATE, PROMPT_LIFECYCLE_STATE,
+    WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use launcher_activation_snapshot::{
@@ -275,9 +271,9 @@ use launcher_task_commands::{
     build_task_close_command, build_task_create_command, build_task_ensure_command,
     build_task_show_command, infer_feature_request_slug, infer_feature_request_title, shell_quote,
 };
-pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
+pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_bootstrap_defaults::*;
 pub(crate) use project_root_paths::{
     ensure_dir, looks_like_project_root, resolve_repo_root, resolve_runtime_project_root,
@@ -288,9 +284,9 @@ pub(crate) use registry_projection_utils::{
     registry_ids_by_key, registry_row_map_by_id, registry_rows_by_key,
 };
 use release1_contracts::{
-    LaneStatus, derive_lane_status, missing_downstream_lane_evidence_blocker,
+    derive_lane_status, missing_downstream_lane_evidence_blocker, LaneStatus,
 };
-use root_command_router::run_root_command;
+use root_command_router::{run_root_command, run_root_command_with_args};
 use runtime_assignment_builder::{
     build_runtime_assignment, build_runtime_assignment_from_dispatch_alias,
     build_runtime_assignment_from_resolved_constraints,
@@ -299,7 +295,7 @@ use runtime_assignment_builder::{
 };
 use runtime_assignment_policy::{
     declared_task_class_supports_requested, infer_execution_runtime_role, infer_runtime_task_class,
-    role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
+    role_supports_task_class, task_complexity_multiplier,
 };
 pub(crate) use runtime_assignment_projection_utils::{
     apply_run_graph_runtime_assignment_to_selection, carrier_runtime_section,
@@ -308,34 +304,40 @@ pub(crate) use runtime_assignment_projection_utils::{
 };
 #[allow(unused_imports)]
 pub(crate) use runtime_consumption_state::{
+    apply_runtime_consumption_final_dispatch_receipt_blocker,
+    latest_admissible_retrieval_trust_signal,
+    runtime_consumption_final_dispatch_receipt_blocker_code,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION,
-    apply_runtime_consumption_final_dispatch_receipt_blocker,
-    latest_admissible_retrieval_trust_signal,
-    runtime_consumption_final_dispatch_receipt_blocker_code,
 };
 pub(crate) use runtime_consumption_state::{
-    RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopRecord, RuntimeReflexLoopStage,
-    RuntimeReflexLoopSummary, latest_final_runtime_consumption_dispatch_receipt_summary,
+    latest_final_runtime_consumption_dispatch_receipt_summary,
     latest_final_runtime_consumption_snapshot_path,
     latest_recorded_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
     latest_terminal_consume_continue_snapshot_run_id,
     runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
     runtime_reflex_loop_record, runtime_reflex_loop_summary, write_runtime_consumption_snapshot,
+    RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopRecord, RuntimeReflexLoopStage,
+    RuntimeReflexLoopSummary,
 };
 pub(crate) use runtime_consumption_surface::{
+    blocking_lane_selection, build_docflow_runtime_evidence, doctor_launcher_summary_for_root,
     DoctorLauncherSummary, RuntimeConsumptionClosureAdmission, RuntimeConsumptionDocflowActivation,
     RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundleCheck,
-    TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload, blocking_lane_selection,
-    build_docflow_runtime_evidence, doctor_launcher_summary_for_root,
+    TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload,
 };
 pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
     block_on_state_store, print_json_pretty, repo_runtime_root,
 };
 use state_store::{StateStore, StateStoreError};
+use std::env;
+use std::ffi::OsString;
+use std::fmt::Display;
+use std::path::PathBuf;
+use std::process::ExitCode;
 pub(crate) use surface_render::{
     print_root_help, print_surface_header, print_surface_line, print_surface_ok,
 };
@@ -349,8 +351,8 @@ use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;
 pub(crate) use taskflow_routing::{
     dispatch_contract_allowed_next_lane_sequence, dispatch_contract_execution_lane_sequence,
-    dispatch_contract_lane, dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
-    dispatch_target_for_runtime_role, selected_backend_from_execution_plan_route,
+    dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
+    selected_backend_from_execution_plan_route,
 };
 use taskflow_runtime_bundle::{
     blocking_runtime_bundle, build_taskflow_consume_bundle_payload, taskflow_consume_bundle_check,
@@ -377,15 +379,16 @@ fn main() -> ExitCode {
                 match root_command_router::prepare_runtime_state_dir_for_parse(&args) {
                     Ok(guard) => guard,
                     Err(error) => {
-                        eprintln!("{error}");
+                        emit_pre_dispatch_error(&args, error);
                         return ExitCode::from(1);
                     }
                 };
+            let raw_args = args.clone();
             let cli = match parse_cli_or_emit_error(args) {
                 Ok(cli) => cli,
                 Err(exit_code) => return exit_code,
             };
-            runtime.block_on(run_root_command(cli))
+            runtime.block_on(run_root_command_with_args(cli, &raw_args))
         }) {
         Ok(handle) => match handle.join() {
             Ok(code) => code,
@@ -471,6 +474,112 @@ fn cli_parse_error_payload(args: &[OsString], error: &clap::Error) -> serde_json
     })
 }
 
+pub(crate) fn emit_pre_dispatch_error(args: &[OsString], error: impl Display) {
+    emit_pre_dispatch_error_with_surface(args, None, error);
+}
+
+pub(crate) fn emit_pre_dispatch_error_with_surface(
+    args: &[OsString],
+    surface_hint: Option<&str>,
+    error: impl Display,
+) {
+    let error_text = error.to_string();
+    if cli_args_request_json(args) {
+        print_json_pretty(&pre_dispatch_error_payload_with_surface(
+            args,
+            surface_hint,
+            &error_text,
+        ));
+    }
+    eprintln!("{error_text}");
+}
+
+pub(crate) fn pre_dispatch_error_payload(args: &[OsString], error_text: &str) -> serde_json::Value {
+    pre_dispatch_error_payload_with_surface(args, None, error_text)
+}
+
+pub(crate) fn pre_dispatch_error_payload_with_surface(
+    args: &[OsString],
+    surface_hint: Option<&str>,
+    error_text: &str,
+) -> serde_json::Value {
+    let surface = surface_hint
+        .filter(|surface| !surface.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| cli_parse_error_surface(args));
+    let (blocker_codes, team_flow_authority) =
+        if let Some((code, path)) = team_flow_materialization_details(error_text) {
+            (
+                vec![error_text.trim().to_string()],
+                serde_json::json!({
+                    "materialization_code": code,
+                    "path": path,
+                }),
+            )
+        } else {
+            (
+                vec!["pre_dispatch_bootstrap_error".to_string()],
+                serde_json::Value::Null,
+            )
+        };
+    let artifact_refs = serde_json::json!({
+        "source": "pre_dispatch_bootstrap",
+        "surface": surface,
+        "config_path": pre_dispatch_config_path(error_text),
+        "team_flow_authority": team_flow_authority,
+    });
+    let next_actions = vec![
+        "Inspect the reported bootstrap/configuration blocker and its source path.".to_string(),
+        format!("Retry `{surface} --json` after correcting the blocker."),
+    ];
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        &surface,
+        blocker_codes,
+        next_actions,
+        artifact_refs.clone(),
+        serde_json::json!({
+            "error": error_text.trim(),
+            "error_kind": "pre_dispatch_bootstrap",
+        }),
+    )
+    .unwrap_or_else(|renderer_error| {
+        serde_json::json!({
+            "surface": surface,
+            "status": "blocked",
+            "blocker_codes": ["pre_dispatch_bootstrap_error"],
+            "error": error_text.trim(),
+            "error_kind": "pre_dispatch_bootstrap",
+            "next_actions": [
+                "Inspect the reported bootstrap/configuration blocker and its source path.",
+                format!("Retry `{surface} --json` after correcting the blocker."),
+            ],
+            "artifact_refs": artifact_refs,
+            "renderer_error": renderer_error,
+        })
+    })
+}
+
+fn team_flow_materialization_details(error_text: &str) -> Option<(String, String)> {
+    let details = error_text.strip_prefix("team_flow_authority_materialization_blocked:")?;
+    let (code, path) = details.split_once(':')?;
+    let code = code.trim();
+    let path = path.trim();
+    (!code.is_empty() && !path.is_empty()).then(|| (code.to_string(), path.to_string()))
+}
+
+fn pre_dispatch_config_path(error_text: &str) -> Option<String> {
+    error_text
+        .split_whitespace()
+        .find(|token| token.contains("vida.config.yaml"))
+        .map(|token| {
+            token.trim_matches(|character: char| {
+                matches!(character, '`' | '"' | '\\' | ',' | ';' | ')' | ']')
+            })
+        })
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
 fn bootstrap_windows_host_environment() {
     #[cfg(windows)]
     bootstrap_windows_host_environment_impl();
@@ -552,8 +661,8 @@ pub(crate) async fn run(cli: Cli) -> ExitCode {
 }
 
 pub(crate) use development_flow_orchestration::{
-    RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
-    build_runtime_lane_selection_with_store,
+    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
+    RuntimeConsumptionLaneSelection,
 };
 
 #[cfg(test)]
@@ -600,63 +709,47 @@ mod tests {
         assert!(harness.path().join("README.md").is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_ROOT_MAP).is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX)
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
+            .is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_PROCESS_INDEX).is_file());
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_RESEARCH_INDEX)
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_RESEARCH_INDEX)
+            .is_file());
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
         assert!(harness.path().join(".vida/cache").is_dir());
         assert!(harness.path().join(".vida/framework").is_dir());
         assert!(harness.path().join(".vida/project").is_dir());
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/index.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/roles.yaml")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/roles.sidecar.yaml")
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/index.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.yaml")
+            .is_file());
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.sidecar.yaml")
+            .is_file());
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
-        assert!(
-            harness
-                .path()
-                .join("vida/config/instructions/bundles/framework-source")
-                .is_dir()
-        );
-        assert!(
-            harness
-                .path()
-                .join("vida/config/instructions/bundles/framework-memory-source")
-                .is_dir()
-        );
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-memory-source")
+            .is_dir());
     }
 
     #[cfg(windows)]
@@ -684,5 +777,55 @@ mod tests {
 
         assert_eq!(parsed.kind(), normalized.kind());
         assert!(normalized.to_string().contains("Usage: vida"));
+    }
+
+    #[test]
+    fn pre_dispatch_error_payload_preserves_team_flow_code_and_path() {
+        let args = ["vida", "taskflow", "consume", "bundle", "check", "--json"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let error = "team_flow_authority_materialization_blocked:team_flow_authority_work_item_flow_binding_target_missing:C:\\project\\vida-stack\\vida.config.yaml";
+        let payload = pre_dispatch_error_payload_with_surface(
+            &args,
+            Some("vida taskflow consume bundle check"),
+            error,
+        );
+        assert_eq!(payload["surface"], "vida taskflow consume bundle check");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["error"], error);
+        assert_eq!(payload["blocker_codes"][0], error);
+        assert_eq!(
+            payload["artifact_refs"]["team_flow_authority"]["materialization_code"],
+            "team_flow_authority_work_item_flow_binding_target_missing"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["team_flow_authority"]["path"],
+            "C:\\project\\vida-stack\\vida.config.yaml"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["config_path"],
+            "C:\\project\\vida-stack\\vida.config.yaml"
+        );
+        assert!(!payload["next_actions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pre_dispatch_error_payload_falls_back_to_raw_argv_surface() {
+        let args = ["vida", "taskflow", "consume", "bundle", "check", "--json"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let payload = pre_dispatch_error_payload(&args, "bootstrap failed before command dispatch");
+        assert_eq!(payload["surface"], "vida taskflow consume");
+    }
+
+    #[test]
+    fn valid_taskflow_command_still_parses_with_json() {
+        let args = ["vida", "taskflow", "consume", "bundle", "check", "--json"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        assert!(parse_cli_or_emit_error(args).is_ok());
     }
 }

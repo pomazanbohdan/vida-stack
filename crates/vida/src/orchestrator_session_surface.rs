@@ -837,12 +837,12 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SESSION_STORE_BYTES, OrchestratorSessionLiveness, ProcessLiveness,
-        STALE_SESSION_PURGE_AFTER_SECONDS, build_runtime_owner_evidence,
-        classify_sessions_with_liveness, compact_runtime_owner_evidence_for_operator,
-        context_summary_map, current_session_id, current_session_identity_source,
-        current_session_record, generated_local_session_id, merge_current_session,
-        now_epoch_seconds, read_sessions, run_transfer, stable_local_session_id,
+        build_runtime_owner_evidence, classify_sessions_with_liveness,
+        compact_runtime_owner_evidence_for_operator, context_summary_map, current_session_id,
+        current_session_identity_source, current_session_record, generated_local_session_id,
+        merge_current_session, now_epoch_seconds, read_sessions, run_transfer,
+        stable_local_session_id, OrchestratorSessionLiveness, ProcessLiveness,
+        MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
     use std::process::ExitCode;
@@ -967,13 +967,11 @@ mod tests {
             stable_local_session_id(harness.path())
         );
         assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
-        assert!(
-            !second["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "live_other_orchestrator_owner")
-        );
+        assert!(!second["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "live_other_orchestrator_owner"));
 
         restore_session_env(saved);
     }
@@ -1146,20 +1144,16 @@ mod tests {
 
         assert_eq!(second["current_session"]["session_id"], "session-b");
         assert_eq!(second["mutation_gate"], "current_session_allowed");
-        assert!(
-            !second["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "live_other_orchestrator_owner")
-        );
-        assert!(
-            second["live_other_sessions"]
-                .as_array()
-                .expect("live other sessions should be present")
-                .iter()
-                .any(|session| session["session_id"] == "session-a")
-        );
+        assert!(!second["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "live_other_orchestrator_owner"));
+        assert!(second["live_other_sessions"]
+            .as_array()
+            .expect("live other sessions should be present")
+            .iter()
+            .any(|session| session["session_id"] == "session-a"));
         assert!(second["next_actions"].as_array().unwrap().is_empty());
 
         restore_session_env(saved);
@@ -1409,23 +1403,17 @@ mod tests {
         let evidence = build_runtime_owner_evidence(harness.path(), true)
             .expect("owner evidence should persist");
         let sessions = read_sessions(&sessions_path);
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session["session_id"] == "recent-stale")
-        );
-        assert!(
-            !sessions
-                .iter()
-                .any(|session| session["session_id"] == "old-stale")
-        );
-        assert!(
-            evidence["stale_sessions"]
-                .as_array()
-                .expect("stale evidence")
-                .iter()
-                .any(|session| session["session_id"] == "old-stale")
-        );
+        assert!(sessions
+            .iter()
+            .any(|session| session["session_id"] == "recent-stale"));
+        assert!(!sessions
+            .iter()
+            .any(|session| session["session_id"] == "old-stale"));
+        assert!(evidence["stale_sessions"]
+            .as_array()
+            .expect("stale evidence")
+            .iter()
+            .any(|session| session["session_id"] == "old-stale"));
 
         restore_session_env(saved);
     }

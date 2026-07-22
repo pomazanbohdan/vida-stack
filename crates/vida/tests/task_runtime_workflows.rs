@@ -105,22 +105,16 @@ fn assert_zombie_d_host_bridge_shape(value: &Value) {
         assert_eq!(value["shared_fields"][field], value[field]);
         assert_eq!(value["operator_contracts"][field], value[field]);
     }
-    assert!(
-        value["host_bridge"]["required_result_fields"]
-            .as_array()
-            .is_some_and(|fields| fields.iter().any(|field| field == "allowed_next_node"))
-    );
+    assert!(value["host_bridge"]["required_result_fields"]
+        .as_array()
+        .is_some_and(|fields| fields.iter().any(|field| field == "allowed_next_node")));
     if value["status"] == "blocked" {
-        assert!(
-            value["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| !codes.is_empty())
-        );
-        assert!(
-            value["next_actions"]
-                .as_array()
-                .is_some_and(|actions| !actions.is_empty())
-        );
+        assert!(value["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
+        assert!(value["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
     }
 }
 
@@ -320,11 +314,9 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
         ],
     );
     assert_eq!(recovery["status"], "blocked");
-    assert!(
-        json_string_vec(&recovery, "/blocker_codes")
-            .iter()
-            .any(|code| code == "open_delegated_cycle")
-    );
+    assert!(json_string_vec(&recovery, "/blocker_codes")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
     assert_eq!(
         recovery["recovery"]["delegation_gate"]["delegated_cycle_open"],
         true
@@ -598,18 +590,14 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         invalid_step_payload["graph_issue"]["issue_type"],
         "invalid_parent_child_kind"
     );
-    assert!(
-        invalid_step_payload["graph_issue"]["detail"]
-            .as_str()
-            .expect("graph issue detail")
-            .contains("got `epic`")
-    );
-    assert!(
-        invalid_step_payload["next_actions"][0]
-            .as_str()
-            .expect("next action")
-            .contains("steps require a task or subtask parent")
-    );
+    assert!(invalid_step_payload["graph_issue"]["detail"]
+        .as_str()
+        .expect("graph issue detail")
+        .contains("got `epic`"));
+    assert!(invalid_step_payload["next_actions"][0]
+        .as_str()
+        .expect("next action")
+        .contains("steps require a task or subtask parent"));
     let invalid_step_default = run_failure(
         &fixture,
         &[
@@ -1176,12 +1164,10 @@ fn task_close_uses_latest_valid_persisted_zombie_d_matrix() {
         &["task", "show", "latest-valid-zombie-d-task", "--json"],
     );
     assert_eq!(show["task"]["status"], "closed");
-    assert!(
-        show["task"]["notes"]
-            .as_str()
-            .is_some_and(|notes| notes.contains("resolved-doubt")
-                && notes.matches("task_proof_evidence:").count() == 2)
-    );
+    assert!(show["task"]["notes"]
+        .as_str()
+        .is_some_and(|notes| notes.contains("resolved-doubt")
+            && notes.matches("task_proof_evidence:").count() == 2));
 }
 
 #[test]
@@ -1284,11 +1270,9 @@ fn team_flow_transition_zombie_d_public_matrix() {
     if routing["status"] == "pass" {
         assert!(routing["route_count"].as_u64().unwrap_or_default() > 0);
     } else {
-        assert!(
-            routing["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| !codes.is_empty())
-        );
+        assert!(routing["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
     }
 
     let (route, route_success) = fixture.json_allow_failure(&[
@@ -1304,11 +1288,9 @@ fn team_flow_transition_zombie_d_public_matrix() {
         assert_eq!(route["route"]["dispatch_target"], "analyst");
         assert!(route["route"]["route_present"].as_bool().unwrap_or(false));
     } else {
-        assert!(
-            route["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| !codes.is_empty())
-        );
+        assert!(route["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
     }
 
     let (route_by_role, route_by_role_success) = fixture.json_allow_failure(&[
@@ -1484,10 +1466,8 @@ fn team_flow_transition_zombie_d_public_matrix() {
         ],
     );
     assert_eq!(missing_route["status"], "blocked");
-    assert!(
-        missing_route["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| code == "route_missing"))
-    );
+    assert!(missing_route["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes.iter().any(|code| code == "route_missing")));
     assert_zombie_d_operator_shape(&missing_route, "vida taskflow route explain");
 }

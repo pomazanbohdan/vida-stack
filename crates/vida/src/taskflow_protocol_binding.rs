@@ -4,8 +4,8 @@ use std::process::ExitCode;
 
 use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 use crate::contract_profile_adapter::{
-    BlockerCode, blocker_code, canonical_blocker_code_list, evaluate_policy_gate_protocol_binding,
-    release_contract_status,
+    blocker_code, canonical_blocker_code_list, evaluate_policy_gate_protocol_binding,
+    release_contract_status, BlockerCode,
 };
 use crate::release1_operator_output::shared_operator_output_contract_parity_error;
 
@@ -878,8 +878,8 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        ProtocolBindingCompiledPayloadImportEvidence, TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
-        TASKFLOW_PROTOCOL_BINDING_SCENARIO, protocol_binding_check_ok,
+        protocol_binding_check_ok, ProtocolBindingCompiledPayloadImportEvidence,
+        TASKFLOW_PROTOCOL_BINDING_AUTHORITY, TASKFLOW_PROTOCOL_BINDING_SCENARIO,
     };
     use crate::contract_profile_adapter::release_contract_status;
     use crate::state_store::{

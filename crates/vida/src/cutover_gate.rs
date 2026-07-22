@@ -112,12 +112,10 @@ mod tests {
         assert!(operations.contains(&operations::REPAIR_APPLY));
         assert!(operations.contains(&operations::SERVICE_LIFECYCLE_APPLY));
         assert!(operations.contains(&operations::WIZARD_SESSION_APPLY));
-        assert!(
-            report
-                .receipts
-                .iter()
-                .all(|receipt| receipt.route == "VidaCommandPipeline")
-        );
+        assert!(report
+            .receipts
+            .iter()
+            .all(|receipt| receipt.route == "VidaCommandPipeline"));
     }
 
     #[test]

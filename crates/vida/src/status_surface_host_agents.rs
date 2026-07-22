@@ -700,16 +700,12 @@ mod tests {
         );
         assert_eq!(summary["mixed_posture"], false);
         assert_eq!(summary["model_selection"]["enabled"], true);
-        assert!(
-            summary["agents"]["junior"]["default_model_profile"]
-                .as_str()
-                .is_some()
-        );
-        assert!(
-            summary["agents"]["senior"]["model"]
-                .as_str()
-                .is_some_and(|model| !model.is_empty())
-        );
+        assert!(summary["agents"]["junior"]["default_model_profile"]
+            .as_str()
+            .is_some());
+        assert!(summary["agents"]["senior"]["model"]
+            .as_str()
+            .is_some_and(|model| !model.is_empty()));
         let config = crate::project_activator_surface::read_yaml_file_checked(
             &project_root.join("vida.config.yaml"),
         )
@@ -806,7 +802,8 @@ mod tests {
         );
         assert_eq!(implementation_attempt["normalized_cost_units"], 1);
         assert_eq!(
-            summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]["selected_model_profile_id"],
+            summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]
+                ["selected_model_profile_id"],
             crate::yaml_lookup(
                 &config,
                 &[
@@ -980,12 +977,10 @@ mod tests {
             current["host_bridge_capacity"]["handle_registry"]["stale_handles"][0],
             "agent-complete"
         );
-        assert!(
-            current["host_bridge_capacity"]["next_actions"][0]
-                .as_str()
-                .unwrap()
-                .contains("Close stale")
-        );
+        assert!(current["host_bridge_capacity"]["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("Close stale"));
     }
 
     #[test]
@@ -1020,12 +1015,10 @@ mod tests {
             current["host_bridge_capacity"]["blocker_codes"],
             serde_json::json!(["host_agent_capacity_unavailable"])
         );
-        assert!(
-            current["host_bridge_capacity"]["next_actions"][0]
-                .as_str()
-                .unwrap()
-                .contains("blocked host bridge result")
-        );
+        assert!(current["host_bridge_capacity"]["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("blocked host bridge result"));
     }
 
     #[test]

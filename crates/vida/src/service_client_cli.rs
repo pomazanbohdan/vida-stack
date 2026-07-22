@@ -2,16 +2,16 @@ use std::process::ExitCode;
 
 use serde_json::json;
 use vida_contracts::{
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
-    VidaCommandEnvelope, VidaCommandResponse, VidaIdempotencyKey, VidaOperation,
-    VidaOperationInputField, VidaOperationInputValueKind, VidaProjectId, VidaProjectRef,
-    VidaRequestId, VidaSessionId, operation_input_schema, operation_spec, operations,
+    operation_input_schema, operation_spec, operations, VidaClientKind, VidaCommandEnvelope,
+    VidaCommandResponse, VidaIdempotencyKey, VidaOperation, VidaOperationInputField,
+    VidaOperationInputValueKind, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
-use crate::ProxyArgs;
 use crate::command_pipeline::VidaCommandPipeline;
 use crate::vida_client::VidaClient;
 use crate::vida_client_inprocess::LocalRuntimeVidaClient;
+use crate::ProxyArgs;
 
 #[derive(Debug, Clone, Copy)]
 struct BorrowedServiceClient<'a, C> {

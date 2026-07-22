@@ -2,7 +2,13 @@
 
 Status: active project process doc
 
-Purpose: define the project-owned operating protocol for manager-led multi-agent development so `.codex`, VIDA orchestration, and Release-1 execution all use the same bounded delivery-task model.
+## Purpose
+
+Define the project-owned operating protocol for manager-led multi-agent development so `.codex`, VIDA orchestration, and Release-1 execution all use the same bounded delivery-task model.
+
+## Trigger
+
+Apply this protocol before shaping, dispatching, reviewing, proving, or closing any project development, defect, CI, release, optimization, documentation, process, diagnostics, or operator-surface packet.
 
 ## Scope
 
@@ -25,6 +31,49 @@ This protocol does not define:
 3. product-law semantics for Release 1 capability or seam ownership,
 4. Codex runtime schema itself.
 
+## Authority
+
+1. Option and capability authority is the master template `docs/framework/templates/vida.config.yaml.template` under `dev_team.authority_catalog`.
+2. Selection authority is project `vida.config.yaml` under `dev_team.authority_selection`.
+3. The machine contract is `vida/config/schemas/team-flow-authority.schema.json`; typed runtime projection and receipts outrank process prose.
+4. Packet shape authority is `docs/process/project-development-packet-template-protocol.md`; public command routing is indexed by `docs/process/runtime-command-authority-inventory.md`.
+
+## Inputs
+
+1. source-classified request and active TaskFlow unit,
+2. selected TeamFlow configuration, registries, typed lane projection, and command/profile references,
+3. canonical packet template, owned/read-only paths, acceptance and proof targets,
+4. runtime initialization, dispatch, handoff, receipt, and blocker evidence.
+
+## Outputs
+
+1. one bounded packet and selected-lane handoff schema,
+2. receipt-backed lane result with verification, blockers, and residual risks,
+3. TaskFlow actualization and selected-flow transition evidence,
+4. focused proof/closure result or an explicit rework, escalation, or runtime-blocker state.
+
+## Rules
+
+The detailed rules below remain canonical in `Core Rule`, `TeamFlow Configuration Authority`, `Canonical Work Unit`, `Packet Contract`, runtime-first/parallel-pack rules, and `Closure Rule`. This index does not create a second role, flow, profile, or command catalog.
+
+## Forbidden
+
+1. Do not reconstruct active role, carrier, model, reasoning, flow, edge, or command authority from prose, order, or familiar identifiers.
+2. Do not bypass packet ownership, receipt requirements, proof gates, or the root write guard.
+3. Do not duplicate the master option catalog in this document or treat stable operator examples as TeamFlow authority.
+
+## Escalation
+
+The canonical escalation conditions remain under `Lane Responsibilities` / `### Escalation`; this top-level block is the authoring-contract pointer and does not add a second escalation policy.
+
+## Validation
+
+Validate packet readiness through `docs/process/project-development-packet-template-protocol.md`, selected-flow and receipt integrity through the TeamFlow schema/runtime, and closure through the declared proof target, TaskFlow evidence, and DocFlow checks.
+
+## Token Budget
+
+Carrier, model, reasoning, timeout, and cost selection come only from `vida.config.yaml`, registries, and runtime admission/telemetry. This protocol contains no fixed model or reasoning defaults; command batching follows `docs/process/command-timing-and-gate-optimization-protocol.md`.
+
 ## Core Rule
 
 Project development runs as:
@@ -40,25 +89,18 @@ Project development runs as:
 9. fail-closed on missing packet data or shared-scope ambiguity.
 10. explorer/read-only findings feed packet shaping, not root-session write ownership.
 11. session-scoped: one blocked orchestrator session must not block another session's disjoint task in the same project root.
-12. test-first for runtime/operator defect remediation, with a middle-tier test author before the implementation lane.
+12. test-first for runtime/operator defect remediation, with the configured test-authoring lane before the implementation lane.
 13. TaskFlow-actualized at every layer: new evidence must update task status, parent/child placement, priority, dependencies, proof targets, execution semantics, and sequential/parallel posture before the next lane is dispatched.
 14. source-neutral: pull requests, defects, external downstream reports, CI failures, release tasks, optimization tasks, documentation/process tasks, operator-surface gaps, diagnostics, and newly discovered work all follow the same spec-first intake, TaskFlow actualization, configured-role chain, proof, and closure discipline.
 15. runtime-first: every executable task must attempt the configured VIDA runtime flow before root-session implementation; manual execution is allowed only after a recorded runtime blocker prevents the lawful lane path.
 
 ## Team Topology
 
-The active project development team is:
+The active project development team is the runtime-selected projection from the configured TeamFlow authority:
 
-1. root orchestrator session
-   - owns framing, decomposition, packet routing, synthesis, and closure decisions
-2. `junior`
-   - default low-cost carrier tier for one bounded write-producing packet with `runtime_role=worker`
-3. `middle`
-   - carrier tier for system analyst specification/planning packets, high-quality test-authoring packets, and detailed pre-development task briefs with `runtime_role=business_analyst` or the configured test-authoring role
-4. `senior`
-   - carrier tier for independent duplication/architecture reuse review, proof, and closure-readiness checks with `runtime_role=verifier`
-5. `architect`
-   - carrier tier for high-cost conflict resolution with `runtime_role=solution_architect`
+1. one root orchestrator session owns framing, decomposition, packet routing, synthesis, and closure decisions,
+2. configured carrier tiers provide bounded write, analysis/test-authoring, independent verification, and architecture-escalation capabilities,
+3. runtime roles, carrier identities, and admissibility are resolved from the selected typed projection rather than from this document.
 
 Multiple orchestrator sessions:
 
@@ -67,19 +109,19 @@ Multiple orchestrator sessions:
 3. parallel orchestrators are lawful only when task/run identity, owned paths, and exclusive conflict domains do not overlap,
 4. foreign blocked sessions remain visible to the team but are not inherited as the current session's active bounded unit.
 
-The configured development chain is:
+The configured development chain is the selected flow's explicit ordered lane projection. The process describes lane capabilities without owning their active identifiers:
 
-1. `analyst`: a middle-cost system analyst lane that researches the bounded task, existing code/contracts, architectural context, acceptance targets, owned paths, and duplication risks before implementation.
-2. `test_author` / `autotester`: a middle-cost lane that writes or specifies the failing regression proof before implementation for test-first defect work.
-3. `coach_test_gate`: a bounded coach review that confirms the failing test matches the spec/runtime evidence and is not a weak fixture.
-4. `developer`: the cheapest eligible write lane that implements only after the analyst and required test-author handoffs are present.
-5. `coach_implementation_gate`: the post-implementation coach lane, resolved through runtime role `coach`, that reviews the completed implementation against the analyst brief, accepted test, spec, acceptance targets, and expected handoff before independent review.
-6. `duplication_reviewer`: an independent review lane that checks whether the implementation reuses existing framework/runtime contracts, avoids duplicate code/config semantics/operator surfaces, and has no dead or unwired helpers.
-7. `tester` / `prover`: independent verification and proof lanes that gate release closure.
+1. an analysis/specification lane researches the bounded task, contracts, architectural context, acceptance targets, owned paths, and duplication risks before implementation,
+2. a test-authoring lane writes or specifies the failing regression proof before implementation for test-first defect work,
+3. a pre-implementation quality gate confirms that proof matches the spec/runtime evidence and is not a weak fixture,
+4. a bounded write lane implements only after required upstream handoffs are present,
+5. a post-implementation quality gate reviews the result against the brief, accepted test, spec, acceptance targets, and expected handoff,
+6. an independent reuse review checks existing framework/runtime contracts, duplicate semantics/operator surfaces, and dead or unwired helpers,
+7. independent verification/proof lanes gate release closure when the selected flow includes them.
 
 Runtime-first execution rule:
 
-1. For each task or subtask, the orchestrator must first bind the active bounded unit with `vida orchestrator-init --json`, preview the configured team with `vida agent dispatch-next --dev-team --json`, then execute the next lane through `vida taskflow run-graph dispatch-init ...` and `vida agent-init --dispatch-packet ... --execute-dispatch`.
+1. For each task or subtask, the orchestrator must bind the active bounded unit, resolve the selected flow's startup/dispatch command references, and execute the next included lane through the registry-mapped runtime surfaces. Public command families are indexed in `docs/process/runtime-command-authority-inventory.md`; this protocol must not hardcode a TeamFlow command sequence.
 2. The configured runtime sequence is authoritative. If a project pack exposes four runtime roles but expands the worker role into multiple lane steps, the orchestrator follows the lane sequence returned by runtime instead of assuming a hardcoded count.
 3. Lanes run sequentially unless TaskFlow execution semantics, dispatch preview, owned paths, and conflict domain all report parallel-safe admission.
 4. Host-tool subagents are adapter carriers for runtime packets. Their result is not complete until the parent orchestrator submits or records a runtime receipt through the host-bridge/lane surface.
@@ -94,8 +136,8 @@ Parallel pack execution rule:
 3. Write lanes may run at the same time only when their owned paths and conflict domains are disjoint. TaskFlow graph mutation, proof attachment, task close, release install, and git publication remain sequential.
 4. The orchestrator must not implement one task, test it, close it, then start the next task when the operator requested simultaneous pack development. The intended order is pack analysis, parallel lane dispatch, one root integration batch, one focused proof batch, one broad diagnostic gate, then pack closeout.
 5. Completed lane returns are synthesized together. Root integration may fix cross-pack regressions, but those fixes must stay inside the pack's shared invariant or become a separate TaskFlow item.
-6. Pack closeout requires structured proof evidence on each task before `vida task close`. Close reason text is not proof authority.
-7. After all task closes, run a post-pack runtime reconciliation gate: `vida task reconcile-closed-runs --limit 25 --json`, then `vida orchestrator-init --json`. A remaining `closed_task_active_run_projection_mismatch` is a runtime blocker or follow-up, not a clean close.
+6. Pack closeout requires structured proof evidence on each task before the selected TaskFlow closure transition. Close reason text is not proof authority.
+7. After all task closes, run the selected flow's configured post-pack reconciliation and orchestrator-readiness gates through their registry command references. A remaining `closed_task_active_run_projection_mismatch` is a runtime blocker or follow-up, not a clean close.
 8. If the broad package/workspace gate fails after focused proof is green, classify the failures as `inside_pack`, `adjacent_regression`, or `outside_pack_residual` before closeout. Close only the tasks whose acceptance and focused proof are satisfied, and record the residual count and boundary in structured proof evidence.
 
 ## TeamFlow Configuration Authority
@@ -167,7 +209,7 @@ Source-neutral intake rule:
 4. If the mapped spec is missing, contradictory, or too weak to define acceptance, create or update a specification-clarification task before changing implementation code.
 5. Source-specific protocols add source evidence and closure details only; they do not replace the generic intake, role-chain, proof, or closure law.
 6. Defects, downstream reports, CI failures, release tasks, optimization work, documentation/process tasks, diagnostics, and operator-surface gaps must be handled with the same TaskFlow and configured-role discipline as PRs.
-7. When VIDA cannot execute the configured agent chain because the runtime itself is defective, record or update that runtime defect separately and enter bounded Defective Runtime Emulation Mode while preserving the same analyst -> test_author -> coach_test_gate -> developer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis evidence chain manually.
+7. When VIDA cannot execute the configured lane projection because the runtime itself is defective, record or update that runtime defect separately and enter bounded Defective Runtime Emulation Mode while preserving every selected lane, evidence requirement, proof gate, approval pause, rework transition, command mapping, and terminal condition manually.
 8. No defect, downstream report, PR finding, CI/release signal, optimization idea, command-surface gap, or process correction may remain only as chat/session memory when TaskFlow mutation is available.
 
 Readiness rule:
@@ -183,7 +225,7 @@ Workflow-spec annex rule:
 
 1. when a task needs multi-lane or multi-agent work, the orchestrator must attach a `workflow_spec` annex before dispatch,
 2. the annex must name DAG steps, dependencies, output schemas, proof gates, readiness, cost budget, write scope, sandbox, `fanout_min_results`, merge policy, retry policy, timeout policy, and partial-result disclosure,
-3. the configured role chain remains authoritative; the annex may specialize steps but must not silently skip analyst, test-author, coach, verifier, reviewer, or closure gates required by runtime state,
+3. the configured lane projection remains authoritative; the annex may specialize steps but must not silently skip required analysis, test-authoring, review, verification, reuse-review, or closure gates required by runtime state,
 4. parallel fanout is lawful only when TaskFlow scheduling, owned paths, conflict domains, and the annex graph all agree,
 5. per-lane attempts and consolidators use configured carrier/model profiles selected by runtime admission; hardcoded provider or model authority in packet prose is invalid,
 6. explorer/read-only results, external CLI outputs, or independent model reports are lane outputs to synthesize, not root-session permission to write,
@@ -214,28 +256,17 @@ Small-agent packet requirements:
 
 Small-agent reasoning rule:
 
-1. when the operator explicitly selects `gpt-5.4-mini` as the cheap executor for development or test-authoring packets, dispatch it with the highest available reasoning effort for that carrier,
-2. do not lower the mini executor's reasoning effort for runtime authority, TaskFlow, DocFlow, host-bridge, path-policy, receipt, or release-gate work unless the operator explicitly overrides this rule for that bounded packet,
-3. the higher reasoning budget does not authorize self-approval; root orchestration and an independent stronger validator remain required for authority-sensitive work.
+1. when the operator or runtime selects a cheap executor profile for development or test-authoring packets, dispatch it with that profile's configured reasoning effort,
+2. do not lower a selected executor profile's configured reasoning effort for runtime authority, TaskFlow, DocFlow, host-bridge, path-policy, receipt, or release-gate work unless the operator explicitly overrides the bounded packet,
+3. a higher reasoning budget does not authorize self-approval; root orchestration and an independent validator remain required for authority-sensitive work.
 
 Dynamic model-routing rule:
 
-1. keep `vida.config.yaml` and runtime assignment as the carrier owner; concrete
-   model names below are operator-selected or observed defaults, not permanent
-   framework law,
-2. use `gpt-5.4-mini` with the highest available reasoning effort for read-only
-   decomposition, PR/task mapping, source-sync documentation, and exact
-   test-only patches when the write scope is one small surface and the proof
-   command is explicit,
-3. dispatch mini with a hard timeout, one expected artifact, and a required
-   final-report telemetry block; timeout, shutdown, empty artifact, missing
-   telemetry, or self-approval without proof is `process_failure`,
-4. escalate implementation to `gpt-5.5-low` when a mini attempt times out, shuts
-   down, under-covers acceptance criteria, touches production/runtime authority
-   code, or a validator rejects closure,
-5. use `gpt-5.5-medium` as the default closure validator for
-   authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy,
-   receipt, release, or public operator-surface work,
+1. keep `vida.config.yaml`, registry identity, and runtime assignment as the carrier/profile owner; concrete model names and reasoning levels are never permanent framework law,
+2. select the cheapest eligible configured profile for read-only decomposition, PR/task mapping, source-sync documentation, and exact test-only patches when the write scope is one small surface and the proof command is explicit,
+3. dispatch the selected profile with a hard timeout, one expected artifact, and a required final-report telemetry block; timeout, shutdown, empty artifact, missing telemetry, or self-approval without proof is `process_failure`,
+4. reassign implementation to the next admissible configured profile when a cheaper attempt times out, shuts down, under-covers acceptance criteria, touches production/runtime authority code, or a validator rejects closure,
+5. select one stronger configured validator for authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy, receipt, release, or public operator-surface work,
 6. use only one strong validator by default; add a focused cheap validator only
    for one named risk, and add parallel or triple validation only when the patch
    changes production authority paths, validators disagree, the first validator
@@ -408,9 +439,8 @@ Execution packet controls:
 Validation contract:
 - The executor must not self-close the task.
 - The orchestrator will validate locally and route one focused validator.
-- For authority-sensitive work the validator default is `gpt-5.5-medium`.
-- Mini output may be accepted as evidence, rejected, or sent to `gpt-5.5-low`
-  rework.
+- For authority-sensitive work the validator is the runtime-selected admissible profile.
+- Partial output may be accepted as evidence, rejected, or sent to the next configured rework profile.
 - Timeout, missing artifact, missing telemetry, or proof-free self-approval is a
   process failure, not partial success.
 - After synthesis, close the host-agent handle before dispatching a replacement
@@ -492,7 +522,7 @@ The orchestrator must:
 9. reroute partial implementer returns instead of absorbing the same write scope locally by inertia.
 10. keep delegated lane state explicit and avoid closure-style final reporting while delegated work remains open.
 11. preserve the full write-producing lane cycle after bounded read-only findings instead of collapsing directly into local patching.
-12. treat project-delegated execution as the runtime lane flow through `vida agent-init`; host executor subagent APIs remain optional carrier details and are not the canonical packet-dispatch surface.
+12. treat project-delegated execution as the runtime-selected lane flow; host executor subagent APIs remain optional carrier details and are not the canonical packet-dispatch surface.
 
 The orchestrator must not:
 
@@ -632,12 +662,12 @@ Use delegated agents by default for write-producing work.
 
 Default engagement policy:
 
-1. orchestrator owns shaping, routing, synthesis, and closure decisions,
-2. the configured `test_author` role and its resolved carrier own the bounded failing-test/regression authoring packet when test-first proof is required,
-3. the runtime-selected `worker` carrier owns one bounded implementation packet,
-4. the runtime-selected `coach` carrier owns bounded test and implementation gate review,
-5. the runtime-selected `verifier` carrier owns independent proof and closure readiness,
-6. the runtime-selected `solution_architect` carrier is exceptional and activates only when normal packet closure cannot be made coherent.
+1. the orchestrator owns shaping, routing, synthesis, and closure decisions,
+2. the selected test-authoring lane and its resolved carrier own the bounded failing-test/regression authoring packet when test-first proof is required,
+3. the runtime-selected bounded-write lane owns one implementation packet,
+4. the runtime-selected quality-gate lane owns bounded test and implementation review,
+5. the runtime-selected verification lane owns independent proof and closure readiness,
+6. the exceptional architecture-escalation lane activates only when normal packet closure cannot be made coherent.
 
 Host-tool permission bridge:
 
@@ -649,8 +679,8 @@ Host-tool permission bridge:
 
 Agent-init interpretation rule:
 
-1. `vida agent-init` is a lane-activation and packet-consumption surface, not by itself an execution-complete receipt,
-2. `vida agent-init --dispatch-packet ...` or `--downstream-packet ...` does not transfer writer ownership back to the root session,
+1. The configured lane-init/packet-consumption surface is not by itself an execution-complete receipt; public command routing is indexed in `docs/process/runtime-command-authority-inventory.md`,
+2. A lane-init dispatch packet or downstream packet does not transfer writer ownership back to the root session,
 3. if the activated packet is still a `tracked_flow_packet`, that lane is shaping/materialization-only until runtime emits a concrete write-producing packet with bounded ownership,
 4. absence of that later write-producing packet is a blocker/reroute condition, not implicit permission for local root-session patching.
 
@@ -702,8 +732,8 @@ After each closure-ready wave:
 
 1. close or update every child TaskFlow item before closing the wave parent,
 2. run the declared wave proof and debug build,
-3. build and install the release binary with `vida release install --json` or the current project-approved equivalent so the system `vida` on the normal PATH matches the closed wave,
-4. smoke-check the installed binary through the normal PATH with a bounded runtime read such as `vida status --json` or the wave-declared installed-runtime smoke,
+3. build and install the release binary through the current project-approved release operator surface so the system `vida` on the normal PATH matches the closed wave,
+4. smoke-check the installed binary through the normal PATH with the wave-declared installed-runtime operator surface,
 5. push the wave closure state only when a current explicit operator instruction authorizes that specific wave, publication batch, or repeatable publication pattern; wave closure and a clean commit are not authorization by themselves,
 6. run `docs/process/github-pr-processing-protocol.md` from wave closure only when a current explicit operator instruction authorizes that specific PR-processing batch or repeatable PR-processing pattern.
 
@@ -753,14 +783,20 @@ After bootstrap, development agents must know immediately:
 12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
 13. for Release-1 execution-program ownership, read `active runtime contract/profile specs`.
 
+## Metadata
+
+1. Canonical artifact identity, status, source path, revision, and update time are recorded in the footer below.
+2. Revision history is recorded only in `docs/process/team-development-and-orchestration-protocol.changelog.jsonl`.
+3. This document points to configuration/schema/runtime owners and does not become a second option catalog.
+
 -----
 artifact_path: process/team-development-and-orchestration-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-07-19'
+artifact_revision: '2026-07-22'
 schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-07-19T00:00:00+03:00
+updated_at: 2026-07-22T16:22:42+03:00
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

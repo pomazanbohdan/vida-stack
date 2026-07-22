@@ -2,9 +2,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 
-use crate::BlockerCode;
 use crate::display_lane_label;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
+use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -260,18 +260,22 @@ fn consume_final_toon_line(label: &str, value: &str) -> String {
 }
 
 fn consume_final_toon_bool(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
+    if value {
+        "true"
+    } else {
+        "false"
+    }
 }
 
 fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
-    let required_lanes =
-        execution_plan["orchestration_contract"]["delegation_policy"]["required_lanes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .map(display_lane_label)
-            .collect::<Vec<_>>();
+    let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
+        ["required_lanes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(display_lane_label)
+        .collect::<Vec<_>>();
     if !required_lanes.is_empty() {
         return required_lanes.join(", ");
     }
@@ -324,6 +328,11 @@ fn consume_final_toon_text(
             &payload.requested_owned_paths.len().to_string(),
         ));
     }
+    if let Some(flow_id) =
+        payload.role_selection.execution_plan["team_flow_authority_selected_flow_id"].as_str()
+    {
+        lines.push(consume_final_toon_line("selected_flow", flow_id));
+    }
     if let Some(mode) =
         payload.role_selection.execution_plan["orchestration_contract"]["mode"].as_str()
     {
@@ -355,9 +364,9 @@ fn consume_final_toon_text(
                 &format!("spec-first bootstrap for `{feature_slug}`"),
             ));
         }
-        if let Some(command) =
-            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["bootstrap_command"]
-                .as_str()
+        if let Some(command) = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
+            ["bootstrap_command"]
+            .as_str()
         {
             lines.push(consume_final_toon_line(
                 "next_tracked_command",
@@ -369,9 +378,9 @@ fn consume_final_toon_text(
         if !required_lanes.is_empty() {
             lines.push(consume_final_toon_line("delegated_lanes", &required_lanes));
         }
-    } else if let Some(agent_type) =
-        payload.taskflow_handoff_plan["activation_chain"]["implementer"]["activation_agent_type"]
-            .as_str()
+    } else if let Some(agent_type) = payload.taskflow_handoff_plan["activation_chain"]
+        ["implementer"]["activation_agent_type"]
+        .as_str()
     {
         lines.push(consume_final_toon_line("implementer_carrier", agent_type));
     }
@@ -730,7 +739,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                     status: "blocked".to_string(),
                                                     admitted: false,
                                                     blockers: vec![
-                                                        "unresolved_lane_selection".to_string(),
+                                                        "unresolved_lane_selection".to_string()
                                                     ],
                                                     proof_surfaces: vec![
                                                         "vida taskflow consume bundle check"
@@ -844,6 +853,69 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 };
                             if let Some(task_id) = explicit_task_id {
                                 bind_consume_final_explicit_task_id(&mut role_selection, task_id);
+                                let task = match store.show_task(task_id).await {
+                                    Ok(task) => task,
+                                    Err(error) => {
+                                        let blocker = "team_flow_authority_task_load_failed";
+                                        if as_json {
+                                            crate::print_json_pretty(&serde_json::json!({
+                                                "surface": "vida taskflow consume final",
+                                                "status": "blocked",
+                                                "blocker_codes": [blocker],
+                                                "task_id": task_id,
+                                                "error": error.to_string(),
+                                            }));
+                                        } else {
+                                            eprintln!("{blocker}: {error}");
+                                        }
+                                        return ExitCode::from(1);
+                                    }
+                                };
+                                match crate::dev_team_sequence_contract::selected_dev_team_flow_id_for_task(
+                                    &runtime_bundle.activation_bundle,
+                                    &task,
+                                ) {
+                                    Ok(flow_id) => {
+                                        if let Err(error) =
+                                            crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan(
+                                                &mut role_selection,
+                                                &runtime_bundle.activation_bundle,
+                                                &flow_id,
+                                            )
+                                        {
+                                            eprintln!("{error}");
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                    Err(blocker) => {
+                                        if let Some(plan) = role_selection.execution_plan.as_object_mut() {
+                                            plan.insert(
+                                                "team_flow_authority_flow_selection_blocker".to_string(),
+                                                serde_json::Value::String(blocker.clone()),
+                                            );
+                                        }
+                                        if as_json {
+                                            crate::print_json_pretty(&serde_json::json!({
+                                                "surface": "vida taskflow consume final",
+                                                "status": "blocked",
+                                                "blocker_codes": [blocker],
+                                                "task_id": task_id,
+                                                "selected_flow": null,
+                                            }));
+                                        } else {
+                                            eprintln!("{blocker}");
+                                        }
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            } else {
+                                if let Err(error) = crate::development_flow_orchestration::normalize_fresh_selected_or_default_flow_for_execution_plan(
+                                    &mut role_selection,
+                                    &runtime_bundle.activation_bundle,
+                                ) {
+                                    eprintln!("{error}");
+                                    return ExitCode::from(1);
+                                }
                             }
                             let run_graph_bootstrap =
                             crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
@@ -862,10 +934,17 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
-                            let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
-                                &role_selection,
-                                &run_graph_bootstrap,
-                            );
+                            let mut dispatch_receipt =
+                                match build_runtime_consumption_dispatch_receipt(
+                                    &role_selection,
+                                    &run_graph_bootstrap,
+                                ) {
+                                    Ok(receipt) => receipt,
+                                    Err(error) => {
+                                        eprintln!("{error}");
+                                        return ExitCode::from(1);
+                                    }
+                                };
                             let role_selection_value =
                                 crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
                                     &role_selection.execution_plan,
@@ -876,14 +955,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     &runtime_bundle.activation_bundle,
                                     &role_selection_value,
                                 );
-                            let carrier_policy_blockers =
-                                carrier_policy_revalidation["blocker_codes"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(serde_json::Value::as_str)
-                                    .map(str::to_string)
-                                    .collect::<Vec<_>>();
+                            let carrier_policy_blockers = carrier_policy_revalidation
+                                ["blocker_codes"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>();
                             let mut taskflow_handoff_plan =
                                 super::build_taskflow_handoff_plan(&role_selection);
                             if !carrier_policy_blockers.is_empty() {
@@ -955,12 +1034,22 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         .push("vida task proof attach-evidence".to_string());
                                 }
                             }
-                            let execution_preparation_gate =
+                            let execution_preparation_gate_result =
                                 build_execution_preparation_evidence_gate(
                                     &role_selection,
                                     &taskflow_handoff_plan,
                                     &run_graph_bootstrap,
                                 );
+                            let execution_preparation_authority_blocker =
+                                execution_preparation_gate_result.as_ref().err().cloned();
+                            let execution_preparation_gate = execution_preparation_gate_result
+                                .unwrap_or(ExecutionPreparationEvidenceGate {
+                                    missing_evidence_or_handoff_packet: true,
+                                });
+                            let execution_preparation_blocker_code =
+                                execution_preparation_authority_blocker
+                                    .as_deref()
+                                    .or_else(|| execution_preparation_gate.blocker_code());
                             let retrieval_policy_gate =
                                 build_retrieval_policy_decision_gate(&bundle_check);
                             let approval_delegation_gate = build_approval_delegation_evidence_gate(
@@ -969,7 +1058,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &run_graph_bootstrap,
                             )
                             .await;
-                            if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                            if let Some(blocker_code) = execution_preparation_blocker_code {
                                 if !closure_admission
                                     .blockers
                                     .iter()
@@ -1022,7 +1111,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         .insert(0, blocker_code.clone());
                                 }
                             }
-                            if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                            if let Some(blocker_code) = execution_preparation_blocker_code {
                                 dispatch_receipt.dispatch_status = "blocked".to_string();
                                 dispatch_receipt.blocker_code = Some(blocker_code.to_string());
                                 dispatch_receipt.downstream_dispatch_ready = false;
@@ -1759,15 +1848,15 @@ fn decode_execution_preparation_artifacts(
         .and_then(serde_json::Value::as_str)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
-    let legacy_evidence_ready = super::json_bool(
-        run_graph_bootstrap.get("execution_preparation_evidence_ready"),
-        false,
-    )
-        || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
+    let legacy_evidence_ready =
+        super::json_bool(
+            run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+            false,
+        ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
             == Some("ready")
-        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
-            .as_bool()
-            .unwrap_or(false);
+            || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+                .as_bool()
+                .unwrap_or(false);
 
     let developer_handoff_packet = DeveloperHandoffPacketArtifact {
         path: nonempty_json_string(packet_json.and_then(|value| value.get("path"))).or_else(|| {
@@ -1830,25 +1919,25 @@ fn build_execution_preparation_evidence_gate(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     taskflow_handoff_plan: &serde_json::Value,
     run_graph_bootstrap: &serde_json::Value,
-) -> ExecutionPreparationEvidenceGate {
-    let execution_plan = &role_selection.execution_plan;
-    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    let execution_preparation_required = super::json_bool(
-        dispatch_contract.get("execution_preparation_required"),
-        false,
-    ) || dispatch_contract["lane_catalog"]
-        .get("execution_preparation")
-        .is_some()
-        || dispatch_contract["lane_sequence"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .any(|target| target == "execution_preparation");
-    if !execution_preparation_required {
-        return ExecutionPreparationEvidenceGate {
-            missing_evidence_or_handoff_packet: false,
+) -> Result<ExecutionPreparationEvidenceGate, String> {
+    if let Some(blocker) =
+        role_selection.execution_plan["team_flow_authority_flow_selection_blocker"].as_str()
+    {
+        return Err(blocker.to_string());
+    }
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.code)?;
+    let execution_preparation_required =
+        match authority.resolve_target(None, "execution_preparation") {
+            Ok(_) => true,
+            Err(blocker) if blocker.code == "team_flow_node_resolution_missing" => false,
+            Err(blocker) => return Err(blocker.code),
         };
+    if !execution_preparation_required {
+        return Ok(ExecutionPreparationEvidenceGate {
+            missing_evidence_or_handoff_packet: false,
+        });
     }
 
     let artifacts =
@@ -1866,12 +1955,12 @@ fn build_execution_preparation_evidence_gate(
             && artifacts.dependency_impact_summary.ready
             && artifacts.spec_alignment_summary.ready);
 
-    ExecutionPreparationEvidenceGate {
+    Ok(ExecutionPreparationEvidenceGate {
         missing_evidence_or_handoff_packet: !(artifacts.handoff_ready
             && packet_ready
             && evidence_ready
             && required_artifacts_ready),
-    }
+    })
 }
 
 async fn build_approval_delegation_evidence_gate(
@@ -2147,7 +2236,7 @@ fn normalize_runtime_consumption_statuses(
 pub(crate) fn build_runtime_consumption_dispatch_receipt(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
-) -> crate::state_store::RunGraphDispatchReceipt {
+) -> Result<crate::state_store::RunGraphDispatchReceipt, String> {
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render");
@@ -2157,11 +2246,22 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         .get("latest_status")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let dispatch_target =
-        canonical_dispatch_target_from_latest_status(role_selection, &latest_status)
-            .unwrap_or_else(|| role_selection.selected_role.clone());
+    let dispatch_node = canonical_dispatch_node_from_latest_status(role_selection, &latest_status)?;
+    let dispatch_target = dispatch_node
+        .as_ref()
+        .map(|node| node.dispatch_target.clone())
+        .ok_or_else(|| "team_flow_dispatch_target_missing".to_string())?;
+    if let Some(blocker) =
+        role_selection.execution_plan["team_flow_authority_flow_selection_blocker"].as_str()
+    {
+        return Err(blocker.to_string());
+    }
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
-        super::downstream_activation_fields(role_selection, &dispatch_target);
+        crate::runtime_dispatch_state::downstream_activation_fields_for_resolved_node(
+            role_selection,
+            &dispatch_target,
+            dispatch_node.as_ref(),
+        );
     let dispatch_kind = if dispatch_surface.as_deref() == Some("vida taskflow bootstrap-spec") {
         "agent_lane".to_string()
     } else {
@@ -2174,63 +2274,56 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
     } else {
         dispatch_surface
     };
-    let activation_agent_type = activation_agent_type.or_else(|| {
-        if role_selection.conversational_mode.is_some() {
+    let runtime_assignment = super::runtime_assignment_from_execution_plan(&role_selection.execution_plan);
+    let activation_agent_type = activation_agent_type
+        .or_else(|| {
+            dispatch_node
+                .as_ref()
+                .and_then(|node| node.activation.get("activation_agent_type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
             role_selection.execution_plan["default_route"]["activation_agent_type"]
                 .as_str()
                 .map(str::to_string)
-                .or_else(|| {
-                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
-                        ["activation_agent_type"]
-                        .as_str()
-                        .map(str::to_string)
-                })
-        } else {
-            super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
-                .and_then(|route| route.get("activation_agent_type"))
+        })
+        .or_else(|| {
+            runtime_assignment["activation_agent_type"]
+                .as_str()
+                .map(str::to_string)
+        });
+    let activation_runtime_role = activation_runtime_role
+        .or_else(|| {
+            dispatch_node
+                .as_ref()
+                .and_then(|node| node.activation.get("activation_runtime_role"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
-                .or_else(|| {
-                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
-                        ["activation_agent_type"]
-                        .as_str()
-                        .map(str::to_string)
-                })
-        }
-    });
-    let activation_runtime_role = activation_runtime_role.or_else(|| {
-        if role_selection.conversational_mode.is_some() {
+        })
+        .or_else(|| {
             role_selection.execution_plan["default_route"]["activation_runtime_role"]
                 .as_str()
                 .map(str::to_string)
-                .or_else(|| {
-                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
-                        ["activation_runtime_role"]
-                        .as_str()
-                        .map(str::to_string)
-                })
-        } else {
-            super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
-                .and_then(|route| route.get("activation_runtime_role"))
-                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            runtime_assignment["activation_runtime_role"]
+                .as_str()
                 .map(str::to_string)
-                .or_else(|| {
-                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
-                        ["activation_runtime_role"]
-                        .as_str()
-                        .map(str::to_string)
-                })
-        }
-    });
-    let selected_backend = super::downstream_selected_backend(
-        role_selection,
-        &dispatch_target,
-        activation_agent_type.as_deref(),
-        None,
-    )
+        });
+    let selected_backend =
+        crate::runtime_dispatch_state::downstream_selected_backend_for_resolved_node(
+            role_selection,
+            dispatch_node.as_ref(),
+            &dispatch_target,
+            activation_agent_type.as_deref(),
+            None,
+        )
     .filter(|value| !value.is_empty());
-    let dispatch_command =
-        super::runtime_dispatch_command_for_target(role_selection, &dispatch_target);
+    let dispatch_command = dispatch_node
+        .as_ref()
+        .and_then(|node| node.command_surface.clone())
+        .or_else(|| super::runtime_dispatch_command_for_target(role_selection, &dispatch_target));
     let dispatch_blockers = super::json_string_list(latest_status.get("dispatch_blockers"));
     let dispatch_ready = super::json_bool(
         latest_status.get("dispatch_ready"),
@@ -2238,7 +2331,7 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
     );
     let downstream_dispatch_ready =
         dispatch_ready || (dispatch_target == "closure" && dispatch_blockers.is_empty());
-    crate::state_store::RunGraphDispatchReceipt {
+    Ok(crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
         dispatch_status: if dispatch_ready {
@@ -2278,45 +2371,224 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         activation_runtime_role,
         selected_backend,
         recorded_at,
-    }
+    })
 }
 
-fn canonical_dispatch_target_from_latest_status(
+fn canonical_dispatch_node_from_latest_status(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     latest_status: &serde_json::Value,
-) -> Option<String> {
+) -> Result<Option<crate::team_flow_authority_adapter::TeamFlowNodeResolution>, String> {
+    let authority =
+        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
+            .map_err(|blocker| blocker.to_string())?;
+    let resolve_exact_status_node = |requested: &str| {
+        authority
+            .resolve_target(Some(&role_selection.execution_plan), requested)
+            .map_err(|blocker| blocker.to_string())
+    };
+    let resolve_status_node = |requested: &str| {
+        let requested = requested.trim();
+        if let Some(selected_node_id) =
+            crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+        {
+            let selected_node = resolve_exact_status_node(selected_node_id)?;
+            if [
+                selected_node.node_id.as_str(),
+                selected_node.dispatch_target.as_str(),
+                selected_node.dispatch_alias.as_str(),
+                selected_node.runtime_role.as_str(),
+                selected_node.task_class.as_str(),
+            ]
+            .into_iter()
+            .any(|candidate| candidate == requested)
+            {
+                return Ok(selected_node);
+            }
+        }
+        resolve_exact_status_node(requested)
+    };
     let next_node =
         super::json_string(latest_status.get("next_node")).filter(|value| !value.is_empty());
     if next_node.as_deref() == Some("spec-pack")
         && super::execution_plan_agent_only_development_required(&role_selection.execution_plan)
     {
-        return Some("specification".to_string());
+        return resolve_status_node("specification").map(Some);
     }
-    next_node
-        .as_deref()
-        .and_then(|next_node| {
-            super::dispatch_target_for_runtime_role(&role_selection.execution_plan, next_node)
-                .or_else(|| Some(next_node.to_string()))
-        })
-        .or_else(|| {
-            super::dispatch_target_for_runtime_role(
-                &role_selection.execution_plan,
-                &role_selection.selected_role,
-            )
-        })
+    if let Some(next_node) = next_node {
+        return resolve_status_node(&next_node).map(Some);
+    }
+    if let Some(active_node) =
+        super::json_string(latest_status.get("active_node")).filter(|value| !value.is_empty())
+    {
+        return resolve_status_node(&active_node).map(Some);
+    }
+    if let Some(selected_node_id) =
+        crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
+    {
+        return resolve_exact_status_node(selected_node_id).map(Some);
+    }
+    // Legacy initial/created status is not an executable cursor.  Without an
+    // explicit selected node, fail closed instead of promoting the first
+    // ordered lane to execution authority.
+    Err("team_flow_authority_selected_node_id_missing".to_string())
+}
+
+fn canonical_dispatch_target_from_latest_status(
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    latest_status: &serde_json::Value,
+) -> Result<Option<String>, String> {
+    canonical_dispatch_node_from_latest_status(role_selection, latest_status)
+        .map(|node| node.map(|node| node.dispatch_target))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
+        build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
+        consume_final_command_usage, fail_fast_state_store_open_with_timeout,
+        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
+        should_record_blocked_dispatch_receipt, try_print_taskflow_consume_nested_help,
         ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate, build_approval_delegation_evidence_gate,
-        build_execution_preparation_evidence_gate, build_retrieval_policy_decision_gate,
-        build_runtime_consumption_dispatch_receipt, consume_final_command_usage,
-        fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
-        parse_taskflow_consume_final_args, should_record_blocked_dispatch_receipt,
-        try_print_taskflow_consume_nested_help,
+        RetrievalPolicyDecisionGate,
     };
+
+    fn merge_receipt_test_plan(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+        let (Some(base_object), Some(overlay_object)) = (base.as_object_mut(), overlay.as_object())
+        else {
+            if !overlay.is_null() {
+                *base = overlay.clone();
+            }
+            return;
+        };
+        for (key, value) in overlay_object {
+            if let Some(existing) = base_object.get_mut(key) {
+                merge_receipt_test_plan(existing, value);
+            } else {
+                base_object.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    fn canonical_receipt_role_selection(
+        mut selection: crate::RuntimeConsumptionLaneSelection,
+        target_hint: Option<&str>,
+    ) -> (
+        crate::RuntimeConsumptionLaneSelection,
+        crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
+        crate::team_flow_authority_adapter::TeamFlowNodeResolution,
+    ) {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let default_authority =
+            crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                &compiled_bundle,
+                None,
+                None,
+            )
+            .expect("canonical TeamFlow authority");
+        let default_flow_id = default_authority.projection().snapshot.flow_ref.clone();
+        let mut flow_ids = vec![default_flow_id];
+        if let Some(flows) = compiled_bundle["team_flow_authority"]["resolved_all_flow_payload"][
+            "flows"
+        ]
+        .as_array()
+        {
+            for flow in flows {
+                if flow["flow_policy"]["enabled"].as_bool() != Some(true) {
+                    continue;
+                }
+                let Some(flow_id) = flow["flow_id"].as_str() else {
+                    continue;
+                };
+                if !flow_ids.iter().any(|known| known == flow_id) {
+                    flow_ids.push(flow_id.to_string());
+                }
+            }
+        }
+        let requested_key = target_hint
+            .map(crate::runtime_assignment_policy::canonical_dispatch_target_name);
+        let mut selected = None;
+        for flow_id in flow_ids {
+            let Ok(authority) =
+                crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                    &compiled_bundle,
+                    Some(&flow_id),
+                    None,
+                )
+            else {
+                continue;
+            };
+            let Some(projection) = authority
+                .ordered_nodes()
+                .filter(|projection| projection.node.included)
+                .find(|projection| {
+                    let Some(requested_key) = requested_key.as_deref() else {
+                        return true;
+                    };
+                    [
+                        projection.node.node_id.as_str(),
+                        projection.dispatch_target.as_str(),
+                        projection.dispatch_alias.as_str(),
+                        projection.node.runtime_role.as_str(),
+                        projection.node.task_class.as_str(),
+                    ]
+                    .into_iter()
+                    .filter(|candidate| !candidate.trim().is_empty())
+                    .any(|candidate| {
+                        crate::runtime_assignment_policy::canonical_dispatch_target_name(candidate)
+                            == requested_key
+                    })
+                })
+            else {
+                continue;
+            };
+            selected = Some((flow_id, authority, projection.node.node_id.clone()));
+            break;
+        }
+        let (flow_id, authority, selected_node_id) = selected
+            .expect("canonical TeamFlow flows must expose the requested included node");
+        let custom_plan = selection.execution_plan.clone();
+        crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan_with_selected_node(
+            &mut selection,
+            &compiled_bundle,
+            &flow_id,
+            Some(&selected_node_id),
+        )
+        .expect("canonical config-derived TeamFlow contract");
+        merge_receipt_test_plan(&mut selection.execution_plan, &custom_plan);
+        let node = authority
+            .resolve_target(Some(&selection.execution_plan), &selected_node_id)
+            .expect("selected canonical TeamFlow node");
+        (selection, authority, node)
+    }
+
+    fn canonical_receipt_node_projection(
+        authority: &crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
+        node_id: &str,
+    ) -> crate::team_flow_authority_adapter::TeamFlowNodeProjection {
+        authority
+            .ordered_nodes()
+            .find(|projection| projection.node.node_id == node_id)
+            .expect("selected TeamFlow node projection")
+    }
+
+    fn canonical_receipt_node_backend(
+        projection: &crate::team_flow_authority_adapter::TeamFlowNodeProjection,
+    ) -> Option<String> {
+        projection
+            .executor_backend_relation
+            .get("selected_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                projection
+                    .assignment
+                    .get("selected_backend_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+    }
     use std::time::Duration;
 
     #[test]
@@ -2407,7 +2679,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "test".to_string(),
             matched_terms: Vec::new(),
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "designer": {
@@ -2428,8 +2701,237 @@ mod tests {
 
         assert_eq!(
             super::canonical_dispatch_target_from_latest_status(&role_selection, &latest_status)
+                .expect("typed TeamFlow dispatch target")
                 .as_deref(),
             Some("designer")
+        );
+    }
+
+    #[test]
+    fn canonical_dispatch_target_uses_exact_progression_and_fail_closed_identity() {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let mut selection = crate::runtime_lane_summary::build_runtime_lane_selection_from_bundle(
+            &compiled_bundle,
+            "test",
+            &serde_json::json!({}),
+            "continue development",
+        )
+        .expect("canonical lane selection should build");
+        let flow_id = compiled_bundle["default_flow_set"]
+            .as_str()
+            .expect("canonical default flow id");
+        crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan(
+            &mut selection,
+            &compiled_bundle,
+            flow_id,
+        )
+        .expect("selected flow should normalize");
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            Some(flow_id),
+            None,
+        )
+        .expect("selected flow authority should resolve");
+        let nodes = authority
+            .ordered_nodes()
+            .filter(|node| node.node.included)
+            .collect::<Vec<_>>();
+        assert!(nodes.len() >= 2, "fixture must expose an ordered flow");
+        let first = &nodes[0];
+        let second = &nodes[1];
+        let next_status = serde_json::json!({
+            "next_node": second.node.node_id,
+            "active_node": first.node.node_id,
+        });
+        assert_eq!(
+            super::canonical_dispatch_target_from_latest_status(&selection, &next_status)
+                .expect("exact next node should resolve")
+                .as_deref(),
+            Some(second.dispatch_target.as_str())
+        );
+        let active_status = serde_json::json!({"active_node": second.node.node_id});
+        assert_eq!(
+            super::canonical_dispatch_target_from_latest_status(&selection, &active_status)
+                .expect("exact active node should resolve")
+                .as_deref(),
+            Some(second.dispatch_target.as_str())
+        );
+
+        let mut invalid_selected = selection.clone();
+        invalid_selected.execution_plan["team_flow_authority_selected_node_id"] =
+            serde_json::json!("unknown-selected-node");
+        let error = super::canonical_dispatch_target_from_latest_status(
+            &invalid_selected,
+            &next_status,
+        )
+        .expect_err("conflicting selected node must not fall back to a valid ordered node");
+        assert!(error.contains("team_flow_authority_selected_node_id_conflict"));
+
+        let plan = selection
+            .execution_plan
+            .as_object_mut()
+            .expect("normalized execution plan must be an object");
+        plan.remove("team_flow_authority_selected_node_id");
+        if let Some(contract) = plan
+            .get_mut("development_flow")
+            .and_then(|flow| flow.get_mut("dispatch_contract"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            contract.remove("selected_node_id");
+            contract.remove("team_flow_authority_selected_node_id");
+        }
+        let error = super::canonical_dispatch_target_from_latest_status(
+            &selection,
+            &serde_json::json!({"status": "progressed"}),
+        )
+        .expect_err("progressed status without node identity must fail closed");
+        assert_eq!(error, "team_flow_authority_selected_node_id_missing");
+    }
+
+    #[test]
+    fn non_default_flow_rebuild_preserves_sequence_terminal_and_command_authority() {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let default_flow = compiled_bundle["default_flow_set"]
+            .as_str()
+            .expect("configured default flow id")
+            .to_string();
+        let alternate_flow = compiled_bundle["team_flow_authority"]["resolved_all_flow_payload"]
+            ["flows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|flow| flow["flow_id"].as_str() != Some(default_flow.as_str()))
+            .filter(|flow| flow["flow_policy"]["enabled"].as_bool() == Some(true))
+            .filter_map(|flow| flow["flow_id"].as_str().map(str::to_string))
+            .find(|flow_id| {
+                let Ok(authority) =
+                    crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                        &compiled_bundle,
+                        Some(flow_id),
+                        None,
+                    )
+                else {
+                    return false;
+                };
+                let nodes = authority
+                    .ordered_nodes()
+                    .filter(|node| node.node.included)
+                    .collect::<Vec<_>>();
+                if nodes.is_empty() {
+                    return false;
+                }
+                let mut has_terminal = false;
+                let mut has_command = false;
+                for node in nodes {
+                    let Ok(resolution) = authority.resolve_target(None, &node.dispatch_target)
+                    else {
+                        return false;
+                    };
+                    has_terminal |= resolution.terminal;
+                    has_command |= resolution
+                        .command_surface
+                        .as_deref()
+                        .is_some_and(|command| !command.trim().is_empty());
+                }
+                has_terminal && has_command
+            })
+            .expect("canonical config must expose an enabled non-default flow with sequence, terminal, and command contracts");
+        let mut selection = crate::runtime_lane_summary::build_runtime_lane_selection_from_bundle(
+            &compiled_bundle,
+            "test",
+            &serde_json::json!({}),
+            "continue development",
+        )
+        .expect("canonical lane selection should build");
+        let explicit_task_id = format!("test-task-for-{alternate_flow}");
+        selection.execution_plan["runtime_consumption_explicit_task_id"] =
+            serde_json::Value::String(explicit_task_id.clone());
+        crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan(
+            &mut selection,
+            &compiled_bundle,
+            &alternate_flow,
+        )
+        .expect("selected flow normalization should rebuild the execution plan");
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            Some(&alternate_flow),
+            None,
+        )
+        .expect("non-default flow must compile from persisted authority");
+        let projection = authority.projection();
+        let dispatch_contract = &selection.execution_plan["development_flow"]["dispatch_contract"];
+        assert_eq!(
+            dispatch_contract["team_flow_authority_id"].as_str(),
+            Some(projection.authority_id.as_str())
+        );
+        assert_eq!(
+            dispatch_contract["team_flow_config_hash"].as_str(),
+            Some(projection.config_authority_hash.as_str())
+        );
+        assert_eq!(
+            dispatch_contract["team_flow_registry_hash"].as_str(),
+            Some(projection.registry_authority_hash.as_str())
+        );
+        assert_eq!(
+            selection.execution_plan["team_flow_authority_selected_flow_id"].as_str(),
+            Some(alternate_flow.as_str())
+        );
+        assert_eq!(
+            selection.execution_plan["runtime_consumption_explicit_task_id"].as_str(),
+            Some(explicit_task_id.as_str())
+        );
+        let authoritative_run_id = crate::runtime_consumption_run_id(&selection);
+        assert_eq!(authoritative_run_id, explicit_task_id);
+        let expected_execution_sequence = authority
+            .ordered_nodes()
+            .filter(|node| node.node.included)
+            .filter(|node| node.node.inclusion_rule != "design_gate")
+            .map(|node| node.dispatch_alias.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::runtime_dispatch_state::typed_lane_sequence(&selection, true)
+                .expect("selected-flow sequence should resolve"),
+            expected_execution_sequence,
+            "rebuilt execution plan must retain the selected flow sequence"
+        );
+        let first = authority
+            .ordered_nodes()
+            .find(|node| node.node.included)
+            .expect("non-default flow must expose an included lane");
+        let bootstrap = serde_json::json!({
+            "run_id": authoritative_run_id,
+            "latest_status": {"next_node": first.node.node_id.clone()}
+        });
+        let receipt = build_runtime_consumption_dispatch_receipt(&selection, &bootstrap)
+            .expect("non-default flow receipt should resolve typed authority");
+        assert_eq!(receipt.run_id, explicit_task_id);
+        let first_resolution = authority
+            .resolve_runtime_role(Some(&selection.execution_plan), &first.node.runtime_role)
+            .expect("selected-flow runtime role should resolve");
+        assert_eq!(receipt.dispatch_target, first_resolution.dispatch_target);
+        assert_eq!(
+            crate::runtime_dispatch_state::typed_terminal_dispatch_target(
+                &selection,
+                &first_resolution.dispatch_target,
+            )
+            .expect("terminal state should resolve from selected flow"),
+            authority
+                .resolve_target(
+                    Some(&selection.execution_plan),
+                    &first_resolution.dispatch_target
+                )
+                .expect("selected-flow target should resolve")
+                .terminal
+        );
+        assert_eq!(
+            receipt.dispatch_command,
+            crate::runtime_dispatch_command_for_target(
+                &selection,
+                &first_resolution.dispatch_target
+            ),
+            "dispatch command must remain selected-flow authority output"
         );
     }
 
@@ -2465,7 +2967,7 @@ mod tests {
 
     #[test]
     fn runtime_consumption_dispatch_receipt_prefers_route_executor_backend() {
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
+        let mut role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "auto".to_string(),
@@ -2478,48 +2980,114 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["continue".to_string(), "development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "coach": {
-                        "executor_backend": "hermes_cli",
-                        "subagents": "legacy_hint_should_not_win"
-                    },
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["implementer", "coach", "verification"],
-                        "coach_activation": {
-                            "activation_agent_type": "middle",
-                            "activation_runtime_role": "coach",
-                            "selected_agent_id": "middle"
-                        }
-                    }
-                },
-                "runtime_assignment": {
-                    "selected_tier": "middle",
-                    "activation_agent_type": "middle"
-                }
-            }),
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
+            execution_plan: serde_json::Value::Null,
             reason: "test".to_string(),
         };
+        let compiled_bundle = role_selection.compiled_bundle.clone();
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            None,
+            None,
+        )
+        .expect("canonical TeamFlow authority");
+        let selected_flow_id = authority.projection().snapshot.flow_ref.clone();
+        let selected_node_id = authority.entry_node_id.clone();
+        crate::development_flow_orchestration::normalize_selected_flow_for_execution_plan_with_selected_node(
+            &mut role_selection,
+            &compiled_bundle,
+            &selected_flow_id,
+            Some(&selected_node_id),
+        )
+        .expect("canonical config-derived TeamFlow contract");
+        let dispatch_target = authority
+            .resolve_target(Some(&role_selection.execution_plan), &selected_node_id)
+            .expect("selected configured node must resolve")
+            .dispatch_target;
+        let resolved_dispatch_node = authority
+            .resolve_target(Some(&role_selection.execution_plan), &dispatch_target)
+            .expect("selected dispatch target must resolve");
+        let runtime_assignment =
+            crate::taskflow_routing::runtime_assignment_from_execution_plan(
+                &role_selection.execution_plan,
+            );
+        let expected_agent_type = resolved_dispatch_node
+            .activation
+            .get("activation_agent_type")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| runtime_assignment["activation_agent_type"].as_str().map(str::to_string));
+        let expected_runtime_role = resolved_dispatch_node
+            .activation
+            .get("activation_runtime_role")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| runtime_assignment["activation_runtime_role"].as_str().map(str::to_string));
+        let expected_backend =
+            crate::runtime_dispatch_state::downstream_selected_backend_for_resolved_node(
+                &role_selection,
+                Some(&resolved_dispatch_node),
+                &dispatch_target,
+                expected_agent_type.as_deref(),
+                None,
+            )
+            .or_else(|| runtime_assignment["selected_backend_id"].as_str().map(str::to_string));
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-coach",
             "latest_status": {
-                "next_node": "coach"
+                "next_node": selected_node_id
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "coach");
-        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
-        assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
-        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
+        assert_eq!(receipt.dispatch_target, dispatch_target);
+        assert_eq!(receipt.activation_agent_type, expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
+        assert_eq!(receipt.selected_backend, expected_backend);
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias()
-     {
+    fn consume_dispatch_receipt_rejects_forged_conflicting_flow_identity() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["dev_team_flow_id:forged-flow-c".to_string()],
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
+            execution_plan: serde_json::json!({
+                "team_flow_authority_selected_flow_id": "forged-flow-a",
+                "development_flow": {
+                    "dispatch_contract": {
+                        "selected_flow_set": "forged-flow-b"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let error = build_runtime_consumption_dispatch_receipt(
+            &role_selection,
+            &serde_json::json!({"run_id": "run-conflicting-flow"}),
+        )
+        .expect_err("conflicting consume flow identity must fail closed");
+        assert!(error.starts_with("team_flow_selected_flow_identity_conflict:"));
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias(
+    ) {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2533,7 +3101,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["research".to_string(), "specification".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -2551,26 +3120,35 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("business_analyst"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let expected_agent_type = role_selection.execution_plan["runtime_assignment"]["activation_agent_type"]
+            .as_str()
+            .map(str::to_string);
+        let expected_runtime_role = selected_projection.activation["runtime_role"]
+            .as_str()
+            .map(str::to_string);
+        let expected_dispatch_command = selected_node.command_surface.clone();
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-specification",
             "latest_status": {
-                "active_node": "planning",
-                "next_node": "business_analyst",
+                "active_node": selected_node.dispatch_alias.clone(),
+                "next_node": selected_node.dispatch_alias.clone(),
                 "route_task_class": "spec-pack",
                 "task_class": "scope_discussion"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "specification");
-        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
-        assert_eq!(
-            receipt.activation_runtime_role.as_deref(),
-            Some("business_analyst")
-        );
-        assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type, expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
+        assert_eq!(receipt.dispatch_command, expected_dispatch_command);
     }
 
     #[test]
@@ -2592,34 +3170,48 @@ mod tests {
                 "spec".to_string(),
                 "scope".to_string(),
             ],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
-                "runtime_assignment": {
-                    "activation_agent_type": "middle",
-                    "activation_runtime_role": "business_analyst",
-                    "selected_tier": "middle"
-                }
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("business_analyst"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let runtime_assignment =
+            crate::taskflow_routing::runtime_assignment_from_execution_plan(
+                &role_selection.execution_plan,
+            );
+        let expected_agent_type = selected_projection
+            .activation
+            .get("activation_agent_type")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| runtime_assignment["activation_agent_type"].as_str());
+        let expected_runtime_role = selected_projection
+            .activation
+            .get("activation_runtime_role")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| runtime_assignment["activation_runtime_role"].as_str());
+        let expected_backend = canonical_receipt_node_backend(&selected_projection)
+            .or_else(|| runtime_assignment["selected_backend_id"].as_str().map(str::to_string));
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-scope-discussion",
             "latest_status": {
-                "next_node": "business_analyst",
+                "next_node": selected_node.dispatch_alias.clone(),
                 "task_class": "scope_discussion"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "specification");
-        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
-        assert_eq!(
-            receipt.activation_runtime_role.as_deref(),
-            Some("business_analyst")
-        );
-        assert_eq!(receipt.selected_backend.as_deref(), Some("middle"));
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type.as_deref(), expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role.as_deref(), expected_runtime_role);
+        assert_eq!(receipt.selected_backend.as_deref(), expected_backend.as_deref());
     }
 
     #[test]
@@ -2637,7 +3229,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["scope".to_string(), "specification".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "autonomous_execution": {
                     "agent_only_development": true
@@ -2680,24 +3273,40 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("business_analyst"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let runtime_assignment =
+            crate::taskflow_routing::runtime_assignment_from_execution_plan(
+                &role_selection.execution_plan,
+            );
+        let expected_agent_type = selected_projection
+            .activation
+            .get("activation_agent_type")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| runtime_assignment["activation_agent_type"].as_str());
+        let expected_runtime_role = selected_projection
+            .activation
+            .get("activation_runtime_role")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| runtime_assignment["activation_runtime_role"].as_str());
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-spec-pack",
             "latest_status": {
-                "active_node": "planning",
+                "active_node": selected_node.dispatch_alias.clone(),
                 "next_node": "spec-pack"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "specification");
-        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
-        assert_eq!(
-            receipt.activation_runtime_role.as_deref(),
-            Some("business_analyst")
-        );
-        assert_ne!(receipt.dispatch_target, "junior");
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type.as_deref(), expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role.as_deref(), expected_runtime_role);
+        assert_ne!(receipt.dispatch_target, selected_projection.carrier_id);
     }
 
     #[test]
@@ -2715,7 +3324,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["implementation".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "backend_admissibility_matrix": [
                     {
@@ -2751,26 +3361,40 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("implementer"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let expected_agent_type = role_selection.execution_plan["runtime_assignment"]["activation_agent_type"]
+            .as_str()
+            .map(str::to_string);
+        let expected_runtime_role = selected_projection.activation["runtime_role"]
+            .as_str()
+            .map(str::to_string);
+        let expected_backend = canonical_receipt_node_backend(&selected_projection);
+        let expected_dispatch_command = selected_node.command_surface.clone();
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-mixed-implementer",
             "latest_status": {
-                "next_node": "implementer",
+                "next_node": selected_node.dispatch_alias.clone(),
                 "dispatch_command": "qwen --auth-type qwen-oauth -y -o json"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "implementer");
-        assert_eq!(receipt.dispatch_surface.as_deref(), Some("vida agent-init"));
-        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
-        assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type, expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
+        assert_eq!(receipt.selected_backend, expected_backend);
+        assert_eq!(receipt.dispatch_command, expected_dispatch_command);
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class()
-     {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class(
+    ) {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2784,7 +3408,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["research".to_string(), "specification".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -2808,24 +3433,35 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("business_analyst"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let expected_agent_type = role_selection.execution_plan["runtime_assignment"]["activation_agent_type"]
+            .as_str()
+            .map(str::to_string);
+        let expected_runtime_role = selected_projection.activation["runtime_role"]
+            .as_str()
+            .map(str::to_string);
+        let expected_dispatch_command = selected_node.command_surface.clone();
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-spec-bootstrap-shape",
             "latest_status": {
-                "active_node": "planning",
-                "next_node": "business_analyst",
+                "active_node": selected_node.dispatch_alias.clone(),
+                "next_node": selected_node.dispatch_alias.clone(),
                 "route_task_class": "spec-pack",
                 "task_class": "scope_discussion"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "specification");
-        assert_eq!(
-            receipt.activation_runtime_role.as_deref(),
-            Some("business_analyst")
-        );
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type, expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
+        assert_eq!(receipt.dispatch_command, expected_dispatch_command);
     }
 
     #[test]
@@ -2843,7 +3479,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["research".to_string(), "specification".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -2861,23 +3498,34 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("business_analyst"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let expected_agent_type = role_selection.execution_plan["runtime_assignment"]["activation_agent_type"]
+            .as_str()
+            .map(str::to_string);
+        let expected_runtime_role = selected_projection.activation["runtime_role"]
+            .as_str()
+            .map(str::to_string);
+        let expected_dispatch_command = selected_node.command_surface.clone();
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-specification-no-next-node",
             "latest_status": {
-                "active_node": "planning",
+                "active_node": selected_node.dispatch_alias.clone(),
                 "route_task_class": "spec-pack",
                 "task_class": "scope_discussion"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "specification");
-        assert_eq!(
-            receipt.activation_runtime_role.as_deref(),
-            Some("business_analyst")
-        );
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_agent_type, expected_agent_type);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
+        assert_eq!(receipt.dispatch_command, expected_dispatch_command);
     }
 
     #[test]
@@ -2895,7 +3543,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec!["review".to_string()],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -2913,19 +3562,27 @@ mod tests {
             }),
             reason: "test".to_string(),
         };
+        let (role_selection, authority, selected_node) =
+            canonical_receipt_role_selection(role_selection, Some("coach"));
+        let selected_projection =
+            canonical_receipt_node_projection(&authority, &selected_node.node_id);
+        let expected_runtime_role = selected_projection.activation["runtime_role"]
+            .as_str()
+            .map(str::to_string);
         let run_graph_bootstrap = serde_json::json!({
             "run_id": "run-coach-stable",
             "latest_status": {
-                "next_node": "coach",
+                "next_node": selected_node.node_id.clone(),
                 "route_task_class": "implementation"
             }
         });
 
         let receipt =
-            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap)
+                .expect("typed TeamFlow dispatch receipt");
 
-        assert_eq!(receipt.dispatch_target, "coach");
-        assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
+        assert_eq!(receipt.dispatch_target, selected_node.dispatch_target);
+        assert_eq!(receipt.activation_runtime_role, expected_runtime_role);
     }
 
     #[test]
@@ -2943,7 +3600,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -2973,7 +3631,8 @@ mod tests {
             &role_selection,
             &taskflow_handoff_plan,
             &run_graph_bootstrap,
-        );
+        )
+        .expect("canonical execution preparation authority");
 
         assert_eq!(
             gate.blocker_code(),
@@ -2996,7 +3655,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -3062,7 +3722,8 @@ mod tests {
             &role_selection,
             &taskflow_handoff_plan,
             &run_graph_bootstrap,
-        );
+        )
+        .expect("canonical execution preparation authority");
 
         assert_eq!(
             gate,
@@ -3087,7 +3748,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -3143,7 +3805,8 @@ mod tests {
             &role_selection,
             &taskflow_handoff_plan,
             &run_graph_bootstrap,
-        );
+        )
+        .expect("canonical execution preparation authority");
 
         assert_eq!(
             gate.blocker_code(),
@@ -3166,7 +3829,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "dispatch_contract": {
@@ -3215,7 +3879,8 @@ mod tests {
             &role_selection,
             &taskflow_handoff_plan,
             &run_graph_bootstrap,
-        );
+        )
+        .expect("canonical execution preparation authority");
 
         assert_eq!(
             gate,
@@ -3252,7 +3917,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {
                     "mode": "delegated_orchestration_cycle"
@@ -3287,8 +3953,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap()
-     {
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap(
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3314,7 +3980,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {
                     "mode": "delegated_orchestration_cycle"
@@ -3370,7 +4037,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {
                     "mode": "delegated_orchestration_cycle"
@@ -3456,7 +4124,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::json!({
                 "orchestration_contract": {
                     "mode": "delegated_orchestration_cycle"
@@ -3519,23 +4188,19 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
-                )
-                .expect("missing proof verdict blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingProofVerdict,
+            )
+            .expect("missing proof verdict blocker should be canonical")],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingClosureProof,
-                )
-                .expect("missing closure proof blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingClosureProof,
+            )
+            .expect("missing closure proof blocker should be canonical")],
             proof_surfaces: vec![],
             evidence_table: vec![],
         };
@@ -3719,7 +4384,8 @@ mod tests {
             allow_freeform_chat: false,
             confidence: "high".to_string(),
             matched_terms: vec![],
-            compiled_bundle: serde_json::Value::Null,
+            compiled_bundle:
+                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
             execution_plan: serde_json::Value::Null,
             reason: "test".to_string(),
         };
@@ -3756,11 +4422,9 @@ mod tests {
                 .expect("open store");
             let error =
                 super::validate_consume_final_explicit_task_id(&store, "missing-task-run").await;
-            assert!(
-                error
-                    .expect_err("missing explicit task id should fail")
-                    .contains("refusing to create a stale run graph")
-            );
+            assert!(error
+                .expect_err("missing explicit task id should fail")
+                .contains("refusing to create a stale run graph"));
             store.close().await;
         });
         let _ = std::fs::remove_dir_all(root);

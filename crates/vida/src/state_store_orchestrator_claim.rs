@@ -825,11 +825,9 @@ mod tests {
             ))
             .await
             .expect_err("same task should block");
-        assert!(
-            same_task_error
-                .to_string()
-                .contains("orchestrator_claim_conflict_task:task:claim-1")
-        );
+        assert!(same_task_error
+            .to_string()
+            .contains("orchestrator_claim_conflict_task:task:claim-1"));
 
         let same_domain_error = store
             .acquire_orchestrator_claim(claim_request(
@@ -842,11 +840,9 @@ mod tests {
             ))
             .await
             .expect_err("same conflict domain should block");
-        assert!(
-            same_domain_error
-                .to_string()
-                .contains("orchestrator_claim_conflict_conflict_domain:conflict_domain:claim-1")
-        );
+        assert!(same_domain_error
+            .to_string()
+            .contains("orchestrator_claim_conflict_conflict_domain:conflict_domain:claim-1"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -878,11 +874,9 @@ mod tests {
             .await
             .expect_err("path intersection should block");
 
-        assert!(
-            error
-                .to_string()
-                .contains("orchestrator_claim_conflict_owned_path:owned_path:claim-1")
-        );
+        assert!(error
+            .to_string()
+            .contains("orchestrator_claim_conflict_owned_path:owned_path:claim-1"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -912,11 +906,9 @@ mod tests {
             .await
             .expect_err("exclusive write should block shared-read path");
 
-        assert!(
-            error
-                .to_string()
-                .contains("orchestrator_claim_conflict_read_only_path:read_only_path:claim-1")
-        );
+        assert!(error
+            .to_string()
+            .contains("orchestrator_claim_conflict_read_only_path:read_only_path:claim-1"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1023,11 +1015,9 @@ mod tests {
             .release_orchestrator_claim("claim-1", 1, "done")
             .await
             .expect_err("stale revision should fail");
-        assert!(
-            mismatch
-                .to_string()
-                .contains("orchestrator_claim_resource_revision_mismatch:claim-1:1:2")
-        );
+        assert!(mismatch
+            .to_string()
+            .contains("orchestrator_claim_resource_revision_mismatch:claim-1:1:2"));
 
         let released = store
             .release_orchestrator_claim("claim-1", 2, "done")
@@ -1040,11 +1030,9 @@ mod tests {
             .heartbeat_orchestrator_claim("claim-1", 3, 60)
             .await
             .expect_err("released claim heartbeat should fail");
-        assert!(
-            released_heartbeat
-                .to_string()
-                .contains("orchestrator_claim_not_active_for_heartbeat:claim-1")
-        );
+        assert!(released_heartbeat
+            .to_string()
+            .contains("orchestrator_claim_not_active_for_heartbeat:claim-1"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1154,11 +1142,9 @@ mod tests {
             ))
             .await
             .expect_err("expired matching claim should require reclaim");
-        assert!(
-            error
-                .to_string()
-                .contains("orchestrator_claim_expired_requires_reclaim:claim-1:task")
-        );
+        assert!(error
+            .to_string()
+            .contains("orchestrator_claim_expired_requires_reclaim:claim-1:task"));
 
         let expired = store
             .orchestrator_claim("claim-1")

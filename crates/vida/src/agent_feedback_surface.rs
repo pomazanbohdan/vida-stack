@@ -1181,6 +1181,134 @@ fn resolve_feedback_host_agent_id(
     }))
 }
 
+fn feedback_binding_row_active(row: &serde_json::Value) -> bool {
+    row["enabled"] != serde_json::Value::Bool(false)
+        && row["disabled"] != serde_json::Value::Bool(true)
+        && row["unresolved"] != serde_json::Value::Bool(true)
+        && row["included"] != serde_json::Value::Bool(false)
+        && !matches!(
+            row["lifecycle_state"].as_str().map(str::trim),
+            Some("disabled") | Some("retired") | Some("inactive")
+        )
+}
+
+fn collect_feedback_binding_rows(
+    source: &serde_json::Value,
+    task_class: &str,
+    bindings: &mut Vec<(String, String)>,
+    inactive_matches: &mut usize,
+) {
+    let mut collect = |row: serde_json::Value, role_hint: Option<&str>| {
+        let role_id = row
+            .get("role_id")
+            .or_else(|| row.get("node_id"))
+            .or_else(|| row.get("lane_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| role_hint.map(str::trim).filter(|value| !value.is_empty()));
+        let runtime_role = row
+            .get("runtime_role")
+            .or_else(|| row.get("execution_runtime_role"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let matches_task = row
+            .get("task_class")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value.trim() == task_class)
+            || row
+                .get("route_task_class")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value.trim() == task_class)
+            || row
+                .get("task_classes")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|values| {
+                    values.iter().any(|value| {
+                        value
+                            .as_str()
+                            .is_some_and(|value| value.trim() == task_class)
+                    })
+                });
+        if !matches_task {
+            return;
+        }
+        if !feedback_binding_row_active(&row) {
+            *inactive_matches += 1;
+            return;
+        }
+        let (Some(role_id), Some(runtime_role)) = (role_id, runtime_role) else {
+            return;
+        };
+        bindings.push((role_id.to_string(), runtime_role.to_string()));
+    };
+
+    match source {
+        serde_json::Value::Object(rows) => {
+            for (role_id, row) in rows {
+                collect(row.clone(), Some(role_id.as_str()));
+            }
+        }
+        serde_json::Value::Array(rows) => {
+            for row in rows {
+                collect(row.clone(), None);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_feedback_role_binding(
+    compiled_bundle: &serde_json::Value,
+    task_class: &str,
+) -> Result<(String, String), serde_json::Value> {
+    let mut bindings = Vec::new();
+    let mut inactive_matches = 0;
+    for source in [
+        &compiled_bundle["dev_team"]["roles"],
+        &compiled_bundle["dev_team_readiness"]["roles"],
+        &compiled_bundle["carrier_runtime"]["roles"],
+    ] {
+        collect_feedback_binding_rows(source, task_class, &mut bindings, &mut inactive_matches);
+    }
+    bindings.sort();
+    bindings.dedup();
+    let candidate_bindings = bindings
+        .iter()
+        .map(|(conversation_role, runtime_role)| {
+            serde_json::json!({
+                "conversation_role": conversation_role,
+                "runtime_role": runtime_role,
+            })
+        })
+        .collect::<Vec<_>>();
+    match bindings.as_slice() {
+        [(conversation_role, runtime_role)] => {
+            Ok((conversation_role.clone(), runtime_role.clone()))
+        }
+        [] => {
+            let reason = if inactive_matches > 0 {
+                "feedback_runtime_role_binding_disabled"
+            } else {
+                "feedback_runtime_role_binding_missing"
+            };
+            Err(serde_json::json!({
+                "status": "blocked",
+                "reason": reason,
+                "task_class": task_class,
+                "candidate_bindings": candidate_bindings,
+            }))
+        }
+        _ => Err(serde_json::json!({
+            "status": "blocked",
+            "reason": "feedback_runtime_role_binding_ambiguous",
+            "task_class": task_class,
+            "candidate_bindings": candidate_bindings,
+        })),
+    }
+}
+
 pub(crate) fn maybe_record_task_close_host_agent_feedback(
     project_root: &std::path::Path,
     task: &serde_json::Value,
@@ -1188,7 +1316,6 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     source: &str,
 ) -> serde_json::Value {
     let task_class = super::infer_task_class_from_task_payload(task);
-    let runtime_role = super::runtime_role_for_task_class(&task_class);
     if let Some((canonical_status, canonical_gate)) =
         canonical_close_status_from_reason(close_reason)
     {
@@ -1196,7 +1323,10 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             "status": "skipped",
             "reason": "feedback_deferred_for_canonical_close_status",
             "task_class": task_class,
-            "runtime_role": runtime_role,
+            "runtime_role_selection": {
+                "status": "not_evaluated",
+                "reason": "feedback_path_does_not_dispatch",
+            },
             "canonical_status": canonical_status,
             "canonical_gate": canonical_gate,
         });
@@ -1213,7 +1343,10 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
         return serde_json::json!({
             "status": "recorded",
             "task_class": task_class,
-            "runtime_role": runtime_role,
+            "runtime_role_selection": {
+                "status": "not_evaluated",
+                "reason": "feedback_path_does_not_dispatch",
+            },
             "feedback_agent_id": "lightweight_task_close_feedback",
             "feedback_selection_source": "operator_latency_budget_fast_path",
             "feedback_outcome_inference": outcome_inference,
@@ -1274,11 +1407,25 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
                 });
             }
         };
+    let (conversation_role, runtime_role) =
+        match resolve_feedback_role_binding(&compiled_bundle, &task_class) {
+            Ok(binding) => binding,
+            Err(selection) => {
+                return serde_json::json!({
+                    "status": "blocked",
+                    "reason": selection["reason"]
+                        .as_str()
+                        .unwrap_or("feedback_runtime_role_binding_unresolved"),
+                    "task_class": task_class,
+                    "runtime_role_selection": selection,
+                });
+            }
+        };
     let assignment = super::build_runtime_assignment_from_resolved_constraints(
         &compiled_bundle,
-        "orchestrator",
+        &conversation_role,
         &task_class,
-        runtime_role,
+        &runtime_role,
     );
     if !assignment["enabled"].as_bool().unwrap_or(false) {
         return serde_json::json!({
@@ -1465,6 +1612,48 @@ mod tests {
     use crate::WORKER_SCORECARDS_STATE;
     use crate::WORKER_STRATEGY_STATE;
     use std::process::ExitCode;
+
+    #[test]
+    fn feedback_role_binding_is_order_invariant_and_fail_closed() {
+        let mut bundle = serde_json::json!({
+            "dev_team": {
+                "roles": {
+                    "writer": {
+                        "runtime_role": "worker",
+                        "task_classes": ["implementation"]
+                    }
+                }
+            },
+            "dev_team_readiness": {"roles": []},
+            "carrier_runtime": {"roles": []}
+        });
+        assert_eq!(
+            super::resolve_feedback_role_binding(&bundle, "implementation")
+                .expect("unique configured binding"),
+            ("writer".to_string(), "worker".to_string())
+        );
+
+        bundle["dev_team"]["roles"]["writer"]["disabled"] = serde_json::json!(true);
+        let disabled = super::resolve_feedback_role_binding(&bundle, "implementation")
+            .expect_err("disabled binding must fail closed");
+        assert_eq!(disabled["reason"], "feedback_runtime_role_binding_disabled");
+
+        bundle["dev_team"]["roles"]["writer"]["disabled"] = serde_json::Value::Null;
+        bundle["dev_team"]["roles"]["reviewer"] = serde_json::json!({
+            "runtime_role": "verifier",
+            "task_classes": ["implementation"]
+        });
+        let ambiguous = super::resolve_feedback_role_binding(&bundle, "implementation")
+            .expect_err("ambiguous configured bindings must fail closed");
+        assert_eq!(
+            ambiguous["reason"],
+            "feedback_runtime_role_binding_ambiguous"
+        );
+
+        let missing = super::resolve_feedback_role_binding(&bundle, "unknown")
+            .expect_err("unknown task class must fail closed");
+        assert_eq!(missing["reason"], "feedback_runtime_role_binding_missing");
+    }
 
     #[test]
     fn agent_feedback_records_scorecard_and_refreshes_strategy() {

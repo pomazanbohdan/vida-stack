@@ -355,7 +355,10 @@ mod tests {
     fn host_bridge_receipt_read_failure_has_distinct_canonical_code() {
         let code = BlockerCode::HostBridgeDispatchReceiptReadFailed;
         assert_eq!(code.as_str(), "host_bridge_dispatch_receipt_read_failed");
-        assert_eq!(canonical_blocker_code_str(code.as_str()), Some(code.as_str()));
+        assert_eq!(
+            canonical_blocker_code_str(code.as_str()),
+            Some(code.as_str())
+        );
         assert_eq!(BlockerCode::try_from(code.as_str()), Ok(code));
         assert_ne!(
             code.as_str(),
@@ -366,7 +369,10 @@ mod tests {
             BlockerCode::HostBridgeDispatchReceiptMismatch.as_str()
         );
         let payload = serde_json::to_value(code).expect("blocker code should serialize");
-        assert_eq!(payload, serde_json::json!("host_bridge_dispatch_receipt_read_failed"));
+        assert_eq!(
+            payload,
+            serde_json::json!("host_bridge_dispatch_receipt_read_failed")
+        );
     }
 
     #[test]

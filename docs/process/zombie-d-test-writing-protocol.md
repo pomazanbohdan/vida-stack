@@ -114,6 +114,28 @@ surfaces/parity. An applicable facet must contain a row with `status: pass` and
 non-empty `evidence_refs`, or `status: na` with a concrete `reason`; omission is
 blocked. Non-applicable facets may remain absent for legacy records.
 
+### Required-category profiles and configuration authority
+
+The `dev_team.zombie_d_gate` block in the project configuration is the runtime
+policy source. When `required_categories` is omitted, the gate uses the legacy
+profile in this exact order: `[Z, O, M, B, I, E, S]`. An explicit list must
+match one complete ordered profile:
+
+| Profile | Exact required categories |
+| --- | --- |
+| `legacy` | `[Z, O, M, B, I, E, S]` |
+| `canonical` | `[Z, O, M, B, I, E, S, R, P, C]` |
+
+Duplicates, unknown category codes, reordered values, incomplete subsets, or
+any other explicit list fail closed with typed configuration blockers. Projection
+and evaluation preserve the selected exact list; they do not silently drop
+`R`, `P`, or `C`. The projected `required_categories_profile` is one of
+`legacy`, `canonical`, or `invalid`. `optional_categories` remains `[R, P, C]`
+for applicability detection when the legacy profile is selected; the canonical
+profile requires all ten categories. The gate's `enabled`, `applies_to`, and
+`enforcement_points` options remain independently configurable and are subject
+to the same fail-closed validation at dispatch, handoff, and closure.
+
 The canonical matrix metadata for an applicable facet is:
 
 ```json
@@ -129,6 +151,39 @@ The canonical matrix metadata for an applicable facet is:
 TaskFlow planner metadata is part of the applicability contract: preserve
 `owned_paths`, `acceptance_targets`, and `proof_targets` on the task so the
 validator can derive and report the required facets in `artifact_refs`.
+
+### Fresh/Explicit/Persisted/Replay mode matrix
+
+When a test crosses authority, projection, persistence, or replay boundaries,
+plan the applicable execution modes explicitly:
+
+| Mode | Fixture source | Required assertion |
+| --- | --- | --- |
+| `Fresh` | current config/authority inputs, no prior persisted artifact | first-build result and generated identity are correct |
+| `Explicit` | caller-supplied ids/options/overrides | explicit values win only after typed validation |
+| `Persisted` | reloaded authoritative state and projections | restart/reload preserves version, identity, and field parity |
+| `Replay` | recorded events/receipts/artifacts | deterministic replay matches result, sequence, and proof digest |
+
+Each applicable row needs `status: pass` plus `evidence_refs`, or `status: na`
+with a concrete reason. Do not infer a mode from a green broad suite.
+
+### Deliberately non-coincident cross-domain fixture IDs
+
+Fixture builders must assign deliberately non-coincident cross-domain fixture
+IDs: authority, projection, persisted, and replay identifiers must be distinct
+and their mapping must be recorded. Assert inequality across domains; if the
+product intentionally aliases an id, model that alias explicitly and test the
+alias contract instead of allowing accidental id coincidence to hide a routing
+or projection defect.
+
+### Typed authority→projection schema completeness and field-parity gate
+
+For every authority-to-projection fixture, persist typed schema metadata with
+`schema_version`, `authority_fields`, `projection_fields`, `missing_fields`,
+`extra_fields`, and `type_mismatches`. The gate passes only when required field
+sets and types have exact parity (or an explicitly versioned, documented
+projection exception); missing, extra, unknown, or type-mismatched fields are
+typed blockers and must fail closed in default and JSON evidence.
 
 Add a doubt-driven row whenever a requirement rests on an assumption:
 
@@ -180,16 +235,11 @@ layout.
 
 ## Batch Discipline
 
-1. Plan the full test batch for the target file, behavior, or public surface
-   before broad verification.
-2. While shaping the batch, run focused tests that give fast feedback on the
-   current invariant.
-3. After the planned batch is complete, run broader or full suites required by
-   the task proof targets.
-4. If focused tests expose a production defect, fix the production contract and
-   continue completing the planned batch before broad verification.
-5. Do not close a task after only the first green focused test when the planned
-   batch still has uncovered ZOMBIE-D categories.
+Follow the canonical `Focused Batch Before Broad Gate` in
+`docs/process/command-timing-and-gate-optimization-protocol.md`: plan one
+complete focused batch for the target file/surface, run it before any broad
+gate, finish the planned batch after any production fix, then run the broader
+suite. Keep uncovered categories explicit until the batch is complete.
 
 ## Task-Shaping Template
 
@@ -254,10 +304,10 @@ replacing their owner documents:
 artifact_path: process/zombie-d-test-writing-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-07-15'
+artifact_revision: '2026-07-22'
 schema_version: '1'
 status: canonical
 source_path: docs/process/zombie-d-test-writing-protocol.md
 created_at: '2026-06-30T00:00:00+03:00'
-updated_at: 2026-07-15T20:00:00+03:00
+updated_at: 2026-07-22T00:00:00+03:00
 changelog_ref: zombie-d-test-writing-protocol.changelog.jsonl

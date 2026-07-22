@@ -1,16 +1,16 @@
 use std::{
-    future::{Ready, ready},
+    future::{ready, Ready},
     task::{Context, Poll},
 };
 
 use taskflow_authority::operation_authorization::{
-    OperationAuthorizationDecision, OperationAuthorizationInput, authorize_operation,
+    authorize_operation, OperationAuthorizationDecision, OperationAuthorizationInput,
 };
 use tower::Service;
 use vida_contracts::{
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaBlocker, VidaClaimKind,
-    VidaCommandEnvelope, VidaCommandResponse, VidaOperationSpec, VidaProblem, VidaProblemSeverity,
-    VidaProjectId, VidaProjectRef, operation_spec,
+    operation_spec, VidaBlocker, VidaClaimKind, VidaCommandEnvelope, VidaCommandResponse,
+    VidaOperationSpec, VidaProblem, VidaProblemSeverity, VidaProjectId, VidaProjectRef,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
 use crate::vida_client::VidaClient;
@@ -248,13 +248,13 @@ fn layer_name(layer: CommandPipelineLayer) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::VidaCommandPipeline;
-    use crate::vida_client::{VidaClient, pass_response};
+    use crate::vida_client::{pass_response, VidaClient};
     use serde_json::json;
     use vida_contracts::{
-        VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaApplyToken,
-        VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
-        VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId,
-        VidaResponseStatus, VidaSessionId, operations,
+        operations, VidaApplyToken, VidaClaimKind, VidaClientKind, VidaCommandEnvelope,
+        VidaCommandResponse, VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef,
+        VidaRequestId, VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
+        VIDA_CONTRACTS_SCHEMA_VERSION,
     };
 
     #[derive(Debug, Clone)]

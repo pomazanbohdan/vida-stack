@@ -27,7 +27,7 @@ pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitC
         [head, subcommand, mode]
             if head == "consume" && subcommand == "bundle" && mode == "check" =>
         {
-            Some(run_consume_bundle_check(false).await)
+            Some(run_consume_bundle_check(args, false).await)
         }
         [head, subcommand, mode, flag]
             if head == "consume"
@@ -35,7 +35,7 @@ pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitC
                 && mode == "check"
                 && flag == "--json" =>
         {
-            Some(run_consume_bundle_check(true).await)
+            Some(run_consume_bundle_check(args, true).await)
         }
         [head, subcommand, ..] if head == "consume" && subcommand == "bundle" => {
             eprintln!(
@@ -232,7 +232,7 @@ async fn run_consume_bundle(as_json: bool) -> ExitCode {
     }
 }
 
-async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
+async fn run_consume_bundle_check(args: &[String], as_json: bool) -> ExitCode {
     let state_dir = super::taskflow_task_bridge::proxy_state_dir();
     let store = match fail_fast_with_timeout(
         "opening authoritative state store",
@@ -257,35 +257,6 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
         Ok(payload) => {
             let check = super::taskflow_consume_bundle_check(&payload);
             let mut effective_blockers = check.blockers.clone();
-            let (registry, docflow_check, readiness, proof, _) =
-                super::build_docflow_runtime_evidence();
-            let docflow_receipt_evidence =
-                crate::runtime_consumption_surface::build_docflow_receipt_evidence(
-                    &readiness, &proof,
-                );
-            let docflow_verdict =
-                super::build_docflow_runtime_verdict(&registry, &docflow_check, &readiness, &proof);
-            let seam_closure_admission_receipt_check = taskflow_docflow_seam_receipt_backed_check(
-                &payload,
-                &docflow_verdict,
-                docflow_receipt_evidence,
-            );
-            let cache_contract_blocked = effective_blockers.iter().any(|code| {
-                code.starts_with("invalid_cache_key_input:")
-                    || code.starts_with("invalid_invalidation_tuple_key:")
-                    || code.starts_with("missing_cache_key_inputs")
-                    || code.starts_with("missing_invalidation_tuple")
-            });
-            if !cache_contract_blocked {
-                for blocker in seam_closure_admission_receipt_check["blocker_codes"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(serde_json::Value::as_str)
-                {
-                    push_unique_string(&mut effective_blockers, blocker);
-                }
-            }
             let db_first_activation_truth = match super::read_or_sync_launcher_activation_snapshot(
                 &store,
             )
@@ -326,13 +297,51 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     })
                 }
             };
+            let team_flow_binding_diagnostics = current_team_flow_binding_diagnostics(
+                &payload.vida_root,
+                db_first_activation_truth["source_config_path"].as_str(),
+            );
+            merge_team_flow_binding_diagnostics(
+                &mut effective_blockers,
+                &team_flow_binding_diagnostics,
+            );
+            let (registry, docflow_check, readiness, proof, _) =
+                super::build_docflow_runtime_evidence();
+            let docflow_receipt_evidence =
+                crate::runtime_consumption_surface::build_docflow_receipt_evidence(
+                    &readiness, &proof,
+                );
+            let docflow_verdict =
+                super::build_docflow_runtime_verdict(&registry, &docflow_check, &readiness, &proof);
+            let seam_closure_admission_receipt_check = taskflow_docflow_seam_receipt_backed_check(
+                &payload,
+                &docflow_verdict,
+                docflow_receipt_evidence,
+            );
+            let cache_contract_blocked = effective_blockers.iter().any(|code| {
+                code.starts_with("invalid_cache_key_input:")
+                    || code.starts_with("invalid_invalidation_tuple_key:")
+                    || code.starts_with("missing_cache_key_inputs")
+                    || code.starts_with("missing_invalidation_tuple")
+            });
+            if !cache_contract_blocked {
+                for blocker in seam_closure_admission_receipt_check["blocker_codes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                {
+                    push_unique_string(&mut effective_blockers, blocker);
+                }
+            }
             let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
             let next_actions = consume_bundle_check_next_actions(&blocker_codes);
             let bundle_check_ok = blocker_codes.is_empty();
             let artifact_refs = serde_json::json!({
                 "root_artifact_id": check.root_artifact_id,
                 "bundle_artifact_name": payload.artifact_name,
-                "surface": "vida taskflow consume bundle check"
+                "surface": "vida taskflow consume bundle check",
+                "team_flow_binding": team_flow_binding_diagnostics["context"].clone(),
             });
             let operator_output =
                 match crate::release1_operator_output::build_release1_operator_output_payload(
@@ -353,6 +362,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                 "bundle-check",
                 &serde_json::json!({
                     "surface": "vida taskflow consume bundle check",
+                    "status": operator_output["status"].clone(),
                     "check": &check,
                     "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
                     "db_first_activation_truth": &db_first_activation_truth,
@@ -374,19 +384,14 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             if as_json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "surface": "vida taskflow consume bundle check",
-                        "check": &check,
-                        "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
-                        "db_first_activation_truth": &db_first_activation_truth,
-                        "effective_blockers": &effective_blockers,
-                        "blocker_codes": operator_output["blocker_codes"].clone(),
-                        "next_actions": operator_output["next_actions"].clone(),
-                        "artifact_refs": operator_output["artifact_refs"].clone(),
-                        "shared_fields": operator_output["shared_fields"].clone(),
-                        "operator_contracts": operator_output["operator_contracts"].clone(),
-                        "snapshot_path": snapshot_path,
-                    }))
+                    serde_json::to_string_pretty(&consume_bundle_check_operator_envelope(
+                        &check,
+                        &seam_closure_admission_receipt_check,
+                        &db_first_activation_truth,
+                        &effective_blockers,
+                        &operator_output,
+                        &snapshot_path,
+                    ))
                     .expect("consume bundle check should render as json")
                 );
             } else {
@@ -443,9 +448,308 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             }
         }
         Err(error) => {
-            eprintln!("{error}");
+            if as_json {
+                let raw_args = args
+                    .iter()
+                    .map(std::ffi::OsString::from)
+                    .collect::<Vec<_>>();
+                super::emit_pre_dispatch_error_with_surface(
+                    &raw_args,
+                    Some("vida taskflow consume bundle check"),
+                    &error,
+                );
+            } else {
+                eprintln!("{error}");
+            }
             ExitCode::from(1)
         }
+    }
+}
+
+fn consume_bundle_check_operator_envelope(
+    check: &super::TaskflowConsumeBundleCheck,
+    seam_closure_admission_receipt_check: &serde_json::Value,
+    db_first_activation_truth: &serde_json::Value,
+    effective_blockers: &[String],
+    operator_output: &serde_json::Value,
+    snapshot_path: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida taskflow consume bundle check",
+        "status": operator_output["status"].clone(),
+        "check": check,
+        "seam_closure_admission_receipt_check": seam_closure_admission_receipt_check,
+        "db_first_activation_truth": db_first_activation_truth,
+        "effective_blockers": effective_blockers,
+        "blocker_codes": operator_output["blocker_codes"].clone(),
+        "next_actions": operator_output["next_actions"].clone(),
+        "artifact_refs": operator_output["artifact_refs"].clone(),
+        "shared_fields": operator_output["shared_fields"].clone(),
+        "operator_contracts": operator_output["operator_contracts"].clone(),
+        "snapshot_path": snapshot_path,
+    })
+}
+
+struct TeamFlowDiagnosticsSource {
+    project_root: std::path::PathBuf,
+    config_path: Option<std::path::PathBuf>,
+    source: &'static str,
+}
+
+fn resolve_team_flow_diagnostics_source(
+    fallback_root: &str,
+    persisted_config_path: Option<&str>,
+) -> TeamFlowDiagnosticsSource {
+    let fallback_root = std::path::PathBuf::from(fallback_root);
+    let Some(raw_path) = persisted_config_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return TeamFlowDiagnosticsSource {
+            project_root: fallback_root,
+            config_path: None,
+            source: "cwd_fallback_no_persisted_config",
+        };
+    };
+    let candidate = std::path::PathBuf::from(raw_path);
+    let config_path = if candidate.is_absolute()
+        || raw_path.starts_with('/')
+        || raw_path.as_bytes().first() == Some(&92)
+        || raw_path.as_bytes().get(1) == Some(&b':')
+    {
+        candidate
+    } else {
+        fallback_root.join(candidate)
+    };
+    let project_root = config_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| fallback_root.clone());
+    TeamFlowDiagnosticsSource {
+        project_root,
+        config_path: Some(config_path),
+        source: "persisted_launcher_snapshot",
+    }
+}
+
+fn load_team_flow_diagnostics_overlay(
+    source: &TeamFlowDiagnosticsSource,
+) -> Result<serde_yaml::Value, String> {
+    let Some(config_path) = source.config_path.as_ref() else {
+        return crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(
+            &source.project_root,
+        );
+    };
+    let raw = std::fs::read_to_string(config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    serde_yaml::from_str(&raw)
+        .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))
+}
+
+fn audit_team_flow_binding_policies(compiled_bundle: &serde_json::Value) -> serde_json::Value {
+    let bindings = compiled_bundle
+        .get("team_flow_authority")
+        .and_then(|authority| authority.get("resolved_all_flow_payload"))
+        .and_then(|payload| payload.get("work_item_flow_bindings"))
+        .and_then(serde_json::Value::as_object);
+    let Some(bindings) = bindings else {
+        return serde_json::json!({
+            "status": "blocked",
+            "blockers": ["team_flow_authority_binding_invalid"],
+            "context": {"bindings": [], "validation_error": "persisted binding map missing"},
+        });
+    };
+    let mut blockers = Vec::new();
+    let mut binding_context = Vec::new();
+    for (work_item, flow_id_value) in bindings {
+        let Some(flow_id) = flow_id_value
+            .as_str()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            push_unique_string(&mut blockers, "team_flow_authority_binding_invalid");
+            binding_context.push(serde_json::json!({
+                "work_item": work_item,
+                "flow_id": flow_id_value,
+                "status": "blocked",
+                "validation_error": "binding target must be a non-empty string",
+            }));
+            continue;
+        };
+        match crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            compiled_bundle,
+            Some(flow_id),
+            None,
+        ) {
+            Ok(_) => binding_context.push(serde_json::json!({
+                "work_item": work_item,
+                "flow_id": flow_id,
+                "status": "ready",
+            })),
+            Err(error) => {
+                let blocker = if error.code == "team_flow_authority_flow_policy_disabled" {
+                    "team_flow_authority_flow_policy_disabled"
+                } else {
+                    "team_flow_authority_binding_invalid"
+                };
+                push_unique_string(&mut blockers, blocker);
+                binding_context.push(serde_json::json!({
+                    "work_item": work_item,
+                    "flow_id": flow_id,
+                    "status": "blocked",
+                    "blocker_code": blocker,
+                    "validation_error": error.to_string(),
+                }));
+            }
+        }
+    }
+    serde_json::json!({
+        "status": if blockers.is_empty() { "ready" } else { "blocked" },
+        "blockers": blockers,
+        "context": {"bindings": binding_context},
+    })
+}
+
+fn current_team_flow_binding_diagnostics(
+    vida_root: &str,
+    persisted_config_path: Option<&str>,
+) -> serde_json::Value {
+    let source = resolve_team_flow_diagnostics_source(vida_root, persisted_config_path);
+    let source_config_path = source
+        .config_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| {
+            source
+                .project_root
+                .join("vida.config.yaml")
+                .display()
+                .to_string()
+        });
+    let overlay = match load_team_flow_diagnostics_overlay(&source) {
+        Ok(overlay) => overlay,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blockers": ["team_flow_authority_unavailable"],
+                "context": {
+                    "source": source.source,
+                    "config_path": source_config_path,
+                    "validation_error": error,
+                },
+            });
+        }
+    };
+    let overlay_json = serde_json::to_value(&overlay).unwrap_or(serde_json::Value::Null);
+    let compiled_bundle =
+        match super::build_compiled_agent_extension_bundle_for_root(&overlay, &source.project_root)
+        {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                return serde_json::json!({
+                    "status": "blocked",
+                    "blockers": ["team_flow_authority_invalid"],
+                    "context": team_flow_binding_context(
+                        &overlay_json,
+                        None,
+                        Some(error.as_str()),
+                        source.source,
+                        &source_config_path,
+                    ),
+                });
+            }
+        };
+    let readiness = build_dev_team_readiness(&source_config_path, &compiled_bundle);
+    let binding_policy_audit = audit_team_flow_binding_policies(&compiled_bundle);
+    let mut blockers = readiness["blockers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    merge_team_flow_binding_diagnostics(&mut blockers, &binding_policy_audit);
+    let mut context = team_flow_binding_context(
+        &overlay_json,
+        Some(&compiled_bundle),
+        None,
+        source.source,
+        &source_config_path,
+    );
+    context["binding_policy_audit"] = binding_policy_audit["context"].clone();
+    let status = if blockers.is_empty() {
+        readiness["status"].clone()
+    } else {
+        serde_json::Value::String("blocked".to_string())
+    };
+    serde_json::json!({
+        "status": status,
+        "blockers": blockers,
+        "context": context,
+    })
+}
+
+fn team_flow_binding_context(
+    overlay: &serde_json::Value,
+    compiled_bundle: Option<&serde_json::Value>,
+    validation_error: Option<&str>,
+    source: &str,
+    config_path: &str,
+) -> serde_json::Value {
+    let raw_dev_team = overlay.get("dev_team");
+    let raw_selected_flow = raw_dev_team
+        .and_then(|value| value.get("authority_selection"))
+        .and_then(|value| value.get("default_flow_id"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let raw_bindings = raw_dev_team
+        .and_then(|value| value.get("work_item_flow_bindings"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let authority = compiled_bundle.and_then(|bundle| bundle.get("team_flow_authority"));
+    let selected_flow = authority
+        .and_then(|value| value.get("selected_config"))
+        .and_then(|value| value.get("authority_selection"))
+        .and_then(|value| value.get("default_flow_id"))
+        .cloned()
+        .filter(|value| !value.is_null())
+        .unwrap_or(raw_selected_flow);
+    let bound_work_item_flows = authority
+        .and_then(|value| value.get("resolved_all_flow_payload"))
+        .and_then(|value| value.get("work_item_flow_bindings"))
+        .cloned()
+        .unwrap_or(raw_bindings);
+    let mut context = serde_json::json!({
+        "source": source,
+        "config_path": config_path,
+        "selected_flow": selected_flow,
+        "bound_work_item_flows": bound_work_item_flows,
+        "authority_id": authority
+            .and_then(|value| value.get("authority_id"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "config_authority_hash": authority
+            .and_then(|value| value.get("config_authority_hash"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    });
+    if let Some(error) = validation_error {
+        context["validation_error"] = serde_json::Value::String(error.to_string());
+    }
+    context
+}
+
+fn merge_team_flow_binding_diagnostics(
+    effective_blockers: &mut Vec<String>,
+    diagnostics: &serde_json::Value,
+) {
+    for blocker in diagnostics["blockers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        push_unique_string(effective_blockers, blocker);
     }
 }
 
@@ -798,21 +1102,36 @@ pub(crate) fn build_dev_team_readiness(
     config_path: &str,
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
-    const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
     let team_flow_authority = activation_bundle
         .get("team_flow_authority")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let source_paths = dev_team_source_paths(config_path, None);
-    let authority_error = crate::team_flow_authority_adapter::compile_team_flow_authority(
-        activation_bundle,
-        None,
-        None,
-    )
-    .err();
-    if let Some(error) = authority_error {
+    let authority_availability =
+        crate::team_flow_authority_adapter::team_flow_authority_availability(
+            activation_bundle,
+            None,
+            None,
+        );
+    if !authority_availability.is_ready() {
+        let status = match authority_availability.status {
+            crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Unavailable =>
+                "unavailable",
+            crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Blocked =>
+                "blocked",
+            crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Ready =>
+                "blocked",
+        };
+        let blocker = authority_availability
+            .blocker
+            .unwrap_or_else(|| "team_flow_authority_blocked".to_string());
+        let blocker = if status == "unavailable" {
+            format!("team_flow_authority_unavailable:{blocker}")
+        } else {
+            format!("team_flow_authority_invalid:{blocker}")
+        };
         return serde_json::json!({
-            "status": "blocked",
+            "status": status,
             "configured": false,
             "enabled": serde_json::Value::Null,
             "default_flow_id": serde_json::Value::Null,
@@ -822,127 +1141,64 @@ pub(crate) fn build_dev_team_readiness(
             "sequence": [],
             "flows": [],
             "team_flow_authority": team_flow_authority,
-            "team_flow_authority_status": "blocked",
+            "team_flow_authority_status": status,
             "lane_work_context_contract": activation_bundle
                 .get("lane_work_context_contract")
                 .cloned()
                 .unwrap_or_else(default_lane_work_context_contract),
             "zombie_d_gate": serde_json::Value::Null,
-            "blockers": [format!("team_flow_authority_invalid:{error}")],
+            "blockers": [blocker],
             "source_paths": source_paths,
         });
     }
     let team_flow_authority_status = "ready";
-    let config_metadata = match std::fs::symlink_metadata(config_path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            return serde_json::json!({
-                "status": "config_unreadable",
-                "configured": false,
-                "enabled": serde_json::Value::Null,
-                "roles": [],
-                "sequence": [],
-                "flows": [],
-                "blockers": [format!("dev_team_config_unreadable: {error}")],
-                "source_paths": source_paths,
-            });
-        }
-    };
-    if !config_metadata.file_type().is_file() {
-        return serde_json::json!({
-            "status": "config_unreadable",
-            "configured": false,
-            "enabled": serde_json::Value::Null,
-            "roles": [],
-            "sequence": [],
-            "flows": [],
-            "blockers": ["dev_team_config_unreadable: expected_regular_file"],
-            "source_paths": source_paths,
-        });
-    }
-    if config_metadata.len() > MAX_CONFIG_BYTES {
-        return serde_json::json!({
-            "status": "config_unreadable",
-            "configured": false,
-            "enabled": serde_json::Value::Null,
-            "roles": [],
-            "sequence": [],
-            "flows": [],
-            "blockers": [format!("dev_team_config_unreadable: config_too_large ({} bytes)", config_metadata.len())],
-            "source_paths": source_paths,
-        });
-    }
-    let config_text = match std::fs::read_to_string(config_path) {
-        Ok(text) => text,
-        Err(error) => {
-            return serde_json::json!({
-                "status": "config_unreadable",
-                "configured": false,
-                "enabled": serde_json::Value::Null,
-                "roles": [],
-                "sequence": [],
-                "flows": [],
-                "blockers": [format!("dev_team_config_unreadable: {error}")],
-                "source_paths": source_paths,
-            });
-        }
-    };
-    let overlay: serde_yaml::Value = match serde_yaml::from_str(&config_text) {
-        Ok(value) => value,
-        Err(error) => {
-            return serde_json::json!({
-                "status": "config_invalid",
-                "configured": false,
-                "enabled": serde_json::Value::Null,
-                "roles": [],
-                "sequence": [],
-                "flows": [],
-                "blockers": [format!("dev_team_config_invalid: {error}")],
-                "source_paths": source_paths,
-            });
-        }
-    };
-    let Some(dev_team) = crate::yaml_lookup(&overlay, &["dev_team"]) else {
-        return serde_json::json!({
-            "status": "missing_config",
-            "configured": false,
-            "enabled": serde_json::Value::Null,
-            "roles": [],
-            "sequence": [],
-            "flows": [],
-            "blockers": ["missing_dev_team_config"],
-            "source_paths": source_paths,
-        });
-    };
-
-    let enabled = crate::yaml_bool(crate::yaml_lookup(dev_team, &["enabled"]), true);
-    let contract_doc = crate::yaml_string(crate::yaml_lookup(dev_team, &["contract_doc"]));
-    let source_paths = dev_team_source_paths(config_path, contract_doc.as_deref());
-    let carrier_catalog = carrier_catalog_by_id(activation_bundle);
-    let pricing_catalog = &activation_bundle["agent_system"]["pricing"];
-
+    let canonical_projection = authority_availability
+        .projection
+        .as_ref()
+        .expect("ready authority must carry a projection");
     let mut blockers = Vec::new();
-    let configured_hook_templates = configured_lifecycle_hook_templates(&overlay);
-    let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
-    let flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
-    let zombie_d_gate = crate::zombie_d_gate::project_policy(dev_team, &mut blockers);
-    let orchestrator_command_contract = serde_json::to_value(
-        crate::yaml_lookup(dev_team, &["orchestrator_command_contract"])
-            .cloned()
-            .unwrap_or(serde_yaml::Value::Null),
-    )
-    .unwrap_or(serde_json::Value::Null);
-    let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
-        .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
-    let work_item_flow_bindings = dev_team_work_item_flow_bindings(dev_team, &flows, &mut blockers);
-    let sequence = default_dev_team_sequence(&flows, default_flow_id.as_deref());
-
-    if !enabled {
+    let (roles, flows, work_item_flow_bindings) =
+        persisted_dev_team_readiness_projection(&team_flow_authority, &mut blockers);
+    let default_flow_id = Some(canonical_projection.snapshot.flow_ref.clone());
+    let selected_flow_policy = flows
+        .iter()
+        .find(|flow| flow["flow_id"].as_str() == default_flow_id.as_deref())
+        .and_then(|flow| flow.get("flow_policy"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let enabled = team_flow_authority["selected_config"]["team_flow_enabled"]
+        .as_bool()
+        .unwrap_or(false);
+    if team_flow_authority["selected_config"]["team_flow_enabled"].is_null() {
+        blockers.push("team_flow_authority_team_flow_enabled_missing".to_string());
+    } else if !enabled {
         blockers.push("dev_team_disabled".to_string());
+    }
+    if selected_flow_policy.is_null() {
+        blockers.push(format!(
+            "team_flow_authority_selected_flow_policy_missing:{}",
+            canonical_projection.snapshot.flow_ref
+        ));
+    } else if selected_flow_policy["enabled"].is_null() {
+        blockers.push(format!(
+            "team_flow_authority_flow_policy_field_missing:{}:enabled",
+            canonical_projection.snapshot.flow_ref
+        ));
+    } else if selected_flow_policy["enabled"].as_bool() != Some(true) {
+        blockers.push(format!(
+            "team_flow_authority_selected_flow_disabled:{}",
+            canonical_projection.snapshot.flow_ref
+        ));
     }
     if roles.is_empty() {
         blockers.push("missing_dev_team_roles".to_string());
     }
+    let sequence = flows
+        .iter()
+        .find(|flow| flow["flow_id"].as_str() == default_flow_id.as_deref())
+        .and_then(|flow| flow["steps"].as_array())
+        .cloned()
+        .unwrap_or_default();
     if sequence.is_empty() {
         blockers.push("missing_dev_team_sequence".to_string());
     }
@@ -960,20 +1216,150 @@ pub(crate) fn build_dev_team_readiness(
         "configured": true,
         "enabled": enabled,
         "default_flow_id": default_flow_id,
-        "orchestrator_command_contract": orchestrator_command_contract,
+        "orchestrator_command_contract": activation_bundle
+            .get("orchestrator_command_contract")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         "work_item_flow_bindings": work_item_flow_bindings,
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
+        "selected_flow_policy": selected_flow_policy,
         "team_flow_authority": team_flow_authority,
         "team_flow_authority_status": team_flow_authority_status,
         "lane_work_context_contract": activation_bundle
             .get("lane_work_context_contract")
             .cloned()
             .unwrap_or_else(default_lane_work_context_contract),
-        "zombie_d_gate": zombie_d_gate,
+        "zombie_d_gate": activation_bundle
+            .get("zombie_d_gate")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         "blockers": blockers,
         "source_paths": source_paths,
+    })
+}
+
+fn persisted_dev_team_readiness_projection(
+    authority: &serde_json::Value,
+    blockers: &mut Vec<String>,
+) -> (
+    Vec<serde_json::Value>,
+    Vec<serde_json::Value>,
+    serde_json::Value,
+) {
+    let flow_rows = authority["resolved_all_flow_payload"]["flows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if flow_rows.is_empty() {
+        blockers.push("team_flow_authority_persisted_flows_missing".to_string());
+        return (Vec::new(), Vec::new(), serde_json::json!({}));
+    }
+    let work_item_flow_bindings =
+        authority["resolved_all_flow_payload"]["work_item_flow_bindings"].clone();
+    if !work_item_flow_bindings.is_object() {
+        blockers.push("team_flow_authority_work_item_flow_bindings_missing".to_string());
+    }
+
+    let mut role_map = BTreeMap::new();
+    let mut flows = Vec::with_capacity(flow_rows.len());
+    for flow in flow_rows {
+        let Some(flow_id) = flow["flow_id"].as_str().filter(|value| !value.is_empty()) else {
+            blockers.push("team_flow_authority_flow_id_missing".to_string());
+            continue;
+        };
+        let policy = flow["flow_policy"].clone();
+        let lanes = flow["lanes"].as_array().cloned().unwrap_or_default();
+        if lanes.is_empty() {
+            blockers.push(format!("team_flow_authority_flow_lanes_missing:{flow_id}"));
+        }
+        let mut steps = Vec::with_capacity(lanes.len());
+        let mut ordered_steps = Vec::with_capacity(lanes.len());
+        for (index, lane) in lanes.iter().enumerate() {
+            let node_id = lane["node_id"].as_str().unwrap_or_default().to_string();
+            if node_id.is_empty() {
+                blockers.push(format!(
+                    "team_flow_authority_lane_id_missing:{flow_id}:{index}"
+                ));
+                continue;
+            }
+            steps.push(serde_json::Value::String(node_id.clone()));
+            let mut ordered_step = lane.clone();
+            ordered_step["step_id"] = serde_json::Value::String(node_id.clone());
+            ordered_step["order"] = serde_json::json!(index);
+            ordered_step["role_id"] = serde_json::Value::String(node_id.clone());
+            ordered_steps.push(ordered_step);
+            role_map
+                .entry(node_id.clone())
+                .or_insert_with(|| persisted_dev_team_role_projection(lane));
+        }
+        let mut flow_output = policy.clone();
+        if !flow_output.is_object() {
+            blockers.push(format!("team_flow_authority_flow_policy_missing:{flow_id}"));
+            flow_output = serde_json::json!({});
+        }
+        flow_output["flow_id"] = serde_json::Value::String(flow_id.to_string());
+        flow_output["flow_policy"] = policy;
+        flow_output["steps"] = serde_json::Value::Array(steps.clone());
+        flow_output["ordered_steps"] = serde_json::Value::Array(ordered_steps);
+        flows.push(flow_output);
+    }
+    flows.sort_by(|left, right| {
+        left["flow_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["flow_id"].as_str().unwrap_or_default())
+    });
+    let roles = role_map.into_values().collect::<Vec<_>>();
+    (roles, flows, work_item_flow_bindings)
+}
+
+fn persisted_dev_team_role_projection(lane: &serde_json::Value) -> serde_json::Value {
+    let carrier_relation = lane["carrier_relation"].clone();
+    let selected_model = lane["selected_model_profile"].clone();
+    let required_outputs = lane["proof_gates"]["required_outputs"].clone();
+    let next_role = lane["next_node"].clone();
+    serde_json::json!({
+        "role_id": lane["node_id"],
+        "runtime_role": lane["runtime_role"],
+        "task_classes": [lane["task_class"]],
+        "packet_template_kind": lane["packet_template_kind"],
+        "closure_class": lane["closure_class"],
+        "stage": lane["stage"],
+        "completion_blocker": lane["completion_blocker"],
+        "inclusion_rule": lane["inclusion_rule"],
+        "default_carrier": carrier_relation["selected_id"],
+        "default_model": selected_model["model_ref"],
+        "default_model_reasoning_effort": selected_model["reasoning_effort"],
+        "cost_policy": serde_json::Value::Null,
+        "handoff": {
+            "next_role": next_role,
+            "required_outputs": required_outputs,
+            "fail_closed_on_missing_handoff": true
+        },
+        "selected_model": {
+            "carrier_id": carrier_relation["selected_id"],
+            "model_profile_id": selected_model["profile_id"],
+            "model_profile_id_source_path": selected_model["selection_source"],
+            "model_ref": selected_model["model_ref"],
+            "model_ref_source_path": selected_model["selection_source"],
+            "model_provider": selected_model["provider"],
+            "model_reasoning_effort": selected_model["reasoning_effort"],
+            "selected_rate": serde_json::Value::Null,
+            "selected_rate_source_path": serde_json::Value::Null,
+            "pricing": serde_json::Value::Null,
+            "pricing_freshness": serde_json::Value::Null,
+            "pricing_freshness_status": "persisted"
+        },
+        "selected_carrier": {
+            "carrier_id": carrier_relation["selected_id"],
+            "model": selected_model["model_ref"],
+            "model_provider": selected_model["provider"],
+            "reasoning_effort": selected_model["reasoning_effort"],
+            "runtime_roles": [lane["runtime_role"]],
+            "task_classes": [lane["task_class"]]
+        }
     })
 }
 
@@ -1550,30 +1936,6 @@ fn configured_lifecycle_hook_templates(overlay: &serde_yaml::Value) -> HashSet<S
     .collect()
 }
 
-fn yaml_mapping_key_strings(value: &serde_yaml::Value) -> Vec<String> {
-    value
-        .as_mapping()
-        .into_iter()
-        .flat_map(|mapping| mapping.keys())
-        .filter_map(serde_yaml::Value::as_str)
-        .map(str::to_string)
-        .collect()
-}
-
-fn validate_yaml_allowed_keys(
-    surface: &str,
-    value: &serde_yaml::Value,
-    allowed_keys: &[&str],
-    blockers: &mut Vec<String>,
-) {
-    let allowed = allowed_keys.iter().copied().collect::<HashSet<_>>();
-    for key in yaml_mapping_key_strings(value) {
-        if !allowed.contains(key.as_str()) {
-            blockers.push(format!("unsupported_{surface}_knob:{key}"));
-        }
-    }
-}
-
 fn validate_lifecycle_hook_refs(
     surface: &str,
     hook_refs: &[String],
@@ -1614,14 +1976,6 @@ fn validate_approval_policy(
     if requires_user_approval && mode.as_deref().unwrap_or_default().is_empty() {
         blockers.push(format!("missing_approval_policy_mode:{flow_id}:{index}"));
     }
-    if let Some(mode) = mode.as_deref().filter(|value| !value.is_empty()) {
-        match mode {
-            "user_review_required" | "optional_user_review" | "not_required" => {}
-            _ => blockers.push(format!(
-                "unsupported_approval_policy_mode:{flow_id}:{index}:{mode}"
-            )),
-        }
-    }
 }
 
 fn dev_team_flows(
@@ -1647,27 +2001,6 @@ fn dev_team_flows(
         .iter()
         .filter_map(|(key, value)| key.as_str().map(|id| (id, value)))
     {
-        validate_yaml_allowed_keys(
-            "flow",
-            flow_entry,
-            &[
-                "enabled",
-                "default",
-                "description",
-                "flow_class",
-                "work_item_bindings",
-                "sequential",
-                "allow_parallel_handoffs",
-                "fail_closed_on_missing_step_contract",
-                "lifecycle_hook_templates",
-                "proof_gates",
-                "resume_transitions",
-                "rework_transitions",
-                "adapter_projection",
-                "steps",
-            ],
-            blockers,
-        );
         let flow_hook_templates = crate::yaml_string_list(crate::yaml_lookup(
             flow_entry,
             &["lifecycle_hook_templates"],
@@ -1817,34 +2150,6 @@ fn dev_team_flow_ordered_steps(
                 }))
             }
             serde_yaml::Value::Mapping(_) => {
-                validate_yaml_allowed_keys(
-                    "flow_step",
-                    step,
-                    &[
-                        "step_id",
-                        "role_id",
-                        "role",
-                        "runtime_role",
-                        "task_class",
-                        "packet_template_kind",
-                        "closure_class",
-                        "stage",
-                        "completion_blocker",
-                        "inclusion_rule",
-                        "command_template",
-                        "command_ref",
-                        "lifecycle_hook_templates",
-                        "carrier_constraints",
-                        "model_profile_constraints",
-                        "proof_gates",
-                        "resume_transitions",
-                        "rework_transitions",
-                        "adapter_projection",
-                        "approval_policy",
-                        "requires_user_approval",
-                    ],
-                    blockers,
-                );
                 let role_id = crate::yaml_string(crate::yaml_lookup(step, &["role_id"]))
                     .or_else(|| crate::yaml_string(crate::yaml_lookup(step, &["role"])))
                     .unwrap_or_default();
@@ -1947,17 +2252,21 @@ fn default_dev_team_sequence(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_dev_team_readiness, build_taskflow_agent_system_snapshot,
-        bundle_check_operator_contracts_consistency_error, consume_bundle_check_next_actions,
-        consume_bundle_operator_contract_status, db_first_activation_snapshot_validation_error,
-        fail_fast_with_timeout, lane_role_profile_for_context,
+        audit_team_flow_binding_policies, build_dev_team_readiness,
+        build_taskflow_agent_system_snapshot, bundle_check_operator_contracts_consistency_error,
+        consume_bundle_check_next_actions, consume_bundle_check_operator_envelope,
+        consume_bundle_operator_contract_status, current_team_flow_binding_diagnostics,
+        db_first_activation_snapshot_validation_error, fail_fast_with_timeout,
+        lane_role_profile_for_context, merge_team_flow_binding_diagnostics,
         normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
-        push_unique_string, taskflow_docflow_seam_receipt_backed_check,
+        persisted_dev_team_readiness_projection, push_unique_string,
+        taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
-        DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
-        TaskflowConsumeBundlePayload, release_contract_adapters::release_contract_status,
+        release_contract_adapters::release_contract_status,
         runtime_consumption_surface::build_docflow_receipt_evidence, temp_state::TempStateHarness,
+        DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
+        TaskflowConsumeBundlePayload,
     };
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
@@ -2219,7 +2528,7 @@ mod tests {
     }
 
     #[test]
-    fn build_dev_team_readiness_reports_configured_roles_and_sequence() {
+    fn build_dev_team_readiness_projects_persisted_roles_and_sequence() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(
@@ -2300,79 +2609,64 @@ dev_team:
         assert_eq!(readiness["status"], "ready");
         assert_eq!(readiness["blockers"], serde_json::json!([]));
         assert_eq!(readiness["configured"], true);
+        assert_eq!(readiness["default_flow_id"], authority_fixture_flow_id());
+        let default_flow = readiness["flows"]
+            .as_array()
+            .expect("persisted flows should project")
+            .iter()
+            .find(|flow| flow["flow_id"].as_str() == Some(authority_fixture_flow_id()))
+            .expect("persisted default flow should project");
+        let expected_sequence = default_flow["steps"].clone();
+        assert_eq!(readiness["sequence"], expected_sequence);
         assert_eq!(
-            readiness["sequence"],
-            serde_json::json!(["developer", "coach"])
-        );
-        assert_eq!(readiness["roles"][1]["role_id"], "developer");
-        assert_eq!(
-            readiness["roles"][1]["selected_carrier"]["carrier_id"],
-            "junior"
-        );
-        assert_eq!(
-            readiness["source_paths"][1],
-            "docs/process/team-development-and-orchestration-protocol.md"
+            default_flow["ordered_steps"]
+                .as_array()
+                .expect("ordered steps should project")
+                .len(),
+            default_flow["steps"]
+                .as_array()
+                .expect("steps should project")
+                .len()
         );
         assert_eq!(
-            readiness["flows"][0]["ordered_steps"][0]["role_id"],
-            "developer"
+            readiness["source_paths"][0],
+            config_path.to_string_lossy().to_string()
         );
-        assert_eq!(
-            readiness["flows"][0]["ordered_steps"][0]["requires_user_approval"],
-            false
-        );
+        assert_eq!(readiness["source_paths"].as_array().map(Vec::len), Some(1));
+    }
+
+    fn authority_fixture_flow_id() -> &'static str {
+        static FLOW_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        FLOW_ID
+            .get_or_init(|| {
+                crate::team_flow_authority_projection::test_support::canonical_compiled_bundle()
+                    ["team_flow_authority"]["selected_config"]["authority_selection"]
+                    ["default_flow_id"]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned)
+                    .expect("canonical authority projection must provide default flow id")
+            })
+            .as_str()
     }
 
     fn authority_projection_fixture() -> serde_json::Value {
-        let selected_config = serde_json::json!({
-            "authority_selection": {
-                "config_id": "cfg",
-                "team_profile_id": "profile",
-                "default_flow_id": "defect_flow"
-            },
-            "roles": {
-                "developer": {
-                    "runtime_role": "worker",
-                    "task_class": "implementation",
-                    "inclusion_rule": "always",
-                    "packet_template_kind": "delivery_task_packet",
-                    "closure_class": "implementation",
-                    "stage": "execution",
-                    "completion_blocker": "pending"
-                }
-            },
-            "flows": {
-                "defect_flow": {
-                    "flow_id": "defect_flow",
-                    "steps": [{
-                        "role_id": "developer",
-                        "included": true,
-                        "required": true,
-                        "terminal": true,
-                        "proof_gates": {"required_outputs": ["changed_files"]}
-                    }]
-                }
-            }
-        });
-        let config_hash = taskflow_authority::team_flow_transition::hash_json(&selected_config);
-        serde_json::json!({
-            "schema_version": "team-flow-authority.v1",
-            "authority_id": "team-flow-authority:test",
-            "config": {"content_blake3": config_hash},
-            "registries": {"content_blake3": "registry"},
-            "selected_config": selected_config
-        })
+        crate::team_flow_authority_projection::test_support::canonical_compiled_bundle()
+            ["team_flow_authority"]
+            .clone()
     }
 
     fn readiness_config_fixture(path: &std::path::Path) {
+        let flow_id = authority_fixture_flow_id();
         std::fs::write(
             path,
-            r#"
+            format!(
+                r#"
 dev_team:
   enabled: true
-  default_flow_id: defect_flow
+  default_flow_id: {flow_id}
   work_item_flow_bindings:
-    defect: defect_flow
+    defect: {flow_id}
   roles:
     developer:
       runtime_role: worker
@@ -2383,11 +2677,13 @@ dev_team:
         required_outputs: [changed_files]
         fail_closed_on_missing_handoff: true
   flows:
-    defect_flow:
+    {flow_id}:
       enabled: true
       sequential: true
       steps: [developer]
 "#,
+                flow_id = flow_id,
+            ),
         )
         .expect("readiness config should write");
     }
@@ -2428,7 +2724,10 @@ dev_team:
         assert_eq!(readiness["configured"], false);
         assert_eq!(readiness["enabled"], serde_json::Value::Null);
         assert_eq!(readiness["default_flow_id"], serde_json::Value::Null);
-        assert_eq!(readiness["orchestrator_command_contract"], serde_json::Value::Null);
+        assert_eq!(
+            readiness["orchestrator_command_contract"],
+            serde_json::Value::Null
+        );
         assert_eq!(readiness["work_item_flow_bindings"], serde_json::json!({}));
         assert_eq!(readiness["roles"], serde_json::json!([]));
         assert_eq!(readiness["sequence"], serde_json::json!([]));
@@ -2438,6 +2737,18 @@ dev_team:
         assert!(readiness["blockers"][0]
             .as_str()
             .is_some_and(|blocker| blocker.starts_with("team_flow_authority_invalid:")));
+    }
+
+    fn assert_team_flow_readiness_unavailable(readiness: &serde_json::Value) {
+        assert_eq!(readiness["status"], "unavailable");
+        assert_eq!(readiness["configured"], false);
+        assert_eq!(readiness["team_flow_authority_status"], "unavailable");
+        assert_eq!(readiness["roles"], serde_json::json!([]));
+        assert_eq!(readiness["sequence"], serde_json::json!([]));
+        assert_eq!(readiness["flows"], serde_json::json!([]));
+        assert!(readiness["blockers"][0]
+            .as_str()
+            .is_some_and(|blocker| blocker.starts_with("team_flow_authority_unavailable:")));
     }
 
     #[test]
@@ -2454,16 +2765,177 @@ dev_team:
         assert_eq!(readiness["team_flow_authority"], authority);
         assert_eq!(readiness["team_flow_authority_status"], "ready");
         assert_eq!(
-            readiness["work_item_flow_bindings"]["defect"],
-            "defect_flow"
+            readiness["work_item_flow_bindings"],
+            authority["resolved_all_flow_payload"]["work_item_flow_bindings"]
         );
+        assert_eq!(
+            readiness["work_item_flow_bindings"]["defect"],
+            authority_fixture_flow_id()
+        );
+        let persisted_flow = authority["resolved_all_flow_payload"]["flows"]
+            .as_array()
+            .expect("persisted flows should exist")
+            .iter()
+            .find(|flow| flow["flow_id"].as_str() == Some(authority_fixture_flow_id()))
+            .expect("default persisted flow should exist");
+        let expected_sequence_len = persisted_flow["lanes"]
+            .as_array()
+            .expect("default persisted flow lanes should exist")
+            .len();
         assert_eq!(
             crate::dev_team_sequence_contract::dev_team_sequence_for_flow_id(
                 readiness,
-                "defect_flow"
+                authority_fixture_flow_id()
             )
             .len(),
-            1
+            expected_sequence_len
+        );
+    }
+
+    #[test]
+    fn readiness_projects_persisted_authority_after_raw_config_mutation_and_delete() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(&config_path, "dev_team: {enabled: false}\n")
+            .expect("diagnostic config should write");
+        let authority = authority_projection_fixture();
+        let activation_bundle = serde_json::json!({"team_flow_authority": authority});
+        let persisted_enabled = activation_bundle["team_flow_authority"]["selected_config"]
+            ["team_flow_enabled"]
+            .as_bool()
+            .expect("canonical authority must persist TeamFlow enablement");
+        let baseline = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &activation_bundle,
+        );
+        assert_eq!(baseline["enabled"], persisted_enabled);
+        assert_eq!(
+            baseline["work_item_flow_bindings"],
+            activation_bundle["team_flow_authority"]["resolved_all_flow_payload"]
+                ["work_item_flow_bindings"]
+        );
+        assert_eq!(
+            baseline["status"],
+            if persisted_enabled {
+                "ready"
+            } else {
+                "disabled"
+            }
+        );
+        let baseline_status = baseline["status"].clone();
+        let baseline_enabled = baseline["enabled"].clone();
+        let baseline_roles = baseline["roles"].clone();
+        let baseline_flows = baseline["flows"].clone();
+        let baseline_bindings = baseline["work_item_flow_bindings"].clone();
+        let baseline_sequence = baseline["sequence"].clone();
+        std::fs::write(&config_path, "dev_team: [invalid\n").expect("mutated config should write");
+        let mutated = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &activation_bundle,
+        );
+        assert_eq!(mutated["status"], baseline_status);
+        assert_eq!(mutated["enabled"], baseline_enabled);
+        assert_eq!(mutated["roles"], baseline_roles);
+        assert_eq!(mutated["flows"], baseline_flows);
+        assert_eq!(mutated["work_item_flow_bindings"], baseline_bindings);
+        assert_eq!(mutated["sequence"], baseline_sequence);
+        std::fs::remove_file(&config_path).expect("diagnostic config should delete");
+        let deleted = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &activation_bundle,
+        );
+        assert_eq!(deleted["status"], baseline["status"]);
+        assert_eq!(deleted["enabled"], baseline["enabled"]);
+        assert_eq!(deleted["roles"], baseline["roles"]);
+        assert_eq!(deleted["flows"], baseline["flows"]);
+        assert_eq!(
+            deleted["work_item_flow_bindings"],
+            baseline["work_item_flow_bindings"]
+        );
+        assert_eq!(deleted["sequence"], baseline["sequence"]);
+    }
+
+    #[test]
+    fn readiness_projection_keeps_overlapping_policy_bindings_display_only() {
+        let authority = serde_json::json!({
+            "resolved_all_flow_payload": {
+                "work_item_flow_bindings": {"defect": "flow-b"},
+                "flows": [
+                    {
+                        "flow_id": "flow-a",
+                        "flow_policy": {
+                            "enabled": true,
+                            "work_item_bindings": ["defect"]
+                        },
+                        "lanes": [{"node_id": "lane-a"}]
+                    },
+                    {
+                        "flow_id": "flow-b",
+                        "flow_policy": {
+                            "enabled": true,
+                            "work_item_bindings": ["defect"]
+                        },
+                        "lanes": [{"node_id": "lane-b"}]
+                    }
+                ]
+            }
+        });
+        let mut blockers = Vec::new();
+        let (_, flows, bindings) =
+            persisted_dev_team_readiness_projection(&authority, &mut blockers);
+        assert_eq!(bindings, serde_json::json!({"defect": "flow-b"}));
+        assert!(blockers
+            .iter()
+            .all(|blocker| !blocker.starts_with("work_item_flow_binding_conflict:")));
+        assert!(flows.iter().all(|flow| {
+            flow["flow_policy"]["work_item_bindings"] == serde_json::json!(["defect"])
+        }));
+    }
+
+    #[test]
+    fn readiness_non_default_flow_preserves_persisted_ordered_steps_alias() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        let authority = authority_projection_fixture();
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({"team_flow_authority": authority}),
+        );
+        let default_flow_id = readiness["default_flow_id"]
+            .as_str()
+            .expect("default flow id");
+        let flow = readiness["flows"]
+            .as_array()
+            .expect("readiness flows")
+            .iter()
+            .find(|flow| {
+                flow["flow_id"].as_str() != Some(default_flow_id)
+                    && flow["flow_policy"]["enabled"].as_bool() == Some(true)
+            })
+            .expect("canonical authority should persist an enabled non-default flow");
+        let flow_id = flow["flow_id"].as_str().expect("non-default flow id");
+        let ordered_steps = flow["ordered_steps"]
+            .as_array()
+            .expect("ordered_steps alias");
+        let steps = flow["steps"].as_array().expect("steps alias");
+        assert_eq!(ordered_steps.len(), steps.len());
+        assert!(ordered_steps
+            .iter()
+            .zip(steps)
+            .all(|(step, role_id)| { step["role_id"].as_str() == role_id.as_str() }));
+        let sequence = crate::dev_team_sequence_contract::dev_team_sequence_for_flow_id(
+            &serde_json::json!({"team_flow_authority": readiness["team_flow_authority"]}),
+            flow_id,
+        );
+        assert_eq!(
+            sequence
+                .iter()
+                .map(|step| step.role_label.as_str())
+                .collect::<Vec<_>>(),
+            steps
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2477,7 +2949,7 @@ dev_team:
             &readiness_activation_bundle(None),
         );
         let readiness = &snapshot["dev_team_readiness"];
-        assert_team_flow_readiness_fails_closed(readiness);
+        assert_team_flow_readiness_unavailable(readiness);
         assert_eq!(readiness["team_flow_authority"], serde_json::Value::Null);
 
         let mut invalid_bundle = readiness_activation_bundle(Some(authority_projection_fixture()));
@@ -2492,7 +2964,7 @@ dev_team:
     }
 
     #[test]
-    fn development_flow_catalog_selects_configured_default_and_projects_step_schema() {
+    fn development_flow_catalog_projects_persisted_default_and_step_schema() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(
@@ -2624,84 +3096,40 @@ dev_team:
         );
 
         assert_eq!(readiness["status"], "ready");
-        assert_eq!(readiness["default_flow_id"], "investigation_flow");
-        assert_eq!(
-            readiness["work_item_flow_bindings"]["defect"],
-            "investigation_flow"
-        );
-        assert_eq!(
-            readiness["sequence"],
-            serde_json::json!(["analyst", "developer"])
-        );
+        assert_eq!(readiness["default_flow_id"], authority_fixture_flow_id());
         let flow = readiness["flows"]
             .as_array()
             .expect("flows should project")
             .iter()
-            .find(|flow| flow["flow_id"] == "investigation_flow")
-            .expect("configured default flow should project");
+            .find(|flow| flow["flow_id"].as_str() == Some(authority_fixture_flow_id()))
+            .expect("persisted default flow should project");
         assert_eq!(flow["default"], true);
+        assert_eq!(readiness["sequence"], flow["steps"]);
         assert_eq!(
             flow["work_item_bindings"],
-            serde_json::json!(["epic", "defect"])
+            flow["flow_policy"]["work_item_bindings"]
         );
         assert_eq!(
             flow["lifecycle_hook_templates"],
-            serde_json::json!(["command_timing_summary"])
+            flow["flow_policy"]["lifecycle_hook_templates"]
+        );
+        assert_eq!(flow["proof_gates"], flow["flow_policy"]["proof_gates"]);
+        assert_eq!(
+            flow["adapter_projection"],
+            flow["flow_policy"]["adapter_projection"]
         );
         assert_eq!(
-            flow["proof_gates"]["required_commands"][0],
-            "cargo test -p vida development_flow_catalog"
+            flow["ordered_steps"]
+                .as_array()
+                .expect("ordered steps should project")
+                .iter()
+                .map(|step| step["role_id"].clone())
+                .collect::<Vec<_>>(),
+            flow["steps"]
+                .as_array()
+                .expect("steps should project")
+                .clone()
         );
-        assert_eq!(
-            flow["adapter_projection"]["host_agent_bridge_contract"],
-            "required"
-        );
-        assert_eq!(flow["ordered_steps"][0]["step_id"], "analysis");
-        assert_eq!(flow["ordered_steps"][0]["runtime_role"], "business_analyst");
-        assert_eq!(flow["ordered_steps"][0]["task_class"], "specification");
-        assert_eq!(
-            flow["ordered_steps"][0]["packet_template_kind"],
-            "delivery_task_packet"
-        );
-        assert_eq!(flow["ordered_steps"][0]["closure_class"], "law");
-        assert_eq!(flow["ordered_steps"][0]["stage"], "design_gate");
-        assert_eq!(
-            flow["ordered_steps"][0]["completion_blocker"],
-            "pending_specification_evidence"
-        );
-        assert_eq!(
-            flow["ordered_steps"][0]["inclusion_rule"],
-            "when_design_gate"
-        );
-        assert_eq!(
-            flow["ordered_steps"][0]["command_ref"],
-            "agent-init-business-analyst"
-        );
-        assert_eq!(flow["ordered_steps"][0]["requires_user_approval"], true);
-        assert_eq!(
-            flow["ordered_steps"][0]["approval_policy"]["mode"],
-            "user_review_required"
-        );
-        assert_eq!(
-            flow["ordered_steps"][0]["adapter_projection"]["adapter_kind"],
-            "codex_host_tools"
-        );
-        assert_eq!(flow["ordered_steps"][1]["role_id"], "developer");
-        let developer_role = readiness["roles"]
-            .as_array()
-            .expect("roles should project")
-            .iter()
-            .find(|role| role["role_id"] == "developer")
-            .expect("developer role should project");
-        assert_eq!(
-            developer_role["packet_template_kind"],
-            "delivery_task_packet"
-        );
-        assert_eq!(
-            developer_role["completion_blocker"],
-            "pending_implementation_evidence"
-        );
-        assert_eq!(developer_role["inclusion_rule"], "always");
     }
 
     #[test]
@@ -2747,7 +3175,7 @@ dev_team:
     }
 
     #[test]
-    fn flow_validation_blocks_unsupported_knobs_hooks_and_approval_modes() {
+    fn consumer_projects_persisted_hook_refs_without_source_schema_rejection() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(
@@ -2804,27 +3232,29 @@ dev_team:
             }),
         );
 
-        assert_eq!(readiness["status"], "blocked");
-        let blockers = readiness["blockers"]
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
+        let persisted_flows = readiness["team_flow_authority"]["resolved_all_flow_payload"]
+            ["flows"]
             .as_array()
-            .expect("blockers should project")
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(blockers.contains(&"unsupported_flow_knob:unsupported_flow_knob"));
-        assert!(blockers.contains(&"unsupported_flow_step_knob:unsupported_step_knob"));
-        assert!(
-            blockers
-                .contains(&"unknown_lifecycle_hook_template:flow:invalid_flow:hardcoded_cli_hook")
-        );
-        assert!(blockers.contains(
-            &"unknown_lifecycle_hook_template:flow_step:invalid_flow:0:hardcoded_step_hook"
-        ));
-        assert!(blockers.contains(&"unsupported_approval_policy_mode:invalid_flow:0:auto_approve"));
+            .expect("persisted flows should exist");
+        for persisted_flow in persisted_flows {
+            let flow_id = persisted_flow["flow_id"].as_str().expect("flow id");
+            let projected = readiness["flows"]
+                .as_array()
+                .expect("projected flows should exist")
+                .iter()
+                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+                .expect("persisted flow should project");
+            assert_eq!(
+                projected["lifecycle_hook_templates"],
+                persisted_flow["flow_policy"]["lifecycle_hook_templates"]
+            );
+        }
     }
 
     #[test]
-    fn build_dev_team_readiness_reports_selected_model_pricing_metadata() {
+    fn build_dev_team_readiness_projects_persisted_model_metadata() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(
@@ -2921,26 +3351,25 @@ dev_team:
         );
 
         assert_eq!(readiness["status"], "ready");
+        let role = readiness["roles"]
+            .as_array()
+            .expect("persisted roles should project")
+            .first()
+            .expect("persisted role should project");
+        assert!(role["selected_model"]["model_profile_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(role["selected_model"]["model_ref"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
         assert_eq!(
-            readiness["roles"][0]["selected_model"]["model_profile_id"],
-            "codex_gpt54_low_write"
+            role["selected_model"]["selected_rate"],
+            serde_json::Value::Null
         );
-        assert_eq!(readiness["roles"][0]["selected_model"]["selected_rate"], 1);
+        assert_eq!(role["selected_model"]["pricing"], serde_json::Value::Null);
         assert_eq!(
-            readiness["roles"][0]["selected_model"]["selected_rate_source_path"],
-            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.normalized_cost_units"
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["pricing"]["price_source_kind"],
-            "provider_catalog"
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["pricing_freshness"]["required"],
-            false
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
-            "ready"
+            role["selected_model"]["pricing_freshness_status"],
+            "persisted"
         );
     }
 
@@ -3005,22 +3434,20 @@ dev_team:
 
         assert_eq!(readiness["status"], "ready");
         assert_eq!(readiness["blockers"], serde_json::json!([]));
+        let role = readiness["roles"]
+            .as_array()
+            .expect("persisted roles should project")
+            .first()
+            .expect("persisted role should project");
+        assert_eq!(role["default_model"], role["selected_model"]["model_ref"]);
         assert_eq!(
-            readiness["roles"][0]["default_model"],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["model_profile_id"],
-            "codex_gpt55_medium_write"
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["model_ref"],
-            "gpt-5.5"
+            role["default_model_reasoning_effort"],
+            role["selected_model"]["model_reasoning_effort"]
         );
     }
 
     #[test]
-    fn build_dev_team_readiness_blocks_price_freshness_incomplete() {
+    fn build_dev_team_readiness_uses_persisted_price_freshness_status() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(
@@ -3087,25 +3514,21 @@ dev_team:
                 }
             }),
         );
-        assert_eq!(readiness["status"], "blocked");
-        assert!(
-            readiness["blockers"]
-                .as_array()
-                .expect("readiness blockers should be array")
-                .iter()
-                .any(|entry| entry == "model_price_freshness_policy_incomplete:developer")
-        );
-        assert_eq!(
-            readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
-            "missing"
-        );
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
+        assert!(readiness["roles"]
+            .as_array()
+            .expect("persisted roles should be array")
+            .iter()
+            .all(|role| role["selected_model"]["pricing_freshness_status"] == "persisted"));
     }
 
     #[test]
-    fn build_dev_team_readiness_reports_missing_config_truthfully() {
+    fn build_dev_team_readiness_ignores_missing_raw_config_when_authority_is_ready() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         std::fs::write(&config_path, "project:\n  id: demo\n").expect("config should write");
+        std::fs::remove_file(&config_path).expect("diagnostic config should delete");
 
         let readiness = build_dev_team_readiness(
             config_path.to_str().expect("config path should be valid"),
@@ -3114,17 +3537,18 @@ dev_team:
             }),
         );
 
-        assert_eq!(readiness["status"], "missing_config");
-        assert_eq!(readiness["configured"], false);
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["configured"], true);
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
         assert_eq!(
-            readiness["blockers"],
-            serde_json::json!(["missing_dev_team_config"])
+            readiness["source_paths"][0],
+            config_path.to_string_lossy().to_string()
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn build_dev_team_readiness_rejects_symlinked_config_path() {
+    fn build_dev_team_readiness_ignores_symlinked_raw_config_path() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
         let target_path = harness.path().join("actual-config.yaml");
@@ -3139,13 +3563,12 @@ dev_team:
             }),
         );
 
-        assert_eq!(readiness["status"], "config_unreadable");
-        assert!(
-            readiness["blockers"]
-                .as_array()
-                .expect("readiness blockers should be array")
-                .iter()
-                .any(|entry| entry == "dev_team_config_unreadable: expected_regular_file")
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["configured"], true);
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
+        assert_eq!(
+            readiness["source_paths"][0],
+            config_path.to_string_lossy().to_string()
         );
     }
 
@@ -3777,11 +4200,9 @@ dev_team:
         let actions = consume_bundle_check_next_actions(&[
             "missing_retrieval_trust_evidence_field:source".to_string(),
         ]);
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("vida taskflow protocol-binding sync --json"))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("vida taskflow protocol-binding sync --json")));
         assert!(actions.iter().any(|action| {
             action.contains("rerun `vida taskflow consume bundle check --json` only to verify")
         }));
@@ -3804,6 +4225,245 @@ dev_team:
             ]),
             release_contract_status(false)
         );
+    }
+
+    #[test]
+    fn consume_bundle_check_operator_envelope_projects_top_level_blocked_status() {
+        let check = crate::TaskflowConsumeBundleCheck {
+            ok: false,
+            blockers: vec!["team_flow_authority_disabled".to_string()],
+            root_artifact_id: "root-artifact".to_string(),
+            artifact_count: 1,
+            boot_classification: "blocked".to_string(),
+            migration_state: "not_required".to_string(),
+            activation_status: "blocked".to_string(),
+        };
+        let operator_output =
+            crate::release1_operator_output::build_release1_operator_output_payload(
+                "vida taskflow consume bundle check",
+                vec!["team_flow_authority_disabled".to_string()],
+                vec!["restore TeamFlow binding".to_string()],
+                serde_json::json!({"root_artifact_id": "root-artifact"}),
+                serde_json::json!({}),
+            )
+            .expect("operator output should build");
+        let rendered = consume_bundle_check_operator_envelope(
+            &check,
+            &serde_json::json!({"status": "blocked"}),
+            &serde_json::json!({"status": "blocked"}),
+            &["team_flow_authority_disabled".to_string()],
+            &operator_output,
+            "bundle-check.json",
+        );
+        assert_eq!(rendered["surface"], "vida taskflow consume bundle check");
+        assert_eq!(rendered["status"], "blocked");
+        assert_eq!(rendered["status"], rendered["operator_contracts"]["status"]);
+        assert_eq!(
+            rendered["blocker_codes"],
+            rendered["operator_contracts"]["blocker_codes"]
+        );
+    }
+
+    #[test]
+    fn team_flow_binding_diagnostics_merge_preserves_unrelated_blockers() {
+        let cases = [
+            (
+                "disabled",
+                serde_json::json!({
+                    "blockers": ["dev_team_disabled"],
+                    "context": {"selected_flow": "default-flow"},
+                }),
+                "dev_team_disabled",
+            ),
+            (
+                "unknown",
+                serde_json::json!({
+                    "blockers": ["team_flow_authority_invalid"],
+                    "context": {
+                        "selected_flow": "default-flow",
+                        "bound_work_item_flows": {"defect": "missing-flow"},
+                    },
+                }),
+                "team_flow_authority_invalid",
+            ),
+        ];
+        for (mutation, diagnostics, expected_blocker) in cases {
+            let mut blockers = vec!["protocol_binding_not_runtime_ready".to_string()];
+            merge_team_flow_binding_diagnostics(&mut blockers, &diagnostics);
+            assert!(
+                blockers
+                    .iter()
+                    .any(|blocker| blocker == "protocol_binding_not_runtime_ready"),
+                "{mutation} mutation must preserve unrelated blockers"
+            );
+            assert!(
+                blockers.iter().any(|blocker| blocker == expected_blocker),
+                "{mutation} mutation must add TeamFlow blocker"
+            );
+            assert!(diagnostics["context"].is_object());
+        }
+    }
+
+    #[test]
+    fn persisted_team_flow_source_wins_over_cwd_for_disabled_and_unknown_mutations() {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime should initialize");
+        let cwd_harness = TempStateHarness::new().expect("cwd harness should initialize");
+        let persisted_harness =
+            TempStateHarness::new().expect("persisted harness should initialize");
+        for root in [cwd_harness.path(), persisted_harness.path()] {
+            let _cwd = crate::test_cli_support::guard_current_dir(root);
+            assert_eq!(
+                runtime.block_on(crate::run(crate::test_cli_support::cli(&["init"]))),
+                std::process::ExitCode::SUCCESS
+            );
+        }
+        let persisted_config_path = persisted_harness.path().join("vida.config.yaml");
+        let original_config = std::fs::read_to_string(&persisted_config_path)
+            .expect("persisted config should be readable");
+        let fallback_root = cwd_harness
+            .path()
+            .to_str()
+            .expect("cwd root should be valid UTF-8");
+        let persisted_path = persisted_config_path
+            .to_str()
+            .expect("persisted config path should be valid UTF-8");
+        for mutation in ["disabled", "unknown"] {
+            let mut config: serde_yaml::Value =
+                serde_yaml::from_str(&original_config).expect("persisted config should parse");
+            if mutation == "disabled" {
+                config["dev_team"]["enabled"] = serde_yaml::Value::Bool(false);
+            } else {
+                config["dev_team"]["work_item_flow_bindings"]["defect"] =
+                    serde_yaml::Value::String("missing-flow".to_string());
+            }
+            std::fs::write(
+                &persisted_config_path,
+                serde_yaml::to_string(&config).expect("mutated config should serialize"),
+            )
+            .expect("mutated persisted config should write");
+            let diagnostics =
+                current_team_flow_binding_diagnostics(fallback_root, Some(persisted_path));
+            assert_eq!(
+                diagnostics["context"]["source"],
+                "persisted_launcher_snapshot"
+            );
+            assert_eq!(diagnostics["context"]["config_path"], persisted_path);
+            assert!(diagnostics["context"]["selected_flow"].is_string());
+            if mutation == "disabled" {
+                assert!(diagnostics["blockers"]
+                    .as_array()
+                    .is_some_and(|blockers| blockers
+                        .iter()
+                        .any(|value| value == "dev_team_disabled")));
+            } else {
+                assert!(diagnostics["blockers"].as_array().is_some_and(|blockers| {
+                    blockers
+                        .iter()
+                        .any(|value| value == "team_flow_authority_invalid")
+                }));
+                assert_eq!(
+                    diagnostics["context"]["bound_work_item_flows"]["defect"],
+                    "missing-flow"
+                );
+            }
+        }
+        let fallback_diagnostics = current_team_flow_binding_diagnostics(fallback_root, None);
+        assert_eq!(
+            fallback_diagnostics["context"]["source"],
+            "cwd_fallback_no_persisted_config"
+        );
+    }
+
+    fn refresh_binding_audit_fixture_hashes(bundle: &mut serde_json::Value) {
+        let authority = &mut bundle["team_flow_authority"];
+        for flow in authority["resolved_all_flow_payload"]["flows"]
+            .as_array_mut()
+            .expect("persisted flows")
+        {
+            let flow_id = flow["flow_id"].as_str().expect("flow id").to_string();
+            let flow_policy = flow["flow_policy"].clone();
+            let lanes = flow["lanes"].as_array().expect("flow lanes");
+            let identity_hash =
+                taskflow_authority::team_flow_transition::hash_json(&serde_json::json!({
+                    "flow_id": flow_id,
+                    "flow_policy": flow_policy,
+                    "lanes": lanes,
+                }));
+            flow["flow_identity"]["id"] =
+                serde_json::json!(format!("team-flow-flow:{identity_hash}"));
+        }
+        let payload = authority["resolved_all_flow_payload"].clone();
+        let payload_hash = taskflow_authority::team_flow_transition::hash_json(&payload);
+        authority["resolved_all_flow_payload_blake3"] = serde_json::json!(payload_hash.clone());
+        authority["authority_source"]["payload_blake3"] = serde_json::json!(payload_hash);
+    }
+
+    #[test]
+    fn persisted_team_flow_binding_policy_audit_table() {
+        let baseline =
+            crate::team_flow_authority_projection::test_support::canonical_compiled_bundle();
+        let flow_id = baseline["team_flow_authority"]["resolved_all_flow_payload"]
+            ["work_item_flow_bindings"]
+            .as_object()
+            .and_then(|bindings| bindings.values().next())
+            .and_then(serde_json::Value::as_str)
+            .expect("canonical binding flow")
+            .to_string();
+        let enabled_binding_count = baseline["team_flow_authority"]["resolved_all_flow_payload"]
+            ["work_item_flow_bindings"]
+            .as_object()
+            .map(serde_json::Map::len)
+            .expect("canonical bindings");
+        let mut disabled = baseline.clone();
+        disabled["team_flow_authority"]["resolved_all_flow_payload"]["work_item_flow_bindings"] =
+            serde_json::json!({"defect": flow_id.clone()});
+        if let Some(flow) = disabled["team_flow_authority"]["resolved_all_flow_payload"]["flows"]
+            .as_array_mut()
+            .and_then(|flows| {
+                flows
+                    .iter_mut()
+                    .find(|flow| flow["flow_id"].as_str() == Some(flow_id.as_str()))
+            })
+        {
+            flow["flow_policy"]["enabled"] = serde_json::Value::Bool(false);
+        }
+        refresh_binding_audit_fixture_hashes(&mut disabled);
+        let mut repeated = disabled.clone();
+        repeated["team_flow_authority"]["resolved_all_flow_payload"]["work_item_flow_bindings"]
+            ["runtime_defect"] = serde_json::json!(flow_id.clone());
+        refresh_binding_audit_fixture_hashes(&mut repeated);
+        let cases = [
+            ("enabled", baseline, 0usize, enabled_binding_count),
+            ("disabled", disabled, 1usize, 1usize),
+            ("repeated", repeated, 1usize, 2usize),
+        ];
+        for (case, bundle, blocker_count, binding_count) in cases {
+            let audit = audit_team_flow_binding_policies(&bundle);
+            assert_eq!(
+                audit["blockers"].as_array().map(Vec::len),
+                Some(blocker_count),
+                "{case} binding blocker count"
+            );
+            assert_eq!(
+                audit["context"]["bindings"].as_array().map(Vec::len),
+                Some(binding_count),
+                "{case} binding context count"
+            );
+            if case == "enabled" {
+                assert_eq!(audit["status"], "ready");
+            } else {
+                assert_eq!(audit["status"], "blocked");
+                assert_eq!(
+                    audit["blockers"],
+                    serde_json::json!(["team_flow_authority_flow_policy_disabled"])
+                );
+                assert!(audit["context"]["bindings"]
+                    .as_array()
+                    .is_some_and(|bindings| bindings.iter().all(|binding| {
+                        binding["flow_id"] == flow_id && binding["status"] == "blocked"
+                    })));
+            }
+        }
     }
 
     #[test]
@@ -3889,8 +4549,8 @@ dev_team:
     }
 
     #[test]
-    fn taskflow_docflow_seam_receipt_backed_check_does_not_require_receipt_when_docflow_inputs_are_ready()
-     {
+    fn taskflow_docflow_seam_receipt_backed_check_does_not_require_receipt_when_docflow_inputs_are_ready(
+    ) {
         let payload = minimal_payload_for_operator_contract_status_checks();
         let docflow_verdict = RuntimeConsumptionDocflowVerdict {
             status: "pass".to_string(),

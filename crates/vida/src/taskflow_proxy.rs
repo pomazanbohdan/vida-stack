@@ -8420,6 +8420,7 @@ fn apply_disabled_external_backend_refs(payload: &mut serde_json::Value) {
 }
 
 fn route_payload_for_dispatch_target(
+    compiled_bundle: &serde_json::Value,
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> serde_json::Value {
@@ -8427,8 +8428,12 @@ fn route_payload_for_dispatch_target(
         execution_plan,
         dispatch_target,
     );
-    let mut payload =
-        crate::taskflow_routing::route_explain_payload(execution_plan, dispatch_target, route);
+    let mut payload = crate::taskflow_routing::route_explain_payload(
+        execution_plan,
+        compiled_bundle,
+        dispatch_target,
+        route,
+    );
     let preferred_profile_id = payload["selected_model_profile_id"].as_str();
     if let Some(selected_backend) = payload["selected_backend"].as_str() {
         if let Some(readiness) =
@@ -8590,24 +8595,18 @@ fn attach_pricing_diagnostics_to_route(
     }
 }
 
-fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
-    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    let mut targets =
-        crate::taskflow_routing::dispatch_contract_execution_lane_sequence(dispatch_contract);
-    if targets.is_empty() {
-        targets.extend(
-            ["implementation", "coach", "verification"]
-                .into_iter()
-                .map(str::to_string),
-        );
-    }
+fn route_validate_targets(
+    role_selection: &crate::RuntimeConsumptionLaneSelection,
+) -> Result<Vec<String>, String> {
+    let execution_plan = &role_selection.execution_plan;
+    let mut targets = crate::runtime_dispatch_state::typed_lane_sequence(role_selection, false)?;
     targets.extend(
         crate::taskflow_routing::direct_development_flow_route_selectors(execution_plan)
             .into_iter()
             .map(|(target, _)| target),
     );
     let mut unique = BTreeSet::new();
-    targets
+    Ok(targets
         .into_iter()
         .map(|target| match target.as_str() {
             "implementer" | "analysis" => "implementation".to_string(),
@@ -8616,7 +8615,7 @@ fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
         })
         .filter(|target| !target.trim().is_empty())
         .filter(|target| unique.insert(target.clone()))
-        .collect()
+        .collect::<Vec<_>>())
 }
 
 fn validate_routing_route_field_truth_rows(
@@ -8655,10 +8654,37 @@ fn build_validate_routing_payload(
     context: &crate::state_store::RunGraphDispatchContext,
     execution_plan: &serde_json::Value,
 ) -> serde_json::Value {
-    let routes = route_validate_targets(execution_plan)
-        .into_iter()
-        .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
-        .collect::<Vec<_>>();
+    let role_selection = match context.role_selection() {
+        Ok(selection) => selection,
+        Err(error) => {
+            return serde_json::json!({
+                "surface": "vida taskflow validate-routing",
+                "status": "blocked",
+                "blocker_codes": [error.to_string()],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "routes": [],
+            });
+        }
+    };
+    let routes = match route_validate_targets(&role_selection) {
+        Ok(targets) => targets,
+        Err(blocker_code) => {
+            return serde_json::json!({
+                "surface": "vida taskflow validate-routing",
+                "status": "blocked",
+                "blocker_codes": [blocker_code],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "routes": [],
+            });
+        }
+    }
+    .into_iter()
+    .map(|target| {
+        route_payload_for_dispatch_target(&role_selection.compiled_bundle, execution_plan, &target)
+    })
+    .collect::<Vec<_>>();
     let blocker_codes = routes
         .iter()
         .flat_map(|route| {
@@ -8964,23 +8990,52 @@ fn build_config_actuation_census_payload(
     context: &crate::state_store::RunGraphDispatchContext,
     execution_plan: &serde_json::Value,
 ) -> serde_json::Value {
-    let routes = route_validate_targets(execution_plan)
-        .into_iter()
-        .map(|target| {
-            let route = route_payload_for_dispatch_target(execution_plan, &target);
-            let model_profile_readiness_audit =
-                model_profile_readiness_audit_payload_for_route(&target, &route);
-            let rows = config_actuation_census_rows_for_route(&route);
-            serde_json::json!({
-                "dispatch_target": target,
-                "status": route["status"],
-                "selected_backend": route["selected_backend"],
-                "selection_source": route["selection_source"],
-                "model_profile_readiness_audit": model_profile_readiness_audit,
-                "rows": rows,
-            })
+    let role_selection = match context.role_selection() {
+        Ok(selection) => selection,
+        Err(error) => {
+            return serde_json::json!({
+                "surface": "vida taskflow config-actuation census",
+                "status": "blocked",
+                "blocker_codes": [error.to_string()],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "routes": [],
+            });
+        }
+    };
+    let routes = match route_validate_targets(&role_selection) {
+        Ok(targets) => targets,
+        Err(blocker_code) => {
+            return serde_json::json!({
+                "surface": "vida taskflow config-actuation census",
+                "status": "blocked",
+                "blocker_codes": [blocker_code],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "routes": [],
+            });
+        }
+    }
+    .into_iter()
+    .map(|target| {
+        let route = route_payload_for_dispatch_target(
+            &role_selection.compiled_bundle,
+            execution_plan,
+            &target,
+        );
+        let model_profile_readiness_audit =
+            model_profile_readiness_audit_payload_for_route(&target, &route);
+        let rows = config_actuation_census_rows_for_route(&route);
+        serde_json::json!({
+            "dispatch_target": target,
+            "status": route["status"],
+            "selected_backend": route["selected_backend"],
+            "selection_source": route["selection_source"],
+            "model_profile_readiness_audit": model_profile_readiness_audit,
+            "rows": rows,
         })
-        .collect::<Vec<_>>();
+    })
+    .collect::<Vec<_>>();
     let row_count = routes
         .iter()
         .filter_map(|route| route["rows"].as_array().map(Vec::len))
@@ -9089,7 +9144,45 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let Some(execution_plan) = execution_plan_from_dispatch_context(&context) else {
+    let role_selection = match crate::taskflow_run_graph::rehydrate_dispatch_context_role_selection(
+        &store, &context,
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let payload = serde_json::json!({
+                "surface": match parsed.mode {
+                    RouteDiagnosticMode::Explain => "vida taskflow route explain",
+                    RouteDiagnosticMode::ModelProfileReadinessAudit => {
+                        "vida taskflow route model-profile-readiness"
+                    }
+                    RouteDiagnosticMode::ValidateRouting => "vida taskflow validate-routing",
+                    RouteDiagnosticMode::ConfigActuationCensus => {
+                        "vida taskflow config-actuation census"
+                    }
+                },
+                "status": "blocked",
+                "blocker_codes": [error.clone()],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "routes": [],
+            });
+            let payload =
+                normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "surface": "vida taskflow diagnostic",
+                        "status": "blocked",
+                        "blocker_codes": ["unsupported_blocker_code"],
+                        "next_actions": ["inspect diagnostic blockers"],
+                    })
+                });
+            crate::print_json_pretty(&payload);
+            return ExitCode::from(1);
+        }
+    };
+    let execution_plan = &role_selection.execution_plan;
+    if execution_plan.is_null() || !execution_plan.is_object() {
         eprintln!(
             "Run `{}` has no object role_selection.execution_plan in dispatch context.",
             context.run_id
@@ -9103,14 +9196,14 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             let dispatch_target = match parsed.dispatch_target {
                 Some(target) => target,
                 None => match parsed.runtime_role.as_deref() {
-                    Some(role) => match crate::taskflow_routing::dispatch_target_for_runtime_role(
-                        execution_plan,
+                    Some(role) => match crate::runtime_dispatch_state::authority_dispatch_target_for_runtime_role(
+                        &role_selection,
                         role,
                     ) {
-                        Some(target) => target,
-                        None => {
+                        Ok(target) => target,
+                        Err(error) => {
                             eprintln!(
-                                "Unable to resolve dispatch target for runtime role `{role}`."
+                                "Unable to resolve dispatch target for runtime role `{role}`: {error}"
                             );
                             return ExitCode::from(1);
                         }
@@ -9118,7 +9211,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                     None => "implementation".to_string(),
                 },
             };
-            let mut explain = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            let mut explain = route_payload_for_dispatch_target(
+                &role_selection.compiled_bundle,
+                execution_plan,
+                &dispatch_target,
+            );
             if parsed.include_pricing {
                 attach_pricing_diagnostics_to_route(
                     &mut explain,
@@ -9159,14 +9256,14 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             let dispatch_target = match parsed.dispatch_target {
                 Some(target) => target,
                 None => match parsed.runtime_role.as_deref() {
-                    Some(role) => match crate::taskflow_routing::dispatch_target_for_runtime_role(
-                        execution_plan,
+                    Some(role) => match crate::runtime_dispatch_state::authority_dispatch_target_for_runtime_role(
+                        &role_selection,
                         role,
                     ) {
-                        Some(target) => target,
-                        None => {
+                        Ok(target) => target,
+                        Err(error) => {
                             eprintln!(
-                                "Unable to resolve dispatch target for runtime role `{role}`."
+                                "Unable to resolve dispatch target for runtime role `{role}`: {error}"
                             );
                             return ExitCode::from(1);
                         }
@@ -9174,7 +9271,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                     None => "implementation".to_string(),
                 },
             };
-            let route = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            let route = route_payload_for_dispatch_target(
+                &role_selection.compiled_bundle,
+                execution_plan,
+                &dispatch_target,
+            );
             let mut audit =
                 model_profile_readiness_audit_payload_for_route(&dispatch_target, &route);
             if let Some(object) = audit.as_object_mut() {
@@ -9289,6 +9390,59 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn route_selection_for_plan(
+        execution_plan: serde_json::Value,
+    ) -> crate::RuntimeConsumptionLaneSelection {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let configured_fallback = compiled_bundle
+            .get("role_selection")
+            .and_then(|selection| selection.get("fallback_role"))
+            .and_then(serde_json::Value::as_str)
+            .expect("canonical bundle must expose configured fallback role")
+            .to_string();
+        crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: configured_fallback.clone(),
+            request: "validate routing".to_string(),
+            selected_role: configured_fallback,
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle,
+            execution_plan,
+            reason: "test fixture".to_string(),
+        }
+    }
+
+    fn canonical_typed_targets(selection: &crate::RuntimeConsumptionLaneSelection) -> Vec<String> {
+        crate::runtime_dispatch_state::typed_lane_sequence(selection, false)
+            .expect("canonical bundle must expose typed lane sequence")
+    }
+
+    fn route_payload_for_dispatch_target(
+        execution_plan: &serde_json::Value,
+        dispatch_target: &str,
+    ) -> serde_json::Value {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            None,
+            None,
+        )
+        .expect("canonical fixture authority should compile");
+        let mut execution_plan = execution_plan.clone();
+        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"] =
+            serde_json::Value::String(authority.authority_id.clone());
+        super::route_payload_for_dispatch_target(&compiled_bundle, &execution_plan, dispatch_target)
+    }
 
     trait StateStoreFixtureTaskExt {
         fn create_task_with_fixture_parent<'a>(
@@ -12080,7 +12234,7 @@ mod tests {
             }
         });
 
-        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
+        let payload = route_payload_for_dispatch_target(&execution_plan, "implementation");
 
         assert_eq!(
             payload["selected_backend"].as_str(),
@@ -12150,7 +12304,7 @@ mod tests {
             }
         });
 
-        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
+        let payload = route_payload_for_dispatch_target(&execution_plan, "implementation");
 
         assert_eq!(
             payload["selected_backend"].as_str(),
@@ -12750,9 +12904,10 @@ agent_system:
     }
 
     #[test]
-    fn validate_routing_targets_fall_back_when_contract_is_missing() {
-        let targets = super::route_validate_targets(&serde_json::json!({}));
-        assert_eq!(targets, vec!["implementation", "coach", "verification"]);
+    fn validate_routing_targets_use_typed_sequence_when_contract_is_missing() {
+        let selection = route_selection_for_plan(serde_json::json!({}));
+        let targets = super::route_validate_targets(&selection).expect("typed sequence");
+        assert_eq!(targets, canonical_typed_targets(&selection));
     }
 
     #[test]
@@ -12765,8 +12920,9 @@ agent_system:
             }
         });
 
-        let targets = super::route_validate_targets(&execution_plan);
-        assert_eq!(targets, vec!["implementation", "coach", "architecture"]);
+        let selection = route_selection_for_plan(execution_plan);
+        let targets = super::route_validate_targets(&selection).expect("typed sequence");
+        assert_eq!(targets, canonical_typed_targets(&selection));
     }
 
     #[test]
@@ -12785,9 +12941,28 @@ agent_system:
                 }
             }
         });
+        let expected_analyst = execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"]
+            .as_array()
+            .and_then(|sequence| sequence.first())
+            .and_then(serde_json::Value::as_str)
+            .expect("fixture dispatch sequence must expose a target")
+            .to_string();
+        let expected_designer = execution_plan["development_flow"]
+            .as_object()
+            .and_then(|flow| {
+                flow.iter()
+                    .find(|(key, _)| key.as_str() != "dispatch_contract")
+            })
+            .and_then(|(_, route)| route.get("dispatch_target"))
+            .and_then(serde_json::Value::as_str)
+            .expect("fixture direct route must expose a target")
+            .to_string();
 
-        let targets = super::route_validate_targets(&execution_plan);
-        assert_eq!(targets, vec!["analyst", "designer"]);
+        let selection = route_selection_for_plan(execution_plan);
+        let targets = super::route_validate_targets(&selection).expect("typed sequence");
+        assert!(targets.contains(&expected_analyst));
+        assert!(targets.contains(&expected_designer));
     }
 
     #[test]
@@ -12806,9 +12981,32 @@ agent_system:
                 }
             }
         });
+        let expected_analyst = execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"]
+            .as_array()
+            .and_then(|sequence| sequence.first())
+            .and_then(serde_json::Value::as_str)
+            .expect("fixture dispatch sequence must expose a target")
+            .to_string();
+        let (expected_route_alias, expected_coach) = execution_plan["development_flow"]
+            .as_object()
+            .and_then(|flow| {
+                flow.iter()
+                    .find(|(key, _)| key.as_str() != "dispatch_contract")
+            })
+            .and_then(|(key, route)| {
+                route
+                    .get("dispatch_target")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|target| (key.clone(), target.to_string()))
+            })
+            .expect("fixture direct route must expose an alias and target");
 
-        let targets = super::route_validate_targets(&execution_plan);
-        assert_eq!(targets, vec!["analyst", "coach_test_gate", "coach"]);
+        let selection = route_selection_for_plan(execution_plan);
+        let targets = super::route_validate_targets(&selection).expect("typed sequence");
+        assert!(targets.contains(&expected_analyst));
+        assert!(targets.contains(&expected_route_alias));
+        assert!(targets.contains(&expected_coach));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::project_activator_surface::{
-    ProjectActivationStatusTruth, canonical_project_activation_status_truth,
+    canonical_project_activation_status_truth, ProjectActivationStatusTruth,
 };
 use crate::status_surface_host_agents::build_host_agent_status_summary;
 use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;

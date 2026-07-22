@@ -40,186 +40,19 @@ fn canonicalize_moved_test_request(request: &str) -> String {
 }
 
 pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value {
+    // This helper is retained as a schema-level diagnostic for older callers.
+    // Executable task ids, commands, and graph edges must come from the selected
+    // TeamFlow/dev_team relation; request text alone is not an authority source.
     let canonical_request = canonicalize_moved_test_request(request);
-    let feature_slug = crate::infer_feature_request_slug(request)
-        .trim()
-        .trim_matches('-')
-        .to_string();
-    let feature_slug = if feature_slug.is_empty() {
-        "feature-request".to_string()
-    } else {
-        feature_slug
-    };
-    let feature_title = crate::infer_feature_request_title(request);
-    let design_doc_path = format!("docs/product/spec/{feature_slug}-design.md");
-    let artifact_path = format!("product/spec/{feature_slug}-design");
-    let epic_task_id = format!("feature-{feature_slug}");
-    let spec_task_id = format!("{epic_task_id}-spec");
-    let work_pool_task_id = format!("{epic_task_id}-work-pool");
-    let dev_task_id = format!("{epic_task_id}-dev");
-    let epic_title = format!("Feature epic: {feature_title}");
-    let spec_title = format!("Spec pack: {feature_title}");
-    let work_pool_title = format!("Work-pool pack: {feature_title}");
-    let dev_title = format!("Dev pack: {feature_title}");
-    let quoted_request = crate::shell_quote(&canonical_request);
-    let work_pool_semantics = crate::launcher_task_commands::TaskExecutionSemanticsCommandArgs {
-        execution_mode: "container_only",
-        order_bucket: &epic_task_id,
-        parallel_group: "work-pool-pack",
-        conflict_domain: &work_pool_task_id,
-    };
-    let dev_semantics = crate::launcher_task_commands::TaskExecutionSemanticsCommandArgs {
-        execution_mode: "parallel_safe",
-        order_bucket: &epic_task_id,
-        parallel_group: "dev-pack",
-        conflict_domain: &dev_task_id,
-    };
-
     serde_json::json!({
         "required": true,
-        "status": "pending",
-        "bootstrap_command": format!(
-            "vida taskflow bootstrap-spec {} --json",
-            quoted_request,
-        ),
-        "feature_slug": feature_slug,
-        "feature_title": feature_title,
-        "design_doc_path": design_doc_path,
-        "design_artifact_path": artifact_path,
-        "epic": {
-            "required": true,
-            "task_id": epic_task_id,
-            "title": epic_title,
-            "runtime": "vida taskflow",
-            "create_command": crate::build_task_create_command(
-                &epic_task_id,
-                &epic_title,
-                "epic",
-                None,
-                &["feature-request", "spec-first"],
-                Some(&quoted_request),
-                None,
-            ),
-            "close_command": crate::build_task_close_command(
-                &epic_task_id,
-                "feature delivery closed after proof and runtime handoff",
-            )
-        },
-        "spec_task": {
-            "required": true,
-            "task_id": spec_task_id,
-            "title": spec_title,
-            "runtime": "vida taskflow",
-            "inspect_command": crate::build_task_show_command(&spec_task_id),
-            "ensure_command": crate::build_task_ensure_command(
-                &spec_task_id,
-                &spec_title,
-                "task",
-                Some(&epic_task_id),
-                &["spec-pack", "documentation"],
-                Some(&crate::shell_quote("bounded design/spec packet for the feature request")),
-                None,
-            ),
-            "create_command": crate::build_task_create_command(
-                &spec_task_id,
-                &spec_title,
-                "task",
-                Some(&epic_task_id),
-                &["spec-pack", "documentation"],
-                Some(&crate::shell_quote("bounded design/spec packet for the feature request")),
-                None,
-            ),
-            "close_command": crate::build_task_close_command(
-                &spec_task_id,
-                "design packet finalized and handed off into tracked work-pool shaping",
-            )
-        },
-        "work_pool_task": {
-            "required": true,
-            "task_id": work_pool_task_id,
-            "title": work_pool_title,
-            "runtime": "vida taskflow",
-            "inspect_command": crate::build_task_show_command(&work_pool_task_id),
-            "ensure_command": crate::build_task_ensure_command(
-                &work_pool_task_id,
-                &work_pool_title,
-                "task",
-                Some(&epic_task_id),
-                &["work-pool-pack"],
-                None,
-                Some(work_pool_semantics),
-            ),
-            "create_command": crate::build_task_create_command(
-                &work_pool_task_id,
-                &work_pool_title,
-                "task",
-                Some(&epic_task_id),
-                &["work-pool-pack"],
-                None,
-                Some(work_pool_semantics),
-            ),
-            "close_command": crate::build_task_close_command(
-                &work_pool_task_id,
-                "work-pool packet closed after delegated execution packet was shaped",
-            )
-        },
-        "dev_task": {
-            "required": false,
-            "task_id": dev_task_id,
-            "title": dev_title,
-            "runtime": "vida taskflow",
-            "inspect_command": crate::build_task_show_command(&dev_task_id),
-            "ensure_command": crate::build_task_ensure_command(
-                &dev_task_id,
-                &dev_title,
-                "task",
-                Some(&epic_task_id),
-                &["dev-pack"],
-                None,
-                Some(dev_semantics),
-            ),
-            "create_command": crate::build_task_create_command(
-                &dev_task_id,
-                &dev_title,
-                "task",
-                Some(&epic_task_id),
-                &["dev-pack"],
-                None,
-                Some(dev_semantics),
-            ),
-            "close_command": crate::build_task_close_command(
-                &dev_task_id,
-                "delegated development packet reached proof-ready closure",
-            )
-        },
-        "docflow": {
-            "required": true,
-            "runtime": "vida docflow",
-            "init_command": format!(
-                "vida docflow init {} {} product_spec {}",
-                design_doc_path,
-                artifact_path,
-                crate::shell_quote("initialize bounded feature design"),
-            ),
-            "finalize_command": format!(
-                "vida docflow finalize-edit {} {}",
-                design_doc_path,
-                crate::shell_quote("record bounded feature design"),
-            ),
-            "check_command": format!(
-                "vida docflow check --root . {}",
-                design_doc_path,
-            )
-        },
-        "handoff_sequence": [
-            "create epic",
-            "open spec task",
-            "open work-pool shaping task",
-            "initialize bounded design document",
-            "finalize and validate bounded design document",
-            "close spec task",
-            "shape dev packet in TaskFlow before delegated implementation"
-        ]
+        "status": "blocked",
+        "executable": false,
+        "view_only": true,
+        "activation_semantics": "configured_team_flow_relation_required",
+        "blocker_codes": ["team_flow_authority_tracked_flow_relation_missing"],
+        "request": canonical_request,
+        "schema_vocabulary": ["epic", "spec_task", "work_pool_task", "dev_task"],
     })
 }
 
@@ -391,17 +224,20 @@ fn request_requires_execution_preparation(
             "build".to_string(),
         ],
     );
-    let task_class = authority
-        .ordered_nodes()
-        .find(|node| node.node.included)
-        .map(|node| node.node.task_class.trim().to_string())
-        .filter(|task_class| !task_class.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "team_flow_authority_execution_sequence_missing:{}",
-                authority.snapshot.flow_ref
-            )
-        })?;
+    let selected_node = authority
+        .resolve_target(None, selected_node_id)
+        .map_err(|error| error.to_string())?;
+    if !selected_node.included {
+        return Err(format!(
+            "team_flow_authority_selected_node_id_excluded:{flow_id}:{selected_node_id}"
+        ));
+    }
+    let task_class = selected_node.task_class.trim().to_string();
+    if task_class.is_empty() {
+        return Err(format!(
+            "team_flow_authority_selected_node_task_class_missing:{flow_id}:{selected_node_id}"
+        ));
+    }
     let validation_gate = crate::json_bool(
         compiled_bundle["autonomous_execution"]
             .get("validation_report_required_before_implementation"),
@@ -715,8 +551,8 @@ fn persisted_policy_diagnostics(
 
 pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
     let _ = task_class;
-    // Packet families are runtime authority, not a Rust task-class default.
-    "configured_packet_template"
+    // Diagnostic vocabulary only; executable packet families come from TeamFlow.
+    "team_flow_packet_template_kind_unresolved"
 }
 
 #[derive(Debug, Default)]
@@ -734,6 +570,11 @@ fn derive_configured_dispatch_relations(
     let mut relations = ConfiguredDispatchRelations::default();
     let mut activation_by_key = serde_json::Map::new();
     let mut owner_roles = Vec::new();
+    if resolved_lanes.is_empty() {
+        relations
+            .blockers
+            .push("team_flow_authority_packet_relation_missing".to_string());
+    }
     for lane in resolved_lanes {
         let node_id = lane["node_id"].as_str().unwrap_or("<unknown-node>");
         let task_class = lane["task_class"].as_str().map(str::trim).unwrap_or("");
@@ -755,12 +596,10 @@ fn derive_configured_dispatch_relations(
             relations.packet_families.push(packet_family.to_string());
         }
         if !task_class.is_empty() && !packet_family.is_empty() {
-            if let Some(previous) = relations.packet_family_by_task_class.get(task_class) {
-                if previous.as_str() != Some(packet_family) {
-                    relations.blockers.push(format!(
-                        "team_flow_authority_task_class_packet_template_ambiguous:{task_class}"
-                    ));
-                }
+            if relations.packet_family_by_task_class.contains_key(task_class) {
+                relations.blockers.push(format!(
+                    "team_flow_authority_task_class_packet_template_ambiguous:{task_class}"
+                ));
             } else {
                 relations.packet_family_by_task_class.insert(
                     task_class.to_string(),
@@ -781,12 +620,10 @@ fn derive_configured_dispatch_relations(
                 .blockers
                 .push(format!("team_flow_authority_activation_missing:{node_id}"));
         } else if !task_class.is_empty() {
-            if let Some(previous) = activation_by_key.get(task_class) {
-                if previous != &activation {
-                    relations.blockers.push(format!(
-                        "team_flow_authority_task_class_activation_ambiguous:{task_class}"
-                    ));
-                }
+            if activation_by_key.contains_key(task_class) {
+                relations.blockers.push(format!(
+                    "team_flow_authority_task_class_activation_ambiguous:{task_class}"
+                ));
             } else {
                 activation_by_key.insert(task_class.to_string(), activation.clone());
                 relations
@@ -795,7 +632,7 @@ fn derive_configured_dispatch_relations(
             }
         }
         if runtime_role == "business_analyst" || task_class == TASK_CLASS_SPECIFICATION {
-            if !runtime_role.is_empty() && !owner_roles.iter().any(|value| value == runtime_role) {
+            if !runtime_role.is_empty() {
                 owner_roles.push(runtime_role.to_string());
             }
         }
@@ -1311,24 +1148,25 @@ fn build_runtime_orchestration_contract(
         .map(|lane| orchestration_checkpoint_label_for_contract(dispatch_contract, lane))
         .collect::<Result<Vec<_>, _>>();
     let design_gate_label = if requires_design_gate {
-        let design_gate_node = dispatch_contract["lane_sequence"]
+        let design_gate_nodes = dispatch_contract["lane_sequence"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(serde_json::Value::as_str)
             .filter_map(|node_id| dispatch_contract_lane(dispatch_contract, node_id).ok())
             .filter(|lane| lane["stage"].as_str() == Some("design_gate"))
-            .map(|lane| {
-                lane["node_id"]
-                    .as_str()
-                    .ok_or_else(|| "team_flow_authority_design_gate_node_id_missing".to_string())
-            })
-            .next()
-            .transpose();
-        match design_gate_node {
-            Ok(Some(node_id)) => orchestration_lane_step_label_for_contract(dispatch_contract, node_id),
-            Ok(None) => Err("team_flow_authority_design_gate_lane_missing".to_string()),
-            Err(blocker) => Err(blocker),
+            .collect::<Vec<_>>();
+        match design_gate_nodes.as_slice() {
+            [lane] => {
+                match lane["node_id"].as_str() {
+                    Some(node_id) => {
+                        orchestration_lane_step_label_for_contract(dispatch_contract, node_id)
+                    }
+                    None => Err("team_flow_authority_design_gate_node_id_missing".to_string()),
+                }
+            }
+            [] => Err("team_flow_authority_design_gate_lane_missing".to_string()),
+            _ => Err("team_flow_authority_design_gate_lane_ambiguous".to_string()),
         }
     } else {
         Ok(String::new())
@@ -1553,7 +1391,15 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
         requires_design_gate,
     );
     let tracked_flow_bootstrap = if requires_design_gate {
-        build_design_first_tracked_flow_bootstrap(&selection.request)
+        serde_json::json!({
+            "required": true,
+            "status": "blocked",
+            "executable": false,
+            "view_only": true,
+            "activation_semantics": "configured_team_flow_relation_required",
+            "blocker_codes": ["team_flow_authority_tracked_flow_relation_missing"],
+            "schema_vocabulary": ["epic", "spec_task", "work_pool_task", "dev_task"],
+        })
     } else {
         serde_json::Value::Null
     };
@@ -1875,14 +1721,20 @@ mod tests {
         let mut selection = strict_team_flow_selection(&bundle);
         selection.selected_role = "orchestrator".to_string();
         selection.matched_terms.clear();
-        selection.execution_plan = serde_json::Value::Null;
+        selection.execution_plan = serde_json::json!({
+            "team_flow_authority_selected_flow_id": bundle["team_flow_authority"]
+                ["resolved_all_flow_payload"]["flows"][0]["flow_id"]
+        });
         let error = super::task_class_for_selection_with_mode(
             &bundle,
             &selection,
             PrePlanTeamFlowSelectionMode::Persisted,
         )
             .expect_err("missing selected node must fail closed");
-        assert!(error.contains("team_flow_authority_selected_node_id_missing"));
+        assert!(
+            error.contains("team_flow_authority_selected_node_id_missing"),
+            "unexpected blocker: {error}"
+        );
     }
 
     #[test]
@@ -2245,48 +2097,28 @@ mod tests {
         let request = "Continue tf-post-r1-main-carveout with the next bounded owner-domain test move: move project_activator_command_accepts_json_output from crates/vida/src/main.rs into crates/vida/src/project_activator_surface.rs. Keep scope to that single test and any minimal test-only helper imports needed for compilation. Proof target: cargo test -p vida project_activator_command_accepts_json_output -- --nocapture. After a green bounded result, continue with the normal commit, push, release build, and system binary update cycle.";
 
         let bootstrap = build_design_first_tracked_flow_bootstrap(request);
-        let bootstrap_command = bootstrap["bootstrap_command"]
+        assert_eq!(bootstrap["status"], "blocked");
+        assert_eq!(bootstrap["executable"], false);
+        assert_eq!(bootstrap["view_only"], true);
+        assert!(bootstrap["request"]
             .as_str()
-            .expect("bootstrap command should render");
-
-        assert!(
-            bootstrap_command.contains(
+            .is_some_and(|value| value.contains(
                 "cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture"
-            ),
-            "bootstrap command should carry the canonical exact module-qualified proof target"
-        );
-        assert!(
-            !bootstrap_command.contains(
-                "cargo test -p vida project_activator_command_accepts_json_output -- --nocapture"
-            ),
-            "bootstrap command should not retain the bare moved-test proof target"
-        );
+            )));
+        assert!(bootstrap.get("bootstrap_command").is_none());
+        assert!(bootstrap["epic"]["task_id"].is_null());
     }
 
     #[test]
-    fn design_first_work_packet_commands_carry_execution_semantics() {
+    fn design_first_work_packet_bootstrap_has_no_executable_task_graph() {
         let bootstrap = build_design_first_tracked_flow_bootstrap(
             "Research the feature, write detailed specifications, create a plan, and implement runtime flow",
         );
-        let work_pool_ensure = bootstrap["work_pool_task"]["ensure_command"]
-            .as_str()
-            .expect("work-pool ensure command should render");
-        let work_pool_task_id = bootstrap["work_pool_task"]["task_id"]
-            .as_str()
-            .expect("work-pool task id should render");
-        let dev_ensure = bootstrap["dev_task"]["ensure_command"]
-            .as_str()
-            .expect("dev ensure command should render");
-        let dev_task_id = bootstrap["dev_task"]["task_id"]
-            .as_str()
-            .expect("dev task id should render");
-
-        assert!(work_pool_ensure.contains("--execution-mode container_only"));
-        assert!(work_pool_ensure.contains("--parallel-group work-pool-pack"));
-        assert!(work_pool_ensure.contains(&format!("--conflict-domain {work_pool_task_id}")));
-        assert!(dev_ensure.contains("--execution-mode parallel_safe"));
-        assert!(dev_ensure.contains("--parallel-group dev-pack"));
-        assert!(dev_ensure.contains(&format!("--conflict-domain {dev_task_id}")));
+        assert_eq!(bootstrap["status"], "blocked");
+        assert_eq!(bootstrap["activation_semantics"], "configured_team_flow_relation_required");
+        assert_eq!(bootstrap["schema_vocabulary"], json!(["epic", "spec_task", "work_pool_task", "dev_task"]));
+        assert!(bootstrap.get("work_pool_task").is_none());
+        assert!(bootstrap.get("dev_task").is_none());
     }
 
     #[test]
@@ -2865,5 +2697,49 @@ mod tests {
             unknown,
             vec!["team_flow_authority_tracked_flow_binding_unknown:unknown-pack"]
         );
+    }
+
+    #[test]
+    fn configured_dispatch_relations_table_is_order_invariant_and_fail_closed() {
+        let cases = vec![
+            (
+                "entry_not_first",
+                vec![
+                    json!({"node_id":"proof","task_class":"verification","runtime_role":"verifier","packet_template_kind":"proof","activation":{"runtime_role":"verifier"}}),
+                    json!({"node_id":"entry","task_class":"implementation","runtime_role":"worker","packet_template_kind":"write","activation":{"runtime_role":"worker"}}),
+                ],
+                None,
+                vec!["proof", "write"],
+            ),
+            ("zero", Vec::new(), Some("team_flow_authority_packet_relation_missing"), vec![]),
+            (
+                "missing",
+                vec![json!({"node_id":"missing","task_class":"implementation","runtime_role":"worker","packet_template_kind":"","activation":null})],
+                Some("team_flow_authority_packet_template_kind_missing:missing"),
+                vec![],
+            ),
+            (
+                "ambiguous",
+                vec![
+                    json!({"node_id":"a","task_class":"verification","runtime_role":"verifier","packet_template_kind":"proof-a","activation":{"runtime_role":"verifier"}}),
+                    json!({"node_id":"b","task_class":"verification","runtime_role":"verifier","packet_template_kind":"proof-b","activation":{"runtime_role":"prover"}}),
+                ],
+                Some("team_flow_authority_task_class_packet_template_ambiguous:verification"),
+                vec!["proof-a", "proof-b"],
+            ),
+        ];
+
+        for (name, lanes, blocker, expected_families) in cases {
+            let relations = derive_configured_dispatch_relations(&lanes);
+            assert_eq!(relations.packet_families, expected_families, "{name}");
+            match blocker {
+                Some(blocker) => assert!(
+                    relations.blockers.iter().any(|value| value == blocker),
+                    "{name} missing blocker {blocker}: {:?}",
+                    relations.blockers
+                ),
+                None => assert!(relations.blockers.is_empty(), "{name}: {:?}", relations.blockers),
+            }
+        }
     }
 }

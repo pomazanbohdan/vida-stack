@@ -754,10 +754,15 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
         )
     })?;
     let mut host_cli_agent_catalog =
-        project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(Some(catalog_entry));
+        project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(Some(
+            catalog_entry,
+        ));
     if host_cli_agent_catalog.is_empty() {
-        if Some(host_cli_system_materialization_mode(catalog_entry, &selected_host_cli_system))
-            .as_deref()
+        if Some(host_cli_system_materialization_mode(
+            catalog_entry,
+            &selected_host_cli_system,
+        ))
+        .as_deref()
             == Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)
         {
             host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
@@ -1241,22 +1246,6 @@ async fn open_project_activation_store(state_dir: PathBuf) -> Result<super::Stat
             ));
         }
     };
-    let instruction_source_root =
-        PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
-    let framework_memory_source_root =
-        PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
-    super::ensure_launcher_bootstrap(
-        &store,
-        &instruction_source_root,
-        &framework_memory_source_root,
-    )
-    .await
-    .map_err(|error| {
-        format!(
-            "unable to complete boot-safe launcher bootstrap for authoritative state store at {}: {error}",
-            state_dir.display()
-        )
-    })?;
     Ok(store)
 }
 
@@ -1809,6 +1798,24 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             return ExitCode::from(1);
         }
     };
+    if let Some(store) = activation_store.as_ref() {
+        let instruction_source_root =
+            PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+        let framework_memory_source_root =
+            PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+        if let Err(error) = super::ensure_launcher_bootstrap(
+            store,
+            &instruction_source_root,
+            &framework_memory_source_root,
+        )
+        .await
+        {
+            eprintln!(
+                "Project activation failed closed after mutation: unable to complete boot-safe launcher bootstrap for authoritative state store: {error}"
+            );
+            return ExitCode::from(1);
+        }
+    }
     let activation_truth_sync = if let Some(store) = activation_store {
         let activation_truth_sync = match super::sync_launcher_activation_snapshot(&store).await {
             Ok(snapshot) => {
@@ -2564,6 +2571,10 @@ mod tests {
     use super::activation_status::canonical_activation_status;
     use super::db_first_activation_truth_read_back_error;
     use super::merge_project_activation_into_init_view;
+    use crate::run;
+    use crate::state_store::LauncherActivationSnapshot;
+    use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
     use crate::DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE;
     use crate::DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE;
@@ -2571,10 +2582,6 @@ mod tests {
     use crate::DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE;
     use crate::WORKER_SCORECARDS_STATE;
     use crate::WORKER_STRATEGY_STATE;
-    use crate::run;
-    use crate::state_store::LauncherActivationSnapshot;
-    use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{EnvVarGuard, cli, guard_current_dir};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -2648,11 +2655,9 @@ mod tests {
 
         let merged = merge_project_activation_into_init_view(init_view, &project_activation_view);
         assert_eq!(merged["status"], "pending");
-        assert!(
-            merged["execution_gate"]["activation_pending"]
-                .as_bool()
-                .expect("execution gate activation_pending should exist")
-        );
+        assert!(merged["execution_gate"]["activation_pending"]
+            .as_bool()
+            .expect("execution gate activation_pending should exist"));
         assert_eq!(
             merged["execution_gate"]["taskflow_admitted"],
             serde_json::Value::Bool(false)
@@ -2727,26 +2732,20 @@ mod tests {
         assert_eq!(view["host_environment"]["selection_required"], true);
         assert_eq!(view["host_environment"]["template_materialized"], false);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("codex"))
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("qwen"))
-        );
-        assert!(
-            view["host_environment"]["template_source_root"]
-                .as_str()
-                .expect("template source root should render")
-                .ends_with("/.codex")
-        );
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["template_source_root"]
+            .as_str()
+            .expect("template source root should render")
+            .ends_with("/.codex"));
     }
 
     #[test]
@@ -2883,16 +2882,14 @@ mod tests {
         );
         assert_eq!(view["triggers"]["agent_extensions_invalid"], true);
         assert_eq!(view["activation_pending"], true);
-        assert!(
-            view["next_steps"]
-                .as_array()
-                .expect("next steps should render")
-                .iter()
-                .any(|step| step
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("dispatch alias runtime projection is stale"))
-        );
+        assert!(view["next_steps"]
+            .as_array()
+            .expect("next steps should render")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .unwrap_or_default()
+                .contains("dispatch alias runtime projection is stale")));
     }
 
     #[test]
@@ -2945,14 +2942,12 @@ mod tests {
 
         let view_before = super::build_project_activator_view(harness.path());
         assert_eq!(view_before["triggers"]["agent_extensions_invalid"], true);
-        assert!(
-            view_before["agent_extensions"]["registry_projections"]
-                .as_array()
-                .expect("registry projections should render")
-                .iter()
-                .any(|projection| projection["config_key"] == "commands"
-                    && projection["status"] == "stale")
-        );
+        assert!(view_before["agent_extensions"]["registry_projections"]
+            .as_array()
+            .expect("registry projections should render")
+            .iter()
+            .any(|projection| projection["config_key"] == "commands"
+                && projection["status"] == "stale"));
 
         super::repair_project_activation_assets(harness.path())
             .expect("repair should create missing runtime command projection");
@@ -2961,14 +2956,12 @@ mod tests {
             .expect("runtime command projection should be readable after repair");
         assert!(projection.contains("command_id: agent-init-worker"));
         let view_after = super::build_project_activator_view(harness.path());
-        assert!(
-            view_after["agent_extensions"]["registry_projections"]
-                .as_array()
-                .expect("registry projections should render")
-                .iter()
-                .any(|projection| projection["config_key"] == "commands"
-                    && projection["status"] == "in_sync")
-        );
+        assert!(view_after["agent_extensions"]["registry_projections"]
+            .as_array()
+            .expect("registry projections should render")
+            .iter()
+            .any(|projection| projection["config_key"] == "commands"
+                && projection["status"] == "in_sync"));
         let validation_error = view_after["agent_extensions"]["validation_error"]
             .as_str()
             .unwrap_or_default();
@@ -3080,11 +3073,9 @@ host_environment:
 
         let registry = super::host_cli_system_registry_from_config(Some(&config));
         assert!(registry.get("codex").is_none());
-        let error = super::resolved_host_cli_agent_catalog_for_root(
-            std::path::Path::new("."),
-            &config,
-        )
-        .expect_err("missing explicit registry entry must be a terminal config blocker");
+        let error =
+            super::resolved_host_cli_agent_catalog_for_root(std::path::Path::new("."), &config)
+                .expect_err("missing explicit registry entry must be a terminal config blocker");
         assert!(error.starts_with("host_cli_system_config_missing:"));
     }
 
@@ -3261,30 +3252,22 @@ host_environment:
             view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
             4
         );
-        assert!(
-            view["normal_work_defaults"]
-                .get("local_codex_guide")
-                .is_none()
-        );
-        assert!(
-            view["normal_work_defaults"]
-                .get("codex_tier_rates")
-                .is_none()
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("qwen"))
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("codex"))
-        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
     }
 
     #[test]
@@ -3516,16 +3499,12 @@ host_environment:
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
         );
         assert_eq!(view["project_docs"]["agent_configuration_guide"], true);
-        assert!(
-            view["normal_work_defaults"]
-                .get("local_codex_guide")
-                .is_none()
-        );
-        assert!(
-            view["normal_work_defaults"]
-                .get("codex_tier_rates")
-                .is_none()
-        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
     }
 
     #[test]
@@ -3600,15 +3579,13 @@ host_environment:
             materialized_surface(&rendered, "framework_instruction_bundles")["status"],
             "no_change"
         );
-        assert!(
-            rendered["potential_materialization_scope"]
-                .as_array()
-                .expect("potential scope should render")
-                .iter()
-                .any(|scope| scope
-                    .as_str()
-                    .is_some_and(|scope| scope.contains("docs/**")))
-        );
+        assert!(rendered["potential_materialization_scope"]
+            .as_array()
+            .expect("potential scope should render")
+            .iter()
+            .any(|scope| scope
+                .as_str()
+                .is_some_and(|scope| scope.contains("docs/**"))));
     }
 
     #[test]
@@ -3636,13 +3613,11 @@ host_environment:
             assert_eq!(surface["changed_file_count"], 0);
             assert_eq!(surface["status"], "no_change");
         }
-        assert!(
-            rendered["potential_materialization_scope"]
-                .as_array()
-                .expect("potential scope should render")
-                .iter()
-                .any(|scope| scope.as_str() == Some(".vida/**"))
-        );
+        assert!(rendered["potential_materialization_scope"]
+            .as_array()
+            .expect("potential scope should render")
+            .iter()
+            .any(|scope| scope.as_str() == Some(".vida/**")));
     }
 
     #[test]
@@ -3701,24 +3676,18 @@ host_environment:
         assert!(config.contains("cli_system: codex"));
         assert!(harness.path().join("docs/project-root-map.md").is_file());
         assert!(harness.path().join("docs/product/spec/index.md").is_file());
-        assert!(
-            harness
-                .path()
-                .join("docs/product/spec/templates/feature-design-document.template.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join("docs/process/documentation-tooling-map.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join("docs/process/codex-agent-configuration-guide.md")
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join("docs/product/spec/templates/feature-design-document.template.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/documentation-tooling-map.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/codex-agent-configuration-guide.md")
+            .is_file());
         assert!(harness.path().join(".codex/config.toml").is_file());
         assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
         assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
@@ -3845,30 +3814,22 @@ host_environment:
             assert!(!rendered.contains("vida_task_classes"));
         }
 
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_implementer.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_coach.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_verifier.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_escalation.toml")
-                .exists()
-        );
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_implementer.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_coach.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_verifier.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_escalation.toml")
+            .exists());
     }
 
     #[test]

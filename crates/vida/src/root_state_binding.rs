@@ -67,8 +67,8 @@ fn os_string_to_display_string(value: OsString) -> String {
     PathBuf::from(value).display().to_string()
 }
 
-pub(crate) fn bind_runtime_state_dir_for_project_bound_command()
--> Result<Option<RuntimeStateDirGuard>, String> {
+pub(crate) fn bind_runtime_state_dir_for_project_bound_command(
+) -> Result<Option<RuntimeStateDirGuard>, String> {
     match bind_runtime_state_dir_to_current_project() {
         Ok(guard) => Ok(guard),
         Err(error) => {
@@ -132,8 +132,8 @@ pub(crate) fn preserve_runtime_state_dir_env_for_parse_only() -> Option<RuntimeS
     })
 }
 
-pub(crate) fn preserve_runtime_state_dir_env_for_project_bound_command()
--> Option<RuntimeStateDirGuard> {
+pub(crate) fn preserve_runtime_state_dir_env_for_project_bound_command(
+) -> Option<RuntimeStateDirGuard> {
     let normalized_guard = normalize_runtime_state_dir_env_for_parse();
     let mut guard = normalized_guard.unwrap_or(RuntimeStateDirGuard {
         previous: None,

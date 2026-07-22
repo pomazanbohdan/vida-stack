@@ -1,8 +1,8 @@
 use super::*;
 use crate::state_store::state_store_task_models::work_item_contributes_to_task_stats;
 use taskflow_core::task::import_export::{
-    TaskReconciliationRollupRowInput,
     task_reconciliation_rollup as decide_task_reconciliation_rollup,
+    TaskReconciliationRollupRowInput,
 };
 
 impl StateStore {
@@ -673,13 +673,11 @@ mod tests {
             store.show_task("vida-stale").await,
             Err(StateStoreError::MissingTask { .. })
         ));
-        assert!(
-            store
-                .validate_task_graph()
-                .await
-                .expect("graph validation should run")
-                .is_empty()
-        );
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should run")
+            .is_empty());
 
         let latest = store
             .latest_task_reconciliation_summary()
@@ -696,8 +694,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks()
-     {
+    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -895,8 +893,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_with_taskflow_snapshot_rejects_runtime_linked_stale_task_deletion_before_mutation()
-     {
+    async fn replace_with_taskflow_snapshot_rejects_runtime_linked_stale_task_deletion_before_mutation(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1000,8 +998,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_with_taskflow_snapshot_file_rejects_runtime_linked_stale_task_deletion_before_mutation()
-     {
+    async fn replace_with_taskflow_snapshot_file_rejects_runtime_linked_stale_task_deletion_before_mutation(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1107,8 +1105,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload()
-     {
+    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1196,8 +1194,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload()
-     {
+    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

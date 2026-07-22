@@ -186,12 +186,10 @@ fn state_reset_corrupted_surrealkv_zombie_d_public_recovery_contract() {
         .as_str()
         .map(PathBuf::from)
         .expect("state reset JSON should expose recovery receipt path");
-    assert!(
-        archive_path
-            .join("wal")
-            .join("00000000000000000003.wal")
-            .is_file()
-    );
+    assert!(archive_path
+        .join("wal")
+        .join("00000000000000000003.wal")
+        .is_file());
     assert!(receipt_path.is_file());
     assert!(state_dir.join("manifest").is_dir());
 
@@ -266,22 +264,18 @@ fn state_reset_without_archive_zombie_d_public_blocker_contract() {
     let reset_value = parse_json_output(&["state", "reset", "--reinit", "--json"], &reset);
     support::assert_release1_operator_shape("vida state reset", &reset_value);
     assert_eq!(reset_value["status"], "blocked");
-    assert!(
-        reset_value["blocker_codes"]
-            .as_array()
-            .expect("state reset blocker codes should be an array")
-            .iter()
-            .any(|code| code == "state_reset_failed")
-    );
-    assert!(
-        reset_value["next_actions"]
-            .as_array()
-            .expect("state reset next actions should be an array")
-            .iter()
-            .any(|action| action
-                .as_str()
-                .is_some_and(|action| action.contains("--archive --reinit")))
-    );
+    assert!(reset_value["blocker_codes"]
+        .as_array()
+        .expect("state reset blocker codes should be an array")
+        .iter()
+        .any(|code| code == "state_reset_failed"));
+    assert!(reset_value["next_actions"]
+        .as_array()
+        .expect("state reset next actions should be an array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|action| action.contains("--archive --reinit"))));
     assert!(
         corrupt_wal.is_file(),
         "failed reset must preserve source WAL evidence"
@@ -339,13 +333,11 @@ fn state_reset_and_status_lock_contention_zombie_d_public_contract() {
     let status_value = parse_json_output(&["status", "--summary", "--json"], &status);
     support::assert_release1_operator_shape("vida status", &status_value);
     assert_eq!(status_value["status"], "blocked");
-    assert!(
-        status_value["blocker_codes"]
-            .as_array()
-            .expect("status blocker codes should be an array")
-            .iter()
-            .any(|code| code == "state_store_read_lock_contention")
-    );
+    assert!(status_value["blocker_codes"]
+        .as_array()
+        .expect("status blocker codes should be an array")
+        .iter()
+        .any(|code| code == "state_store_read_lock_contention"));
 
     let reset = vida()
         .args([
@@ -371,13 +363,11 @@ fn state_reset_and_status_lock_contention_zombie_d_public_contract() {
     );
     support::assert_release1_operator_shape("vida state reset", &reset_value);
     assert_eq!(reset_value["status"], "blocked");
-    assert!(
-        reset_value["blocker_codes"]
-            .as_array()
-            .expect("state reset blocker codes should be an array")
-            .iter()
-            .any(|code| code == "state_reset_failed")
-    );
+    assert!(reset_value["blocker_codes"]
+        .as_array()
+        .expect("state reset blocker codes should be an array")
+        .iter()
+        .any(|code| code == "state_reset_failed"));
     assert!(
         corrupt_wal.is_file(),
         "locked reset must preserve WAL evidence"
@@ -609,24 +599,20 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         public_analysis_text.contains("Preserve requirement thirteen"),
         "redacted analysis should preserve requirements beyond the atom cap: {public_analysis_text}"
     );
-    assert!(
-        artifact["requirement_atoms"]
-            .as_array()
-            .expect("atoms should render")
-            .iter()
-            .any(|atom| atom["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("Build the feature")))
-    );
-    assert!(
-        artifact["requirement_atoms"]
-            .as_array()
-            .expect("atoms should render")
-            .iter()
-            .any(|atom| atom["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("Keep readiness verdict stable")))
-    );
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Build the feature"))));
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Keep readiness verdict stable"))));
     assert!(
         !artifact["requirement_atoms"]
             .as_array()

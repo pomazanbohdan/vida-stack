@@ -1,14 +1,7 @@
+use std::sync::OnceLock;
+
 use crate::runtime_assignment_policy::canonical_dispatch_target_name;
-use crate::runtime_contract_vocab::{
-    DISPATCH_TARGET_COACH, DISPATCH_TARGET_EXECUTION_PREPARATION, DISPATCH_TARGET_IMPLEMENTER,
-    DISPATCH_TARGET_SPECIFICATION, DISPATCH_TARGET_VERIFICATION, RUNTIME_ROLE_BUSINESS_ANALYST,
-    RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
-    RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
-};
-use crate::team_flow_state_machine::{
-    DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE, resolve_dispatch_contract_lane_sequence,
-    validate_dispatch_contract,
-};
+use crate::team_flow_state_machine::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE;
 use crate::{json_string, json_string_list};
 
 const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
@@ -65,34 +58,9 @@ const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
     "write_scope",
 ];
 
-fn legacy_dispatch_contract_lane<'a>(
-    dispatch_contract: &'a serde_json::Value,
-    dispatch_target: &str,
-) -> Option<&'a serde_json::Value> {
-    match dispatch_target {
-        DISPATCH_TARGET_IMPLEMENTER => dispatch_contract.get("implementer_activation"),
-        DISPATCH_TARGET_SPECIFICATION => dispatch_contract.get("specification_activation"),
-        DISPATCH_TARGET_COACH => dispatch_contract.get("coach_activation"),
-        DISPATCH_TARGET_VERIFICATION => dispatch_contract.get("verifier_activation"),
-        "escalation" | DISPATCH_TARGET_EXECUTION_PREPARATION => {
-            dispatch_contract.get("escalation_activation")
-        }
-        _ => None,
-    }
-}
-
-fn legacy_dispatch_target_for_runtime_role(runtime_role: &str) -> Option<&'static str> {
-    match runtime_role {
-        RUNTIME_ROLE_BUSINESS_ANALYST | RUNTIME_ROLE_PM => Some(DISPATCH_TARGET_SPECIFICATION),
-        RUNTIME_ROLE_WORKER => Some(DISPATCH_TARGET_IMPLEMENTER),
-        RUNTIME_ROLE_COACH => Some(DISPATCH_TARGET_COACH),
-        RUNTIME_ROLE_VERIFIER | RUNTIME_ROLE_PROVER => Some(DISPATCH_TARGET_VERIFICATION),
-        RUNTIME_ROLE_SOLUTION_ARCHITECT => Some(DISPATCH_TARGET_EXECUTION_PREPARATION),
-        _ => None,
-    }
-}
-
-pub(crate) fn dispatch_contract_lane<'a>(
+/// Diagnostic-only raw catalog lookup. Executable callers must resolve through
+/// `TeamFlowExecutionAuthority` and a typed `Result` projection.
+pub(crate) fn dispatch_contract_lane_diagnostic<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
 ) -> Option<&'a serde_json::Value> {
@@ -109,16 +77,10 @@ pub(crate) fn dispatch_contract_lane<'a>(
             return Some(lane);
         }
     }
-    for (selector, route) in direct_development_flow_route_selectors(execution_plan) {
-        if selector == canonical_target || selector == dispatch_target {
-            return Some(route);
-        }
-    }
-    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    legacy_dispatch_contract_lane(dispatch_contract, canonical_target.as_str())
-        .or_else(|| legacy_dispatch_contract_lane(dispatch_contract, dispatch_target))
+    None
 }
 
+/// Diagnostic projection only; raw `development_flow` entries never authorize dispatch.
 pub(crate) fn direct_development_flow_route_entries<'a>(
     execution_plan: &'a serde_json::Value,
 ) -> Vec<(String, &'a serde_json::Value)> {
@@ -128,6 +90,7 @@ pub(crate) fn direct_development_flow_route_entries<'a>(
         .collect()
 }
 
+/// Diagnostic projection only; selectors are not TeamFlow node identities.
 pub(crate) fn direct_development_flow_route_selectors<'a>(
     execution_plan: &'a serde_json::Value,
 ) -> Vec<(String, &'a serde_json::Value)> {
@@ -191,119 +154,89 @@ fn development_flow_route_dispatch_target(route_id: &str, route: &serde_json::Va
 }
 
 pub(crate) fn dispatch_contract_lane_activation(lane: &serde_json::Value) -> &serde_json::Value {
-    lane.get("activation").unwrap_or(lane)
+    static EMPTY_ACTIVATION: OnceLock<serde_json::Value> = OnceLock::new();
+    lane.get("activation")
+        .unwrap_or_else(|| EMPTY_ACTIVATION.get_or_init(|| serde_json::Value::Null))
 }
 
 pub(crate) fn dispatch_contract_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
-    if let Some(sequence) =
-        resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
-    {
-        return sequence;
+    // Diagnostic-only compatibility projection. Executable callers must use
+    // `dispatch_contract_lane_sequence_result` so blockers remain visible.
+    match dispatch_contract_lane_sequence_result(dispatch_contract) {
+        Ok(sequence) => sequence,
+        Err(blocker) => vec![format!("blocked:{}", blocker.code)],
     }
-    let explicit = dispatch_contract["lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(canonical_dispatch_target_name)
-        .collect::<Vec<_>>();
-    if !explicit.is_empty() {
-        return explicit;
-    }
-    let mut legacy = Vec::new();
-    if dispatch_contract.get("specification_activation").is_some() {
-        legacy.push("specification".to_string());
-    }
-    if dispatch_contract.get("escalation_activation").is_some() {
-        legacy.push("execution_preparation".to_string());
-    }
-    if dispatch_contract.get("implementer_activation").is_some() {
-        legacy.push("implementer".to_string());
-    }
-    if dispatch_contract.get("coach_activation").is_some() {
-        legacy.push("coach".to_string());
-    }
-    if dispatch_contract.get("verifier_activation").is_some() {
-        legacy.push("verification".to_string());
-    }
-    legacy
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DispatchContractResolutionBlocker {
+    pub(crate) code: &'static str,
+    pub(crate) sequence_field: String,
+}
+
+pub(crate) fn dispatch_contract_lane_sequence_result(
+    dispatch_contract: &serde_json::Value,
+) -> Result<Vec<String>, DispatchContractResolutionBlocker> {
+    crate::team_flow_state_machine::TeamFlowStateMachine::resolve_dispatch_contract(
+        dispatch_contract,
+        "lane_sequence",
+    )
+    .and_then(|state_machine| {
+        state_machine
+            .resolve_execution_lane_sequence_status()
+            .map_err(
+                |blocker| crate::team_flow_state_machine::TeamFlowResolutionBlocker {
+                    code: blocker.code,
+                    sequence_field: blocker.sequence_field,
+                },
+            )
+    })
+    .map_err(|blocker| DispatchContractResolutionBlocker {
+        code: blocker.code,
+        sequence_field: blocker.sequence_field,
+    })
 }
 
 pub(crate) fn dispatch_contract_execution_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
-    if let Some(sequence) =
-        resolve_dispatch_contract_lane_sequence(dispatch_contract, "execution_lane_sequence")
-    {
-        return sequence;
+    // Diagnostic-only compatibility projection; execution uses the Result API.
+    match dispatch_contract_execution_lane_sequence_result(dispatch_contract) {
+        Ok(sequence) => sequence,
+        Err(blocker) => vec![format!("blocked:{}", blocker.code)],
     }
-    let explicit = dispatch_contract["execution_lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(canonical_dispatch_target_name)
-        .collect::<Vec<_>>();
-    if !explicit.is_empty() {
-        return explicit;
-    }
-    dispatch_contract_lane_sequence(dispatch_contract)
-        .into_iter()
-        .filter(|target| target != "specification")
-        .collect()
+}
+
+pub(crate) fn dispatch_contract_execution_lane_sequence_result(
+    dispatch_contract: &serde_json::Value,
+) -> Result<Vec<String>, DispatchContractResolutionBlocker> {
+    crate::team_flow_state_machine::TeamFlowStateMachine::resolve_dispatch_contract(
+        dispatch_contract,
+        "execution_lane_sequence",
+    )
+    .map_err(|blocker| DispatchContractResolutionBlocker {
+        code: blocker.code,
+        sequence_field: blocker.sequence_field,
+    })?
+    .resolve_execution_lane_sequence_status()
+    .map_err(|blocker| DispatchContractResolutionBlocker {
+        code: blocker.code,
+        sequence_field: blocker.sequence_field,
+    })
 }
 
 pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
-    let configured_lane_sequence = dispatch_contract["lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(canonical_dispatch_target_name)
-        .collect::<Vec<_>>();
-    let mut sequence = if let Some(sequence) =
-        resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
-    {
-        sequence
-    } else if dispatch_contract.get("lane_catalog").is_none()
-        && !configured_lane_sequence.is_empty()
-    {
-        configured_lane_sequence
-    } else {
-        return dispatch_contract_execution_lane_sequence(dispatch_contract);
-    };
-    let execution_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
-    if let Some(last_lane) = sequence.last() {
-        if let Some(last_index) = execution_sequence
-            .iter()
-            .rposition(|target| target == last_lane)
-        {
-            if let Some(next_lane) = execution_sequence.get(last_index + 1) {
-                let is_final_successor = last_index + 2 == execution_sequence.len();
-                if is_final_successor
-                    && is_terminal_closure_dispatch_target(next_lane)
-                    && !sequence.iter().any(|existing| existing == next_lane)
-                {
-                    sequence.push(next_lane.clone());
-                }
-            }
-        }
-    }
-    sequence
+    // Diagnostic-only compatibility projection; execution uses the Result API.
+    dispatch_contract_lane_sequence(dispatch_contract)
 }
 
-fn is_terminal_closure_dispatch_target(target: &str) -> bool {
-    matches!(
-        canonical_dispatch_target_name(target).as_str(),
-        "closure" | "terminal_closure" | "release_closure"
-    )
-}
-
-pub(crate) fn dispatch_target_for_runtime_role(
+/// Diagnostic-only projection. Executable callers resolve a target through the
+/// typed TeamFlow authority projection, never by scanning raw lane metadata.
+pub(crate) fn dispatch_target_for_runtime_role_diagnostic(
     execution_plan: &serde_json::Value,
     runtime_role: &str,
 ) -> Option<String> {
@@ -321,17 +254,6 @@ pub(crate) fn dispatch_target_for_runtime_role(
             if lane_runtime_role.as_deref() == Some(runtime_role) {
                 return Some(dispatch_target.clone());
             }
-        }
-    }
-    if let Some(dispatch_target) = legacy_dispatch_target_for_runtime_role(runtime_role) {
-        return Some(dispatch_target.to_string());
-    }
-    for (dispatch_target, route) in direct_development_flow_route_entries(execution_plan) {
-        let activation = dispatch_contract_lane_activation(route);
-        let route_runtime_role = json_string(activation.get("activation_runtime_role"))
-            .or_else(|| json_string(route.get("runtime_role")));
-        if route_runtime_role.as_deref() == Some(runtime_role) {
-            return Some(dispatch_target);
         }
     }
     None
@@ -507,10 +429,7 @@ fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
 }
 
 pub(crate) fn route_primary_backend_hint_from_route(route: &serde_json::Value) -> Option<String> {
-    explicit_executor_backend_from_route(route)
-        .or_else(|| activation_backend_from_route(route))
-        .or_else(|| route_backend_value(route, "carrier_backend_hint"))
-        .or_else(|| route_backend_value(route, "subagents"))
+    explicit_executor_backend_from_route(route).or_else(|| activation_backend_from_route(route))
 }
 
 pub(crate) fn runtime_assignment_backend_for_route(
@@ -533,23 +452,10 @@ pub(crate) fn explicit_executor_backend_from_route(route: &serde_json::Value) ->
 
 pub(crate) fn fallback_executor_backend_from_route(route: &serde_json::Value) -> Option<String> {
     route_backend_value(route, "fallback_executor_backend")
-        .or_else(|| route_backend_value(route, "bridge_fallback_subagent"))
 }
 
 pub(crate) fn fanout_executor_backends_from_route(route: &serde_json::Value) -> Vec<String> {
-    let values = json_string_list(route.get("fanout_executor_backends"));
-    if !values.is_empty() {
-        return values;
-    }
-    json_string_list(route.get("fanout_subagents"))
-}
-
-#[allow(dead_code)]
-fn legacy_route_backend_hint(route: &serde_json::Value) -> Option<String> {
-    route_backend_value(route, "carrier_backend_hint")
-        .or_else(|| route_backend_value(route, "subagents"))
-        .or_else(|| route_backend_value(route, "bridge_fallback_subagent"))
-        .or_else(|| route_backend_value(route, "fanout_subagents"))
+    json_string_list(route.get("fanout_executor_backends"))
 }
 
 pub(crate) fn selected_backend_from_execution_plan_route(
@@ -561,7 +467,6 @@ pub(crate) fn selected_backend_from_execution_plan_route(
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
         .or_else(|| activation_backend_from_route(route))
-        .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
 }
 
@@ -660,6 +565,7 @@ fn candidate_pool_from_assignment(
 
 pub(crate) fn route_explain_payload(
     execution_plan: &serde_json::Value,
+    compiled_bundle: &serde_json::Value,
     dispatch_target: &str,
     route: Option<&serde_json::Value>,
 ) -> serde_json::Value {
@@ -681,7 +587,7 @@ pub(crate) fn route_explain_payload(
     let fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
-        .unwrap_or_default();
+        .unwrap_or_else(Vec::new);
     let activation_agent_type = route.and_then(activation_agent_type_from_route);
     let selected_backend = route
         .and_then(|route| {
@@ -696,8 +602,12 @@ pub(crate) fn route_explain_payload(
             route
                 .and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route))
         });
-    let non_behavioral_route_fields = route.map(route_non_behavioral_fields).unwrap_or_default();
-    let diagnostic_only_route_fields = route.map(route_diagnostic_only_fields).unwrap_or_default();
+    let non_behavioral_route_fields = route
+        .map(route_non_behavioral_fields)
+        .unwrap_or_else(Vec::new);
+    let diagnostic_only_route_fields = route
+        .map(route_diagnostic_only_fields)
+        .unwrap_or_else(Vec::new);
     let route_field_truth = route
         .map(route_field_truth)
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
@@ -715,21 +625,8 @@ pub(crate) fn route_explain_payload(
     let rejected_candidates = assignment_field("rejected_candidates");
     let candidate_pool =
         candidate_pool_from_assignment(&selected_candidate, rejected_candidates.clone());
-    let dispatch_contract_validation = execution_plan["development_flow"]
-        .get("dispatch_contract")
-        .map(|dispatch_contract| {
-            if validate_dispatch_contract(dispatch_contract, "execution_lane_sequence").is_ok() {
-                serde_json::json!({"status": "pass", "blocker_code": serde_json::Value::Null})
-            } else {
-                serde_json::json!({
-                    "status": "blocked",
-                    "blocker_code": DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE,
-                })
-            }
-        })
-        .unwrap_or_else(|| {
-            serde_json::json!({"status": "not_configured", "blocker_code": serde_json::Value::Null})
-        });
+    let dispatch_contract_validation =
+        typed_team_flow_authority_validation(execution_plan, compiled_bundle);
 
     serde_json::json!({
         "dispatch_target": dispatch_target,
@@ -790,6 +687,46 @@ pub(crate) fn route_explain_payload(
     })
 }
 
+fn typed_team_flow_authority_validation(
+    execution_plan: &serde_json::Value,
+    compiled_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let authority = match crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+        compiled_bundle,
+        None,
+        None,
+    ) {
+        Ok(authority) => authority,
+        Err(blocker) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_code": blocker.code,
+            });
+        }
+    };
+    if authority.ordered_node_ids().is_empty() {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_code": DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE,
+        });
+    }
+    let raw_authority_id = execution_plan["development_flow"]["dispatch_contract"]
+        .get("team_flow_authority_id")
+        .and_then(serde_json::Value::as_str);
+    if raw_authority_id != Some(authority.authority_id.as_str()) {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_code": "team_flow_authority_plan_identity_mismatch",
+        });
+    }
+    serde_json::json!({
+        "status": "pass",
+        "blocker_code": serde_json::Value::Null,
+        "authority_id": authority.authority_id,
+        "source": "persisted_team_flow_execution_authority",
+    })
+}
+
 pub(crate) fn route_explain_status(
     payload: &serde_json::Value,
     admissible: Option<bool>,
@@ -839,7 +776,12 @@ pub(crate) fn route_explain_blocker_codes(
         blockers.push("route_missing".to_string());
     }
     if payload["dispatch_contract_validation"]["status"].as_str() == Some("blocked") {
-        blockers.push(DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE.to_string());
+        blockers.push(
+            payload["dispatch_contract_validation"]["blocker_code"]
+                .as_str()
+                .unwrap_or(DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
+                .to_string(),
+        );
     }
     if payload["selected_backend"].as_str().is_none() {
         blockers.push("selected_backend_missing".to_string());
@@ -882,39 +824,80 @@ pub(crate) fn route_explain_blocker_codes(
 mod tests {
     use super::{
         dispatch_contract_allowed_next_lane_sequence, dispatch_contract_execution_lane_sequence,
-        dispatch_contract_lane, dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
-        explicit_executor_backend_from_route, fallback_executor_backend_from_route,
-        fanout_executor_backends_from_route, route_explain_blocker_codes, route_explain_payload,
+        dispatch_contract_lane_activation, dispatch_contract_lane_diagnostic,
+        dispatch_contract_lane_sequence, explicit_executor_backend_from_route,
+        fallback_executor_backend_from_route, fanout_executor_backends_from_route,
+        route_explain_blocker_codes, route_explain_payload as route_explain_payload_with_authority,
         route_explain_status, selected_backend_from_execution_plan_route,
     };
+
+    const FIXTURE_BACKEND_A: &str = "fixture-backend-a";
+    const FIXTURE_BACKEND_B: &str = "fixture-backend-b";
+    const FIXTURE_CARRIER_A: &str = "fixture-carrier-a";
+    const FIXTURE_RUNTIME_ROLE_A: &str = "fixture-runtime-role-a";
+    const FIXTURE_RUNTIME_ROLE_B: &str = "fixture-runtime-role-b";
+    const FIXTURE_TIER_A: &str = "fixture-tier-a";
+    const FIXTURE_TIER_B: &str = "fixture-tier-b";
+    const FIXTURE_TASK_CLASS_A: &str = "fixture-task-class-a";
+    const FIXTURE_TARGET_A: &str = "fixture-target-a";
+    const FIXTURE_TARGET_B: &str = "fixture-target-b";
+    const FIXTURE_TARGET_C: &str = "fixture-target-c";
+    const FIXTURE_MODEL_REF: &str = "fixture-model-ref";
+    const FIXTURE_MODEL_PROFILE: &str = "fixture-model-profile";
+    const FIXTURE_PROVIDER: &str = "fixture-provider";
+    const FIXTURE_REASONING: &str = "fixture-reasoning";
+
+    fn route_explain_payload(
+        execution_plan: &serde_json::Value,
+        dispatch_target: &str,
+        route: Option<&serde_json::Value>,
+    ) -> serde_json::Value {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            None,
+            None,
+        )
+        .expect("canonical fixture authority should compile");
+        let mut execution_plan = execution_plan.clone();
+        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"] =
+            serde_json::Value::String(authority.authority_id.clone());
+        route_explain_payload_with_authority(
+            &execution_plan,
+            &compiled_bundle,
+            dispatch_target,
+            route,
+        )
+    }
 
     #[test]
     fn selected_backend_prefers_configured_executor_backend_over_internal_carrier() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "middle",
-                "activation_agent_type": "middle",
+                "selected_tier": FIXTURE_TIER_A,
+                "activation_agent_type": FIXTURE_TIER_A,
             },
             "development_flow": {
                 "implementation": {
-                    "preferred_agent_tier": "junior",
-                    "preferred_agent_type": "junior",
-                    "subagents": "internal_subagents",
+                    "preferred_agent_tier": FIXTURE_TIER_B,
+                    "preferred_agent_type": FIXTURE_TIER_B,
+                    "subagents": FIXTURE_BACKEND_A,
                     "runtime_assignment": {
-                        "selected_tier": "junior",
-                        "activation_agent_type": "junior",
+                        "selected_tier": FIXTURE_TIER_B,
+                        "activation_agent_type": FIXTURE_TIER_B,
                     }
                 }
             },
             "default_route": {
-                "subagents": "internal_subagents"
+                "subagents": FIXTURE_BACKEND_A
             },
             "status": "execution_ready",
         });
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
     }
 
@@ -922,28 +905,28 @@ mod tests {
     fn selected_backend_does_not_treat_internal_carrier_as_dispatch_backend() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "middle",
-                "activation_agent_type": "middle",
+                "selected_tier": FIXTURE_TIER_A,
+                "activation_agent_type": FIXTURE_TIER_A,
             },
             "development_flow": {
                 "implementation": {
-                    "executor_backend": "internal_subagents",
-                    "subagents": "hermes_cli",
+                    "executor_backend": FIXTURE_BACKEND_A,
+                    "subagents": FIXTURE_BACKEND_B,
                     "runtime_assignment": {
-                        "selected_tier": "junior",
-                        "activation_agent_type": "junior",
+                        "selected_tier": FIXTURE_TIER_B,
+                        "activation_agent_type": FIXTURE_TIER_B,
                     }
                 }
             },
             "default_route": {
-                "subagents": "hermes_cli"
+                "subagents": FIXTURE_BACKEND_B
             },
             "status": "execution_ready",
         });
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
     }
 
@@ -952,41 +935,41 @@ mod tests {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
-                    "backend_id": "vibe_cli",
-                    "backend_class": "external_cli",
+                    "backend_id": FIXTURE_BACKEND_A,
+                    "backend_class": "fixture-external-class",
                     "lane_admissibility": {
-                        "analysis": true,
-                        "coach": true,
-                        "implementation": false,
-                        "review": true,
-                        "verification": false
+                        "fixture-class-a": true,
+                        "fixture-class-b": true,
+                        "fixture-class-c": false,
+                        "fixture-class-d": true,
+                        "fixture-class-e": false
                     }
                 },
                 {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
+                    "backend_id": FIXTURE_BACKEND_B,
+                    "backend_class": "fixture-internal-class",
                     "lane_admissibility": {
-                        "analysis": true,
-                        "coach": true,
-                        "implementation": true,
-                        "review": true,
-                        "verification": true
+                        "fixture-class-a": true,
+                        "fixture-class-b": true,
+                        "fixture-class-c": true,
+                        "fixture-class-d": true,
+                        "fixture-class-e": true
                     }
                 }
             ],
             "runtime_assignment": {
-                "selected_backend_id": "vibe_cli",
-                "selected_carrier_id": "vibe_cli",
+                "selected_backend_id": FIXTURE_BACKEND_A,
+                "selected_carrier_id": FIXTURE_CARRIER_A,
                 "selected_external_backend_readiness": {
-                    "backend_id": "vibe_cli",
+                    "backend_id": FIXTURE_BACKEND_A,
                     "status": "carrier_ready",
                     "blocked": false
                 }
             },
             "development_flow": {
                 "coach": {
-                    "executor_backend": "internal_subagents",
-                    "fallback_executor_backend": "internal_subagents"
+                    "executor_backend": FIXTURE_BACKEND_B,
+                    "fallback_executor_backend": FIXTURE_BACKEND_B
                 }
             },
             "status": "execution_ready",
@@ -994,7 +977,7 @@ mod tests {
         let route = &execution_plan["development_flow"]["coach"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("vibe_cli")
+            Some(FIXTURE_BACKEND_A)
         );
     }
 
@@ -1002,8 +985,8 @@ mod tests {
     fn runtime_assignment_source_ignores_legacy_execution_plan_alias() {
         let execution_plan = serde_json::json!({
             "codex_runtime_assignment": {
-                "selected_tier": "senior",
-                "activation_agent_type": "senior",
+                "selected_tier": FIXTURE_TIER_B,
+                "activation_agent_type": FIXTURE_TIER_B,
             }
         });
 
@@ -1021,8 +1004,8 @@ mod tests {
     fn runtime_assignment_source_ignores_legacy_route_alias() {
         let route = serde_json::json!({
             "codex_runtime_assignment": {
-                "selected_tier": "architect",
-                "activation_agent_type": "architect",
+                "selected_tier": FIXTURE_TIER_A,
+                "activation_agent_type": FIXTURE_TIER_A,
             }
         });
 
@@ -1037,30 +1020,30 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_uses_canonical_runtime_assignment_when_legacy_alias_is_present() {
+    fn selected_backend_ignores_legacy_alias_when_runtime_assignment_has_no_backend() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "middle",
-                "activation_agent_type": "middle",
+                "selected_tier": FIXTURE_TIER_A,
+                "activation_agent_type": FIXTURE_TIER_A,
             },
             "codex_runtime_assignment": {
-                "selected_tier": "senior",
-                "activation_agent_type": "senior",
+                "selected_tier": FIXTURE_TIER_B,
+                "activation_agent_type": FIXTURE_TIER_B,
             },
             "development_flow": {
                 "implementation": {
-                    "subagents": "internal_subagents"
+                    "subagents": FIXTURE_BACKEND_A
                 }
             },
             "default_route": {
-                "subagents": "internal_subagents"
+                "subagents": FIXTURE_BACKEND_A
             },
             "status": "execution_ready",
         });
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
-            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            selected_backend_from_execution_plan_route(&execution_plan, route),
+            None
         );
         assert_eq!(
             super::runtime_assignment_source_from_execution_plan(&execution_plan),
@@ -1069,23 +1052,23 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_prefers_carrier_backend_hint_over_legacy_subagents() {
+    fn selected_backend_ignores_legacy_carrier_and_subagent_hints() {
         let execution_plan = serde_json::json!({
             "development_flow": {
                 "implementation": {
                     "carrier_backend_hint": "neutral_hint",
-                    "subagents": "internal_subagents"
+                    "subagents": FIXTURE_BACKEND_A
                 }
             },
             "default_route": {
-                "subagents": "internal_subagents"
+                "subagents": FIXTURE_BACKEND_A
             },
             "status": "execution_ready",
         });
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
-            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("neutral_hint")
+            selected_backend_from_execution_plan_route(&execution_plan, route),
+            None
         );
     }
 
@@ -1093,16 +1076,16 @@ mod tests {
     fn selected_backend_keeps_dispatch_backend_separate_from_selected_carrier() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "middle",
-                "activation_agent_type": "middle",
+                "selected_tier": FIXTURE_TIER_A,
+                "activation_agent_type": FIXTURE_TIER_A,
             },
             "development_flow": {
                 "implementation": {
-                    "executor_backend": "internal_subagents",
-                    "fallback_executor_backend": "internal_review",
-                    "fanout_executor_backends": ["internal_fast", "internal_arch"],
-                    "preferred_agent_tier": "junior",
-                    "preferred_agent_type": "junior",
+                    "executor_backend": FIXTURE_BACKEND_A,
+                    "fallback_executor_backend": FIXTURE_BACKEND_B,
+                    "fanout_executor_backends": [FIXTURE_BACKEND_A, FIXTURE_BACKEND_B],
+                    "preferred_agent_tier": FIXTURE_TIER_B,
+                    "preferred_agent_type": FIXTURE_TIER_B,
                     "carrier_backend_hint": "legacy_hint",
                     "subagents": "legacy_subagents",
                     "bridge_fallback_subagent": "legacy_bridge",
@@ -1118,34 +1101,34 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
     }
 
     #[test]
     fn explicit_executor_helpers_preserve_fallback_and_fanout_fields() {
         let route = serde_json::json!({
-            "executor_backend": "internal_subagents",
-            "fallback_executor_backend": "internal_review",
-            "fanout_executor_backends": ["internal_fast", "internal_arch"]
+            "executor_backend": FIXTURE_BACKEND_A,
+            "fallback_executor_backend": FIXTURE_BACKEND_B,
+            "fanout_executor_backends": [FIXTURE_BACKEND_A, FIXTURE_BACKEND_B]
         });
 
         assert_eq!(
             explicit_executor_backend_from_route(&route).as_deref(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
         assert_eq!(
             fallback_executor_backend_from_route(&route).as_deref(),
-            Some("internal_review")
+            Some(FIXTURE_BACKEND_B)
         );
         assert_eq!(
             fanout_executor_backends_from_route(&route),
-            vec!["internal_fast".to_string(), "internal_arch".to_string()]
+            vec![FIXTURE_BACKEND_A.to_string(), FIXTURE_BACKEND_B.to_string()]
         );
     }
 
     #[test]
-    fn explicit_executor_helpers_fall_back_to_legacy_hints() {
+    fn explicit_executor_helpers_ignore_legacy_hints() {
         let route = serde_json::json!({
             "carrier_backend_hint": "legacy_hint",
             "subagents": "legacy_subagents",
@@ -1154,17 +1137,11 @@ mod tests {
         });
 
         assert_eq!(explicit_executor_backend_from_route(&route), None);
+        assert_eq!(fallback_executor_backend_from_route(&route), None);
+        assert!(fanout_executor_backends_from_route(&route).is_empty());
         assert_eq!(
-            fallback_executor_backend_from_route(&route).as_deref(),
-            Some("legacy_bridge")
-        );
-        assert_eq!(
-            fanout_executor_backends_from_route(&route),
-            vec!["legacy_fanout".to_string()]
-        );
-        assert_eq!(
-            selected_backend_from_execution_plan_route(&serde_json::json!({}), &route).as_deref(),
-            Some("legacy_hint")
+            selected_backend_from_execution_plan_route(&serde_json::json!({}), &route),
+            None
         );
     }
 
@@ -1173,8 +1150,8 @@ mod tests {
         let execution_plan = serde_json::json!({});
         let route = serde_json::json!({
             "activation": {
-                "activation_agent_type": "middle",
-                "activation_runtime_role": "business_analyst"
+                "activation_agent_type": FIXTURE_TIER_A,
+                "activation_runtime_role": FIXTURE_RUNTIME_ROLE_A
             }
         });
 
@@ -1189,33 +1166,33 @@ mod tests {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
+                    "backend_id": FIXTURE_BACKEND_A,
+                    "backend_class": "fixture-internal-class",
                     "lane_admissibility": {
-                        "analysis": true,
-                        "coach": true,
-                        "implementation": true,
-                        "review": true,
-                        "verification": true
+                        "fixture-class-a": true,
+                        "fixture-class-b": true,
+                        "fixture-class-c": true,
+                        "fixture-class-d": true,
+                        "fixture-class-e": true
                     }
                 }
             ],
             "development_flow": {
                 "test_author": {
                     "runtime_assignment": {
-                        "selected_carrier_id": "middle",
-                        "activation_agent_type": "middle",
-                        "selected_backend_id": "internal_subagents",
-                        "selected_model_ref": "gpt-5.5",
-                        "selected_model_profile_id": "codex_gpt55_medium_write",
-                        "selected_model_provider": "openai",
-                        "selected_reasoning_effort": "medium",
+                        "selected_carrier_id": FIXTURE_CARRIER_A,
+                        "activation_agent_type": FIXTURE_TIER_A,
+                        "selected_backend_id": FIXTURE_BACKEND_A,
+                        "selected_model_ref": FIXTURE_MODEL_REF,
+                        "selected_model_profile_id": FIXTURE_MODEL_PROFILE,
+                        "selected_model_provider": FIXTURE_PROVIDER,
+                        "selected_reasoning_effort": FIXTURE_REASONING,
                         "enabled": true,
                         "model_selection_enabled": true
                     },
                     "activation": {
-                        "activation_agent_type": "middle",
-                        "activation_runtime_role": "worker"
+                        "activation_agent_type": FIXTURE_TIER_A,
+                        "activation_runtime_role": FIXTURE_RUNTIME_ROLE_A
                     }
                 }
             }
@@ -1223,12 +1200,21 @@ mod tests {
         let route = &execution_plan["development_flow"]["test_author"];
         let payload = route_explain_payload(&execution_plan, "test_author", Some(route));
 
-        assert_eq!(payload["selected_carrier_id"].as_str(), Some("middle"));
-        assert_eq!(payload["selected_model_ref"].as_str(), Some("gpt-5.5"));
-        assert_eq!(payload["activation_agent_type"].as_str(), Some("middle"));
+        assert_eq!(
+            payload["selected_carrier_id"].as_str(),
+            Some(FIXTURE_CARRIER_A)
+        );
+        assert_eq!(
+            payload["selected_model_ref"].as_str(),
+            Some(FIXTURE_MODEL_REF)
+        );
+        assert_eq!(
+            payload["activation_agent_type"].as_str(),
+            Some(FIXTURE_TIER_A)
+        );
         assert_eq!(
             payload["selected_backend"].as_str(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
         assert_ne!(
             payload["selected_backend"].as_str(),
@@ -1238,121 +1224,162 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_contract_lane_resolves_development_flow_route_entries() {
+    fn dispatch_contract_lane_rejects_development_flow_route_entries_as_authority() {
         let execution_plan = serde_json::json!({
             "development_flow": {
-                "designer": {
-                    "dispatch_target": "designer",
-                    "task_class": "design",
-                    "closure_class": "design",
-                    "executor_backend": "internal_subagents",
+                (FIXTURE_TARGET_A): {
+                    "dispatch_target": FIXTURE_TARGET_A,
+                    "task_class": FIXTURE_TASK_CLASS_A,
+                    "closure_class": FIXTURE_TASK_CLASS_A,
+                    "executor_backend": FIXTURE_BACKEND_A,
                     "activation": {
-                        "activation_agent_type": "middle",
-                        "activation_runtime_role": "designer"
+                        "activation_agent_type": FIXTURE_TIER_A,
+                        "activation_runtime_role": FIXTURE_RUNTIME_ROLE_A
                     }
                 }
             }
         });
 
-        let lane = dispatch_contract_lane(&execution_plan, "designer")
-            .expect("development_flow route should resolve as a dispatch lane");
-        assert_eq!(lane["dispatch_target"].as_str(), Some("designer"));
-        assert_eq!(lane["task_class"].as_str(), Some("design"));
+        assert!(dispatch_contract_lane_diagnostic(&execution_plan, FIXTURE_TARGET_A).is_none());
         assert_eq!(
-            super::dispatch_target_for_runtime_role(&execution_plan, "designer").as_deref(),
-            Some("designer")
+            super::dispatch_target_for_runtime_role_diagnostic(
+                &execution_plan,
+                FIXTURE_RUNTIME_ROLE_A
+            ),
+            None
         );
 
         let payload = route_explain_payload(
             &execution_plan,
-            "designer",
-            Some(&execution_plan["development_flow"]["designer"]),
+            FIXTURE_TARGET_A,
+            Some(&execution_plan["development_flow"][FIXTURE_TARGET_A]),
         );
         assert_eq!(payload["route_present"].as_bool(), Some(true));
         assert_eq!(
             payload["selected_backend"].as_str(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
         assert_eq!(route_explain_status(&payload, Some(true)), "pass");
     }
 
     #[test]
-    fn route_explain_blocks_incomplete_dispatch_contract_catalog() {
+    fn route_explain_ignores_raw_dispatch_contract_catalog_tamper() {
         let execution_plan = serde_json::json!({
             "development_flow": {
-                "implementation": {"executor_backend": "internal_subagents"},
-                "dispatch_contract": {"execution_lane_sequence": ["implementation"]}
+                (FIXTURE_TARGET_A): {"executor_backend": FIXTURE_BACKEND_A},
+                "dispatch_contract": {"execution_lane_sequence": [FIXTURE_TARGET_A]}
             }
         });
-        let route = &execution_plan["development_flow"]["implementation"];
-        let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
+        let route = &execution_plan["development_flow"][FIXTURE_TARGET_A];
+        let payload = route_explain_payload(&execution_plan, FIXTURE_TARGET_A, Some(route));
 
         assert_eq!(
-            payload["dispatch_contract_validation"]["blocker_code"].as_str(),
-            Some(super::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
+            payload["dispatch_contract_validation"]["status"].as_str(),
+            Some("pass")
         );
-        assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
-        assert!(
-            route_explain_blocker_codes(&payload, Some(true))
-                .iter()
-                .any(|code| code == super::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
-        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "pass");
+        assert!(!route_explain_blocker_codes(&payload, Some(true))
+            .iter()
+            .any(|code| code == super::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE));
     }
 
     #[test]
-    fn dispatch_contract_lane_preserves_direct_route_key_aliases() {
+    fn route_explain_blocks_missing_persisted_team_flow_authority() {
+        let payload = route_explain_payload_with_authority(
+            &serde_json::json!({}),
+            &serde_json::Value::Null,
+            FIXTURE_TARGET_A,
+            None,
+        );
+        assert_eq!(
+            payload["dispatch_contract_validation"]["blocker_code"].as_str(),
+            Some("team_flow_authority_missing")
+        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
+    }
+
+    #[test]
+    fn route_explain_blocks_mismatched_persisted_team_flow_authority() {
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
         let execution_plan = serde_json::json!({
             "development_flow": {
-                "coach_test_gate": {
-                    "dispatch_target": "coach",
-                    "task_class": "review",
+                "dispatch_contract": {
+                    "team_flow_authority_id": "team-flow-authority:tampered"
+                }
+            }
+        });
+        let payload = route_explain_payload_with_authority(
+            &execution_plan,
+            &compiled_bundle,
+            FIXTURE_TARGET_A,
+            None,
+        );
+        assert_eq!(
+            payload["dispatch_contract_validation"]["blocker_code"].as_str(),
+            Some("team_flow_authority_plan_identity_mismatch")
+        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
+    }
+
+    #[test]
+    fn direct_route_key_aliases_remain_diagnostic_only() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                (FIXTURE_TARGET_A): {
+                    "dispatch_target": FIXTURE_TARGET_B,
+                    "task_class": FIXTURE_TASK_CLASS_A,
                     "activation": {
-                        "activation_runtime_role": "coach"
+                        "activation_runtime_role": FIXTURE_RUNTIME_ROLE_A
                     }
                 }
             }
         });
 
-        let route_by_key = dispatch_contract_lane(&execution_plan, "coach_test_gate")
-            .expect("direct route key should resolve");
-        let route_by_target = dispatch_contract_lane(&execution_plan, "coach")
-            .expect("dispatch target should resolve");
-        assert_eq!(route_by_key, route_by_target);
-        assert_eq!(route_by_key["dispatch_target"].as_str(), Some("coach"));
+        assert!(dispatch_contract_lane_diagnostic(&execution_plan, FIXTURE_TARGET_A).is_none());
+        assert!(dispatch_contract_lane_diagnostic(&execution_plan, FIXTURE_TARGET_B).is_none());
         assert_eq!(
-            super::dispatch_target_for_runtime_role(&execution_plan, "coach").as_deref(),
-            Some("coach")
+            super::dispatch_target_for_runtime_role_diagnostic(
+                &execution_plan,
+                FIXTURE_RUNTIME_ROLE_A
+            ),
+            None
         );
         let selectors: Vec<_> = super::direct_development_flow_route_selectors(&execution_plan)
             .into_iter()
             .map(|(selector, _)| selector)
             .collect();
-        assert_eq!(selectors, vec!["coach_test_gate", "coach"]);
+        assert_eq!(
+            selectors,
+            vec![FIXTURE_TARGET_A.to_string(), FIXTURE_TARGET_B.to_string()]
+        );
     }
 
     #[test]
-    fn direct_development_flow_route_cannot_override_legacy_worker_runtime_role() {
+    fn direct_development_flow_route_is_diagnostic_only() {
         let execution_plan = serde_json::json!({
             "development_flow": {
                 "aaa": {
-                    "dispatch_target": "coach",
-                    "task_class": "review",
-                    "executor_backend": "hermes_cli",
+                    "dispatch_target": FIXTURE_TARGET_B,
+                    "task_class": FIXTURE_TASK_CLASS_A,
+                    "executor_backend": FIXTURE_BACKEND_B,
                     "activation": {
-                        "activation_runtime_role": "worker"
+                        "activation_runtime_role": FIXTURE_RUNTIME_ROLE_B
                     }
                 }
             }
         });
 
         assert_eq!(
-            super::dispatch_target_for_runtime_role(&execution_plan, "worker").as_deref(),
-            Some("implementer")
+            super::dispatch_target_for_runtime_role_diagnostic(
+                &execution_plan,
+                FIXTURE_RUNTIME_ROLE_B
+            ),
+            None
         );
         assert_eq!(
-            dispatch_contract_lane(&execution_plan, "coach")
-                .and_then(|route| route["task_class"].as_str()),
-            Some("review")
+            dispatch_contract_lane_diagnostic(&execution_plan, FIXTURE_TARGET_B),
+            None
         );
     }
 
@@ -1360,19 +1387,19 @@ mod tests {
     fn selected_backend_prefers_backend_fallback_over_internal_carrier_hint() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "senior",
+                "selected_tier": FIXTURE_TIER_B,
             }
         });
         let route = serde_json::json!({
             "activation": {
-                "activation_agent_type": "middle",
+                "activation_agent_type": FIXTURE_TIER_A,
             },
-            "fallback_executor_backend": "hermes_cli"
+            "fallback_executor_backend": FIXTURE_BACKEND_B
         });
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
-            Some("hermes_cli")
+            Some(FIXTURE_BACKEND_B)
         );
     }
 
@@ -1380,15 +1407,15 @@ mod tests {
     fn route_explain_payload_surfaces_hybrid_selection_sources() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
-                "selected_tier": "senior",
-                "selected_carrier_tier": "senior",
-                "selected_carrier_id": "senior",
-                "selected_model_profile_id": "codex_spark_high_readonly",
-                "selected_model_ref": "gpt-5.3-codex-spark",
-                "selected_model_provider": "openai",
-                "selected_reasoning_effort": "high",
-                "selected_quality_tier": "high",
-                "selected_speed_tier": "medium",
+                "selected_tier": FIXTURE_TIER_B,
+                "selected_carrier_tier": FIXTURE_TIER_B,
+                "selected_carrier_id": FIXTURE_CARRIER_A,
+                "selected_model_profile_id": FIXTURE_MODEL_PROFILE,
+                "selected_model_ref": FIXTURE_MODEL_REF,
+                "selected_model_provider": FIXTURE_PROVIDER,
+                "selected_reasoning_effort": FIXTURE_REASONING,
+                "selected_quality_tier": FIXTURE_TIER_A,
+                "selected_speed_tier": FIXTURE_TIER_A,
                 "selected_model_profile_readiness_status": "ready",
                 "budget_verdict": "in_budget",
                 "budget_policy": "balanced",
@@ -1403,8 +1430,8 @@ mod tests {
                     "status": "not_tracked_by_runtime_assignment"
                 },
                 "selection_source_paths": {
-                    "selected_carrier_id": "carrier_runtime.roles[senior].role_id",
-                    "selected_model_profile_id": "carrier_runtime.roles[senior].model_profiles.codex_spark_high_readonly.profile_id"
+                    "selected_carrier_id": "carrier_runtime.roles[fixture].role_id",
+                    "selected_model_profile_id": "carrier_runtime.roles[fixture].model_profiles.fixture.profile_id"
                 },
                 "selection_override_reasons": [],
                 "selection_strategy": "balanced_cost_quality",
@@ -1413,8 +1440,8 @@ mod tests {
                 "candidate_scope": "unified_carrier_model_profiles",
                 "rejected_candidates": [
                     {
-                        "carrier_id": "junior",
-                        "model_profile_id": "codex_gpt54_low_write",
+                        "carrier_id": FIXTURE_TIER_B,
+                        "model_profile_id": FIXTURE_MODEL_PROFILE,
                         "reason": "quality_floor_not_met",
                         "reasons": ["quality_floor_not_met"]
                     }
@@ -1422,11 +1449,11 @@ mod tests {
             },
             "development_flow": {
                 "implementation": {
-                    "executor_backend": "internal_subagents",
-                    "fallback_executor_backend": "hermes_cli",
-                    "fanout_executor_backends": ["middle", "senior"],
+                    "executor_backend": FIXTURE_BACKEND_A,
+                    "fallback_executor_backend": FIXTURE_BACKEND_B,
+                    "fanout_executor_backends": [FIXTURE_BACKEND_A, FIXTURE_BACKEND_B],
                     "activation": {
-                        "activation_agent_type": "junior"
+                        "activation_agent_type": FIXTURE_TIER_B
                     }
                 }
             }
@@ -1437,12 +1464,15 @@ mod tests {
         assert_eq!(payload["route_present"].as_bool(), Some(true));
         assert_eq!(
             payload["selected_backend"].as_str(),
-            Some("internal_subagents")
+            Some(FIXTURE_BACKEND_A)
         );
-        assert_eq!(payload["selected_carrier_id"].as_str(), Some("senior"));
+        assert_eq!(
+            payload["selected_carrier_id"].as_str(),
+            Some(FIXTURE_CARRIER_A)
+        );
         assert_eq!(
             payload["selected_model_profile_id"].as_str(),
-            Some("codex_spark_high_readonly")
+            Some(FIXTURE_MODEL_PROFILE)
         );
         assert_eq!(payload["budget_verdict"].as_str(), Some("in_budget"));
         assert_eq!(
@@ -1459,14 +1489,12 @@ mod tests {
         );
         assert_eq!(
             payload["selection_source_paths"]["selected_carrier_id"].as_str(),
-            Some("carrier_runtime.roles[senior].role_id")
+            Some("carrier_runtime.roles[fixture].role_id")
         );
         assert_eq!(
             payload["selected_candidate"]["selection_source_paths"]["selected_model_profile_id"]
                 .as_str(),
-            Some(
-                "carrier_runtime.roles[senior].model_profiles.codex_spark_high_readonly.profile_id"
-            )
+            Some("carrier_runtime.roles[fixture].model_profiles.fixture.profile_id")
         );
         assert_eq!(
             payload["selection_inputs"]["selection_rule"].as_str(),
@@ -1474,7 +1502,7 @@ mod tests {
         );
         assert_eq!(
             payload["selected_candidate"]["model_profile_id"].as_str(),
-            Some("codex_spark_high_readonly")
+            Some(FIXTURE_MODEL_PROFILE)
         );
         assert_eq!(
             payload["candidate_pool"]
@@ -1483,16 +1511,14 @@ mod tests {
                 .len(),
             2
         );
-        assert!(
-            payload["candidate_pool"]
-                .as_array()
-                .expect("candidate pool should render")
-                .iter()
-                .any(|row| {
-                    row["status"].as_str() == Some("rejected")
-                        && row["carrier_id"].as_str() == Some("junior")
-                })
-        );
+        assert!(payload["candidate_pool"]
+            .as_array()
+            .expect("candidate pool should render")
+            .iter()
+            .any(|row| {
+                row["status"].as_str() == Some("rejected")
+                    && row["carrier_id"].as_str() == Some(FIXTURE_TIER_B)
+            }));
         assert_eq!(
             payload["selection_source"].as_str(),
             Some("route_primary_hint")
@@ -1528,11 +1554,9 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
         assert_eq!(route_explain_status(&payload, Some(false)), "blocked");
-        assert!(
-            route_explain_blocker_codes(&payload, Some(false))
-                .iter()
-                .any(|code| code == "selected_backend_not_admissible_for_dispatch_target")
-        );
+        assert!(route_explain_blocker_codes(&payload, Some(false))
+            .iter()
+            .any(|code| code == "selected_backend_not_admissible_for_dispatch_target"));
     }
 
     #[test]
@@ -1627,98 +1651,78 @@ mod tests {
                 "write_scope"
             ])
         );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("imported_price_authority_override")
-                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("max_cli_subagent_calls")
-                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("semantic_cache_authoritative")
-                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("semantic_score_override_authority")
-                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("provider_price_snapshot")
-                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("dispatch_required")
-                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("semantic_scoring_order")
-                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-                })
-        );
-        assert!(
-            payload["route_field_truth"]
-                .as_array()
-                .expect("route field truth should render")
-                .iter()
-                .any(|row| {
-                    row["field"].as_str() == Some("semantic_route_cache")
-                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-                })
-        );
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("imported_price_authority_override")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("max_cli_subagent_calls")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_cache_authoritative")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_score_override_authority")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("provider_price_snapshot")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("dispatch_required")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_scoring_order")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_route_cache")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
         assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
         let blockers = route_explain_blocker_codes(&payload, Some(true));
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "model_selection_disabled")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "route_fields_not_behavioral")
-        );
+        assert!(blockers
+            .iter()
+            .any(|code| code == "model_selection_disabled"));
+        assert!(blockers
+            .iter()
+            .any(|code| code == "route_fields_not_behavioral"));
     }
 
     #[test]
@@ -1742,23 +1746,11 @@ mod tests {
 
         assert_eq!(
             dispatch_contract_lane_sequence(&dispatch_contract),
-            vec![
-                "implementer",
-                "specification",
-                "coach",
-                "verification",
-                "execution_preparation",
-                "closure"
-            ]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
         assert_eq!(
             dispatch_contract_execution_lane_sequence(&dispatch_contract),
-            vec![
-                "implementer",
-                "specification",
-                "verification",
-                "execution_preparation"
-            ]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
     }
 
@@ -1770,11 +1762,7 @@ mod tests {
         });
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&full_contract),
-            vec![
-                "analyst".to_string(),
-                "designer".to_string(),
-                "autotester".to_string()
-            ]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
 
         let execution_only_contract = serde_json::json!({
@@ -1782,7 +1770,7 @@ mod tests {
         });
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&execution_only_contract),
-            vec!["analyst".to_string(), "autotester".to_string()]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
 
         let invalid_catalog_contract = serde_json::json!({
@@ -1796,7 +1784,7 @@ mod tests {
         });
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&invalid_catalog_contract),
-            vec!["analyst".to_string(), "autotester".to_string()]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
     }
 
@@ -1809,7 +1797,7 @@ mod tests {
 
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&dispatch_contract),
-            vec!["implementer".to_string()]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
     }
 
@@ -1822,11 +1810,7 @@ mod tests {
 
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&dispatch_contract),
-            vec![
-                "implementer".to_string(),
-                "tester".to_string(),
-                "terminal_closure".to_string()
-            ]
+            vec!["blocked:dispatch_contract_lane_catalog_incomplete".to_string()]
         );
     }
 
@@ -1838,20 +1822,20 @@ mod tests {
                     "lane_catalog": {
                         "implementer": {
                             "activation": {
-                                "activation_runtime_role": "worker",
-                                "selected_tier": "junior"
+                                "activation_runtime_role": FIXTURE_RUNTIME_ROLE_B,
+                                "selected_tier": FIXTURE_TIER_B
                             }
                         },
                         "specification": {
                             "activation": {
-                                "activation_runtime_role": "business_analyst",
-                                "selected_tier": "middle"
+                                "activation_runtime_role": FIXTURE_RUNTIME_ROLE_A,
+                                "selected_tier": FIXTURE_TIER_A
                             }
                         },
                         "verification": {
                             "activation": {
-                                "activation_runtime_role": "verifier",
-                                "selected_tier": "senior"
+                                "activation_runtime_role": FIXTURE_RUNTIME_ROLE_B,
+                                "selected_tier": FIXTURE_TIER_B
                             }
                         }
                     }
@@ -1860,22 +1844,42 @@ mod tests {
         });
 
         assert_eq!(
-            dispatch_contract_lane(&execution_plan, "writer").and_then(|lane| {
+            dispatch_contract_lane_diagnostic(&execution_plan, "writer").and_then(|lane| {
                 dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
             }),
             Some("worker")
         );
+        let alias_target = execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            .as_object()
+            .and_then(|catalog| {
+                catalog.iter().find_map(|(target, lane)| {
+                    (dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
+                        == Some(FIXTURE_RUNTIME_ROLE_A))
+                    .then(|| target.clone())
+                })
+            })
+            .expect("fixture alias target should exist");
         assert_eq!(
-            dispatch_contract_lane(&execution_plan, "business_analyst").and_then(|lane| {
+            dispatch_contract_lane_diagnostic(&execution_plan, &alias_target).and_then(|lane| {
                 dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
             }),
-            Some("business_analyst")
+            Some(FIXTURE_RUNTIME_ROLE_A)
         );
-        assert_eq!(
-            dispatch_contract_lane(&execution_plan, "prover").and_then(|lane| {
+        let verifier_role_alias = crate::runtime_contract_vocab::RUNTIME_ROLE_PROVER;
+        let canonical_verifier_target =
+            crate::runtime_contract_vocab::canonical_dispatch_target_name(verifier_role_alias);
+        let expected_verifier_runtime_role = execution_plan["development_flow"]
+            ["dispatch_contract"]["lane_catalog"]
+            .get(canonical_verifier_target.as_str())
+            .and_then(|lane| {
                 dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
-            }),
-            Some("verifier")
+            })
+            .expect("canonical verifier target should be present in fixture catalog");
+        assert_eq!(
+            dispatch_contract_lane_diagnostic(&execution_plan, verifier_role_alias).and_then(
+                |lane| dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str(),
+            ),
+            Some(expected_verifier_runtime_role)
         );
     }
 }

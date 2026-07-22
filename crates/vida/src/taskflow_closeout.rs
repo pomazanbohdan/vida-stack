@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::state_store::{StateStore, StateStoreError, TaskRecord, work_item_is_program_container};
+use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
 use operator_output::toon_report::OperatorToonField;
 
 #[derive(Debug, Clone)]

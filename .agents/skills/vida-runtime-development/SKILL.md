@@ -61,6 +61,8 @@ Before every project mutation:
 12. Record the shared-boundary decision before write-producing work. Name the decision as `introduce`, `extend`, `reuse`, or `not_applicable`; name the accepted shared seam, files/functions to decompose, affected callers, command/help/output implications, rejected alternatives, and the reason if no shared boundary is introduced.
 13. Include test architecture in the design decision. Identify which existing tests must be rewritten, deleted, or consolidated around the shared invariant, which remain as compatibility checks, and which new integration tests prove the public surfaces converge. Include default TOON output, explicit JSON output, help/options, persisted-state fixtures, and cross-surface parity when the changed command family exposes them.
 14. Treat the architectural fix as incomplete until adjacent duplicated branches, stale local renderers, stale option/help text, old fixture builders, obsolete snapshots, and tests that preserve old duplicate behavior are rewritten, removed, or explicitly retained as compatibility proof. A test rewrite is part of the fix when the old test would force duplicated production code to remain.
+15. Apply the canonical `Two-Defect Deep-Audit Trigger` and its two-related-defect contour/pattern-sweep escalation in `docs/process/project-error-search-runtime-diagnostics-protocol.md`; this skill routes to that protocol and does not duplicate its event, authority-map, contour, or reset law.
+16. Route test-mode, fixture-ID, and authority-to-projection schema checks to `docs/process/zombie-d-test-writing-protocol.md`; route Cargo preflight and focused-before-broad gate timing to `docs/process/command-timing-and-gate-optimization-protocol.md`. Keep this skill as compact checklist/cross-link only; the process owners carry the detailed matrices and rejection rules.
 
 ## Command Efficiency
 
@@ -133,7 +135,7 @@ Minimal proof for this skill's work:
 4. For packet/state repair defects, add at least one fixture that uses persisted runtime state and invokes the same command family an operator or agent would run.
 5. If an integration test is impossible in the current slice, record the exact blocker in the TaskFlow note, keep the task open unless the user explicitly accepts the risk, and create a follow-up before closing related parent work.
 6. Keep unit tests for small classifiers/helpers, but treat them as supporting proof below the integration/smoke test.
-7. When writing integration tests for a file or public surface, write the whole planned batch first. Do not run full suites after each small assertion. Use focused tests only while shaping the batch, then run broader/full suites only after the complete file/surface batch is written.
+7. For integration tests, follow the canonical `Focused Batch Before Broad Gate` in `docs/process/command-timing-and-gate-optimization-protocol.md` and the ZOMBIE-D matrix in `docs/process/zombie-d-test-writing-protocol.md`; keep this skill as a routing checklist.
 8. A test batch should be research-shaped before execution: identify the public scenarios, success/fail-closed paths, snapshot or persisted-state parity, and operator JSON fields that belong to the same file/surface, then implement those tests together.
 9. If a focused test exposes a production defect during batch writing, fix the production defect and continue completing the remaining batch before broad/full verification.
 10. Prefer smaller integration tests with varied fixtures over one huge scenario. Cover multiple meaningful variants such as ready path, blocked DocFlow, blocked closure admission, dispatch packet preview blocked, persisted snapshot parity, and downstream dispatch gating.
@@ -153,10 +155,10 @@ Do not close GitHub issues, epics, or TaskFlow parents until the relevant childr
 artifact_path: .agents/skills/vida-runtime-development
 artifact_type: agent_skill
 artifact_version: '1'
-artifact_revision: '2026-07-01'
+artifact_revision: '2026-07-22'
 schema_version: '1'
 status: canonical
 source_path: .agents/skills/vida-runtime-development/SKILL.md
 created_at: '2026-07-01T00:00:00+03:00'
-updated_at: 2026-07-01T18:14:00+03:00
+updated_at: 2026-07-22T00:00:00+03:00
 changelog_ref: vida-runtime-development.changelog.jsonl

@@ -88,8 +88,16 @@ fn invalid_reconciled_pack_dispatch_packet_error(
 }
 
 fn reconcile_run_graph_status_with_dispatch_receipt(
+    status: RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
+) -> Result<RunGraphStatus, StateStoreError> {
+    reconcile_run_graph_status_with_dispatch_receipt_and_rework_route(status, receipt, None)
+}
+
+fn reconcile_run_graph_status_with_dispatch_receipt_and_rework_route(
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
 ) -> Result<RunGraphStatus, StateStoreError> {
     let Some(receipt) = receipt else {
         return Ok(status);
@@ -197,9 +205,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         && status.handoff_state == format!("awaiting_{retry_target}")
         && status.resume_target == format!("dispatch.{retry_target}_lane")
         && status.recovery_ready;
-    if let Some(rework_route) =
-        rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
-    {
+    if let Some(rework_route) = rework_route_from_completion_evidence(
+        &run_graph_completion_evidence(&receipt, authorized_rework_route),
+    ) {
         let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
         let rework_policy_gate = rework_route
             .blocker_code
@@ -256,9 +264,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
-        } else if let Some(rework_route) =
-            rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
-        {
+        } else if let Some(rework_route) = rework_route_from_completion_evidence(
+            &run_graph_completion_evidence(&receipt, authorized_rework_route),
+        ) {
             let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
             let rework_policy_gate = rework_route
                 .blocker_code
@@ -330,6 +338,12 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .filter(|value| !value.is_empty())
         {
             status.selected_backend = selected_backend.to_string();
+        }
+        // Dispatch-init materializes a packet before execution. Preserve the
+        // seeded run-graph cursor (planning -> exact configured node) instead
+        // of projecting the receipt's external dispatch alias into state.
+        if crate::taskflow_run_graph::is_seeded_dispatch_ready(&status) {
+            return Ok(status);
         }
         let dispatch_target = normalize_run_graph_node(&receipt.dispatch_target);
         let mut transition = ready_transition_input(
@@ -544,12 +558,13 @@ fn run_graph_authority_transition_kind(
 
 fn run_graph_completion_evidence(
     receipt: &RunGraphDispatchReceiptStored,
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
 ) -> RunGraphCompletionEvidence {
     RunGraphCompletionEvidence {
         dispatch_target: receipt.dispatch_target.clone(),
         dispatch_status: receipt.dispatch_status.clone(),
         blocker_code: receipt.blocker_code.clone(),
-        rework: downstream_rework_evidence_from_completion_result(receipt),
+        rework: downstream_rework_evidence_from_completion_result(authorized_rework_route),
         source_lane: downstream_packet_evidence_from_receipt(receipt),
         downstream_dispatch_ready: receipt.downstream_dispatch_ready,
         downstream_dispatch_target: receipt.downstream_dispatch_target.clone(),
@@ -584,17 +599,12 @@ fn stale_status_can_accept_downstream_ready_handoff(
 }
 
 fn downstream_rework_evidence_from_completion_result(
-    receipt: &RunGraphDispatchReceiptStored,
+    authorized_rework_route: Option<&crate::runtime_dispatch_result_evidence::DispatchReworkRoute>,
 ) -> Option<RunGraphReworkEvidence> {
-    let route = crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
-        receipt.downstream_dispatch_result_path.as_deref(),
-        receipt.dispatch_result_path.as_deref(),
-        receipt.dispatch_packet_path.as_deref(),
-        &receipt.dispatch_target,
-    )?;
+    let route = authorized_rework_route?;
     Some(RunGraphReworkEvidence {
-        allowed_next_node: route.allowed_next_node,
-        blocker_code: route.blocker_code,
+        allowed_next_node: route.allowed_next_node.clone(),
+        blocker_code: route.blocker_code.clone(),
     })
 }
 
@@ -1098,9 +1108,7 @@ fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceip
         && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
 }
 
-fn stored_receipt_has_stale_host_bridge_handoff(
-    receipt: &RunGraphDispatchReceiptStored,
-) -> bool {
+fn stored_receipt_has_stale_host_bridge_handoff(receipt: &RunGraphDispatchReceiptStored) -> bool {
     stale_host_bridge_handoff_receipt_fields(
         &receipt.dispatch_kind,
         &receipt.dispatch_status,
@@ -2921,7 +2929,10 @@ impl StateStore {
         let row = Self::host_bridge_receipt_identity_row(identity)?;
         let _: Option<HostBridgeReceiptIdentityStored> = self
             .db
-            .upsert(("host_bridge_receipt_identity", identity.identity_key().as_str()))
+            .upsert((
+                "host_bridge_receipt_identity",
+                identity.identity_key().as_str(),
+            ))
             .content(row)
             .await?;
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
@@ -2931,9 +2942,9 @@ impl StateStore {
     fn host_bridge_receipt_identity_row(
         identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
     ) -> Result<HostBridgeReceiptIdentityStored, StateStoreError> {
-        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord {
-            reason,
-        })?;
+        identity
+            .validate()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         Ok(HostBridgeReceiptIdentityStored {
             schema_version: identity.schema_version.clone(),
             request_id: identity.request_id.clone(),
@@ -2987,16 +2998,16 @@ impl StateStore {
         force_failure_after_binding_write: bool,
     ) -> Result<(), StateStoreError> {
         let identity_row = Self::host_bridge_receipt_identity_row(identity)?;
-        if receipt.run_id != identity.run_id || receipt.dispatch_target != identity.dispatch_target {
+        if receipt.run_id != identity.run_id || receipt.dispatch_target != identity.dispatch_target
+        {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: "host_bridge_receipt_binding_identity_mismatch:run_or_target".to_string(),
             });
         }
-        let compact_value = serde_json::to_value(receipt).map_err(|error| {
-            StateStoreError::InvalidTaskRecord {
+        let compact_value =
+            serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
                 reason: format!("host_bridge_receipt_binding_compact_serialize_failed:{error}"),
-            }
-        })?;
+            })?;
         let blockers = identity.compact_receipt_blockers(&compact_value);
         if !blockers.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
@@ -3112,11 +3123,14 @@ impl StateStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let adapter_operations = serde_json::from_value(row.adapter_operations).map_err(|error| {
-            StateStoreError::InvalidTaskRecord {
-                reason: format!("host bridge receipt identity adapter_operations invalid: {error}"),
-            }
-        })?;
+        let adapter_operations =
+            serde_json::from_value(row.adapter_operations).map_err(|error| {
+                StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "host bridge receipt identity adapter_operations invalid: {error}"
+                    ),
+                }
+            })?;
         let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: row.schema_version,
             request_id: row.request_id,
@@ -3142,7 +3156,9 @@ impl StateStore {
             receipt_path: row.receipt_path,
             recorded_at: row.recorded_at,
         };
-        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        identity
+            .validate()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         Ok(Some(identity))
     }
 
@@ -3160,11 +3176,14 @@ impl StateStore {
         let rows: Vec<HostBridgeReceiptIdentityStored> = query.take(0)?;
         rows.into_iter()
             .map(|row| {
-                let adapter_operations = serde_json::from_value(row.adapter_operations).map_err(|error| {
-                    StateStoreError::InvalidTaskRecord {
-                        reason: format!("host bridge receipt identity adapter_operations invalid: {error}"),
-                    }
-                })?;
+                let adapter_operations =
+                    serde_json::from_value(row.adapter_operations).map_err(|error| {
+                        StateStoreError::InvalidTaskRecord {
+                            reason: format!(
+                                "host bridge receipt identity adapter_operations invalid: {error}"
+                            ),
+                        }
+                    })?;
                 let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
                     schema_version: row.schema_version,
                     request_id: row.request_id,
@@ -3229,12 +3248,14 @@ impl StateStore {
         &self,
         identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
     ) -> Result<(), StateStoreError> {
-        identity.validate().map_err(|reason| StateStoreError::InvalidTaskRecord {
-            reason,
-        })?;
+        identity
+            .validate()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let key = identity.identity_key();
-        let _: Option<HostBridgeReceiptIdentityStored> =
-            self.db.delete(("host_bridge_receipt_identity", key.as_str())).await?;
+        let _: Option<HostBridgeReceiptIdentityStored> = self
+            .db
+            .delete(("host_bridge_receipt_identity", key.as_str()))
+            .await?;
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
@@ -3739,7 +3760,7 @@ impl StateStore {
             );
             self.record_run_graph_dispatch_task_identity(&identity)
                 .await?;
-            let dispatch_context = self.reconciled_pack_dispatch_context(receipt)?;
+            let dispatch_context = self.reconciled_pack_dispatch_context(receipt).await?;
             let resolved_dev_target = dispatch_context.as_ref().and_then(|(role_selection, _)| {
                 crate::runtime_dispatch_state::first_runtime_dispatch_target_after_dev_pack(
                     role_selection,
@@ -4035,7 +4056,7 @@ impl StateStore {
             return Ok(true);
         }
         let Some((role_selection, run_graph_bootstrap)) =
-            self.reconciled_pack_dispatch_context(receipt)?
+            self.reconciled_pack_dispatch_context(receipt).await?
         else {
             return Ok(false);
         };
@@ -4079,7 +4100,7 @@ impl StateStore {
             .is_some_and(|path| !path.is_empty()))
     }
 
-    fn reconciled_pack_dispatch_context(
+    async fn reconciled_pack_dispatch_context(
         &self,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<Option<(RuntimeConsumptionLaneSelection, serde_json::Value)>, StateStoreError> {
@@ -4121,6 +4142,20 @@ impl StateStore {
                 packet_path.display()
             ),
         })?;
+        let task_id = self
+            .run_graph_dispatch_task_identity(&receipt.run_id)
+            .await?
+            .as_ref()
+            .and_then(|identity| {
+                dispatch_identity_task_id_for_target(identity, &receipt.dispatch_target)
+            });
+        let role_selection = crate::taskflow_run_graph::rehydrate_persisted_role_selection(
+            self,
+            role_selection,
+            task_id.as_deref(),
+        )
+        .await
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let run_graph_bootstrap = packet
             .get("run_graph_bootstrap")
             .cloned()
@@ -4406,7 +4441,38 @@ impl StateStore {
                 .map(|row| row.recovery_ready)
                 .unwrap_or(false),
         };
-        let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
+        let authorized_rework_route = if let Some(receipt) = receipt.as_ref() {
+            if receipt
+                .dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty())
+            {
+                crate::runtime_dispatch_result_evidence::
+                    authorized_dispatch_rework_context_from_receipt_fields(
+                        self,
+                        &status.run_id,
+                        &status.task_id,
+                        receipt.downstream_dispatch_result_path.as_deref(),
+                        receipt.dispatch_result_path.as_deref(),
+                        receipt.dispatch_packet_path.as_deref(),
+                        &receipt.dispatch_target,
+                    )
+                    .await
+                    .map(|context| context.map(|context| context.route))
+                    .map_err(|blocker| StateStoreError::InvalidTaskRecord {
+                        reason: blocker.to_string(),
+                    })?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let status = reconcile_run_graph_status_with_dispatch_receipt_and_rework_route(
+            status,
+            receipt.as_ref(),
+            authorized_rework_route.as_ref(),
+        )?;
         let task = if task_rows.is_empty() {
             self.show_task(&status.task_id).await.ok()
         } else {
@@ -4681,7 +4747,8 @@ impl StateStore {
                     let task_is_closed = task
                         .as_ref()
                         .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status));
-                    let lawful_takeover = lawful_current_exception_takeover(&status, Some(&receipt));
+                    let lawful_takeover =
+                        lawful_current_exception_takeover(&status, Some(&receipt));
                     if task_is_closed && !lawful_takeover {
                         continue;
                     }
@@ -6528,9 +6595,7 @@ mod tests {
             &overlay,
             &["agent_extensions", "registries", "commands"],
         ))
-        .map(|path| {
-            crate::project_activator_surface::resolve_overlay_path(&project_root, &path)
-        })
+        .map(|path| crate::project_activator_surface::resolve_overlay_path(&project_root, &path))
         .expect("dispatch fixture should have a configured command registry path");
         let registry = crate::project_activator_surface::read_yaml_file_checked(&commands_path)
             .expect("dispatch fixture command registry should resolve");
@@ -6569,9 +6634,7 @@ mod tests {
         .and_then(serde_yaml::Value::as_sequence)
         .into_iter()
         .flatten()
-        .flat_map(|group| {
-            crate::yaml_string_list(crate::yaml_lookup(group, &["aliases"]))
-        })
+        .flat_map(|group| crate::yaml_string_list(crate::yaml_lookup(group, &["aliases"])))
         .map(|target| target.trim().to_string())
         .filter(|target| !target.is_empty())
         .collect::<Vec<_>>();
@@ -6613,23 +6676,19 @@ mod tests {
         .map(|role| role.trim().to_string())
         .filter(|role| !role.is_empty())
         .expect("dispatch fixture backend should have a default runtime role");
-        let mut carrier_ids = crate::yaml_lookup(
-            &overlay,
-            &["host_environment", "codex", "agents"],
-        )
-        .and_then(serde_yaml::Value::as_mapping)
-        .into_iter()
-        .flatten()
-        .filter_map(|(key, entry)| {
-            let carrier_id = key.as_str()?.trim();
-            let configured_profile = crate::yaml_string(crate::yaml_lookup(
-                entry,
-                &["default_model_profile"],
-            ))?;
-            (configured_profile.trim() == default_profile).then_some(carrier_id.to_string())
-        })
-        .filter(|carrier_id| !carrier_id.is_empty())
-        .collect::<Vec<_>>();
+        let mut carrier_ids =
+            crate::yaml_lookup(&overlay, &["host_environment", "codex", "agents"])
+                .and_then(serde_yaml::Value::as_mapping)
+                .into_iter()
+                .flatten()
+                .filter_map(|(key, entry)| {
+                    let carrier_id = key.as_str()?.trim();
+                    let configured_profile =
+                        crate::yaml_string(crate::yaml_lookup(entry, &["default_model_profile"]))?;
+                    (configured_profile.trim() == default_profile).then_some(carrier_id.to_string())
+                })
+                .filter(|carrier_id| !carrier_id.is_empty())
+                .collect::<Vec<_>>();
         carrier_ids.sort();
         carrier_ids.dedup();
         assert_eq!(
@@ -6747,8 +6806,8 @@ mod tests {
         .to_hex()
         .to_string();
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
-            schema_version:
-                taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION.to_string(),
+            schema_version: taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION
+                .to_string(),
             request_id: format!("request-{run_id}"),
             run_id: run_id.to_string(),
             task_id: format!("task-{run_id}"),
@@ -6819,9 +6878,9 @@ mod tests {
             .await
             .expect_err("conflicting compact receipt must fail closed");
         assert!(
-            error
-                .to_string()
-                .contains("host_bridge_receipt_binding_conflict:receipt_key=run-host-bridge-binding"),
+            error.to_string().contains(
+                "host_bridge_receipt_binding_conflict:receipt_key=run-host-bridge-binding"
+            ),
             "error={error:?}"
         );
 
@@ -6899,7 +6958,8 @@ mod tests {
             let packet_path = format!("/tmp/host-bridge-binding-concurrent-{iteration}.json");
             let mut receipt = sample_dispatch_receipt(&run_id);
             receipt.dispatch_packet_path = Some(packet_path.clone());
-            let first_identity = sample_host_bridge_receipt_identity(&run_id, &packet_path, &receipt);
+            let first_identity =
+                sample_host_bridge_receipt_identity(&run_id, &packet_path, &receipt);
             let mut second_identity = first_identity.clone();
             second_identity.request_id = format!("{}-second", second_identity.request_id);
 
@@ -7827,6 +7887,7 @@ mod tests {
             reconciled_pack_dispatch_receipt_for_path(external_packet.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("out-of-root packet should be rejected");
 
         match error {
@@ -7860,6 +7921,7 @@ mod tests {
         ));
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("dot-segment traversal should be rejected");
 
         match error {
@@ -7886,6 +7948,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(packet_dir.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("directory packet path should be rejected");
 
         match error {
@@ -7922,6 +7985,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(packet_link.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("symlink packet path should be rejected");
 
         match error {
@@ -7969,6 +8033,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(packet_link.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("symlink packet path should be rejected");
 
         match error {
@@ -7994,6 +8059,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(packet.display().to_string());
         let (_role_selection, run_graph_bootstrap) = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect("in-root packet should decode")
             .expect("in-root packet should be accepted");
 
@@ -8019,6 +8085,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(relative_packet_path);
         let (_role_selection, run_graph_bootstrap) = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect("relative in-root packet should decode")
             .expect("relative in-root packet should be accepted");
 
@@ -8043,6 +8110,7 @@ mod tests {
         let receipt = reconciled_pack_dispatch_receipt_for_path(packet.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
+            .await
             .expect_err("oversized packet should be rejected");
 
         match error {
@@ -10029,8 +10097,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_run_graph_selector_archives_latest_receiptless_open_handoff_without_mutating_raw_status()
-    {
+    async fn operator_run_graph_selector_archives_latest_receiptless_open_handoff_without_mutating_raw_status(
+    ) {
         let root = temp_run_graph_root("vida-operator-receiptless-archive");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let task_id = "task-receiptless-archive";
@@ -11314,7 +11382,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_status_retains_active_receipt_only_missing_execution_as_global_stale() {
+    async fn latest_run_graph_status_retains_active_receipt_only_missing_execution_as_global_stale()
+    {
         let root = temp_run_graph_root("vida-run-graph-receipt-only-missing-execution");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let run_id = "run-receipt-only-missing-execution";

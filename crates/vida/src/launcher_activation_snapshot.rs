@@ -5,8 +5,9 @@ use time::format_description::well_known::Rfc3339;
 use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
 use crate::state_store::LauncherActivationSnapshot;
 use crate::{
-    StateStore, StateStoreError, build_compiled_agent_extension_bundle_for_root, config_file_path,
-    config_file_path_for_root, load_project_overlay_yaml, split_csv_like, yaml_lookup, yaml_string,
+    build_compiled_agent_extension_bundle_for_root, config_file_path, config_file_path_for_root,
+    load_project_overlay_yaml, split_csv_like, yaml_lookup, yaml_string, StateStore,
+    StateStoreError,
 };
 
 pub(crate) fn pack_router_keywords_json(config: &serde_yaml::Value) -> serde_json::Value {
@@ -88,7 +89,21 @@ pub(crate) async fn read_or_sync_launcher_activation_snapshot(
             if snapshot.source_config_digest == current_digest
                 && snapshot.source_config_path == current_config_path
             {
-                Ok(snapshot)
+                match crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                    &snapshot.compiled_bundle,
+                    None,
+                    None,
+                ) {
+                    Ok(_) => Ok(snapshot),
+                    Err(blocker) => sync_launcher_activation_snapshot_for_root(store, &project_root)
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "Persisted launcher activation snapshot failed TeamFlow authority validation ({}); canonical refresh failed: {}",
+                                blocker, error
+                            )
+                        }),
+                }
             } else {
                 sync_launcher_activation_snapshot_for_root(store, &project_root).await
             }

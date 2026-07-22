@@ -1,9 +1,10 @@
 use std::{path::Path, process::ExitCode, time::Duration};
 
 use crate::{
-    RenderMode, print_surface_header, print_surface_line,
+    print_surface_header, print_surface_line,
     state_store::{StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode,
 };
 
 const TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
@@ -284,19 +285,27 @@ fn reconcile_dispatch_packet_owned_paths_from_task(
     repaired
 }
 
-fn reconcile_dispatch_packet_lane_contract_from_task(
+async fn reconcile_dispatch_packet_lane_contract_from_task(
+    store: &StateStore,
     dispatch_packet_body: &mut serde_json::Value,
     task: &TaskRecord,
-) -> Option<bool> {
-    let role_selection = dispatch_packet_body
-        .get("role_selection_full")
-        .cloned()
-        .and_then(|value| {
-            serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(value).ok()
-        })?;
-    let dispatch_target = packet_trimmed_string(dispatch_packet_body, "dispatch_target")
-        .or_else(|| packet_trimmed_string(dispatch_packet_body, "downstream_dispatch_target"))?
-        .to_string();
+) -> Result<Option<bool>, String> {
+    let Some(role_selection_value) = dispatch_packet_body.get("role_selection_full").cloned()
+    else {
+        return Ok(None);
+    };
+    let role_selection = crate::taskflow_run_graph::rehydrate_persisted_role_selection_value(
+        store,
+        role_selection_value,
+        Some(&task.id),
+    )
+    .await?;
+    let Some(dispatch_target) = packet_trimmed_string(dispatch_packet_body, "dispatch_target")
+        .or_else(|| packet_trimmed_string(dispatch_packet_body, "downstream_dispatch_target"))
+    else {
+        return Ok(None);
+    };
+    let dispatch_target = dispatch_target.to_string();
     let source_dispatch_target =
         packet_trimmed_string(dispatch_packet_body, "source_dispatch_target")
             .unwrap_or(dispatch_target.as_str())
@@ -317,8 +326,8 @@ fn reconcile_dispatch_packet_lane_contract_from_task(
         activation_runtime_role_hint,
         &task.planner_metadata.owned_paths,
         &project_root,
-    );
-    Some(contract.apply_to_packet(dispatch_packet_body))
+    )?;
+    Ok(Some(contract.apply_to_packet(dispatch_packet_body)))
 }
 
 fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<String>> {
@@ -483,7 +492,7 @@ async fn repair_persisted_dispatch_packet_from_task(
     let mut repaired = repair_delivery_task_packet_identity(&mut packet);
     repaired |= reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task);
     if let Some(lane_repaired) =
-        reconcile_dispatch_packet_lane_contract_from_task(&mut packet, task)
+        reconcile_dispatch_packet_lane_contract_from_task(store, &mut packet, task).await?
     {
         repaired |= lane_repaired;
     }
@@ -1161,8 +1170,8 @@ mod tests {
         resolve_packet_render_run_id, run_taskflow_packet,
     };
     use crate::state_store::{
-        CreateTaskRequest, ExecutionPlanStateRow, RunGraphDispatchReceiptStored, STATE_DATABASE,
-        STATE_NAMESPACE, StateStore, TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord,
+        CreateTaskRequest, ExecutionPlanStateRow, RunGraphDispatchReceiptStored, StateStore,
+        TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord, STATE_DATABASE, STATE_NAMESPACE,
     };
     use std::fs;
     use std::process::ExitCode;
@@ -1257,11 +1266,9 @@ mod tests {
             selected["dispatch_packet"]["body"]["route_policy"]["effective_selected_backend"],
             "internal_subagents"
         );
-        assert!(
-            selected["dispatch_packet"]["body"]
-                .get("large_runtime_artifact")
-                .is_none()
-        );
+        assert!(selected["dispatch_packet"]["body"]
+            .get("large_runtime_artifact")
+            .is_none());
     }
 
     #[test]
@@ -2134,13 +2141,11 @@ mod tests {
                 serde_json::from_str(&projection).expect("decode projection");
             assert_eq!(payload["status"], "blocked");
             assert_eq!(payload["from_task"], task.id);
-            assert!(
-                payload["blocker_codes"]
-                    .as_array()
-                    .expect("blocker codes")
-                    .iter()
-                    .any(|code| code == "dispatch_packet_repair_failed")
-            );
+            assert!(payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "dispatch_packet_repair_failed"));
             let repair_error = payload["repair_error"].as_str().expect("repair error");
             assert!(
                 repair_error.contains("Persisted dispatch packet run_id does not match"),
@@ -2363,12 +2368,10 @@ mod tests {
             payload["blocker_codes"][0],
             "task_metadata_missing_owned_paths"
         );
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action")
-                .contains("vida task update task-with-metadata --owned-path")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("vida task update task-with-metadata --owned-path"));
     }
 
     #[test]

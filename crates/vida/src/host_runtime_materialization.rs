@@ -885,6 +885,9 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
                 "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
                 "runtime_roles": runtime_roles,
                 "task_classes": task_classes,
+                "enabled": yaml_bool(yaml_lookup(value, &["enabled"]), true),
+                "unselectable": yaml_bool(yaml_lookup(value, &["unselectable"]), false),
+                "unresolved": yaml_bool(yaml_lookup(value, &["unresolved"]), false),
                 "host_runtime_developer_instructions": runtime_developer_instructions.clone(),
                 "shell_environment_policy": shell_environment_policy.clone(),
             }))
@@ -937,6 +940,116 @@ mod tests {
             "project config should define carriers for host_environment.cli_system"
         );
         agent_catalog
+    }
+
+    #[test]
+    fn carrier_projection_preserves_lifecycle_flags_and_missing_rows_fail_closed() {
+        let mut config = configured_host_runtime_config();
+        let system_id = super::selected_host_runtime_system_id(&config)
+            .expect("project config should select a host system");
+        let systems = config["host_environment"]["systems"]
+            .as_mapping_mut()
+            .expect("host systems should be a mapping");
+        let system = systems
+            .get_mut(serde_yaml::Value::String(system_id))
+            .expect("selected host system should exist");
+        let carriers = system["carriers"]
+            .as_mapping_mut()
+            .expect("selected host system carriers should be a mapping");
+        let carrier = carriers
+            .values_mut()
+            .next()
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("selected host system should define a carrier");
+        carrier.insert(
+            serde_yaml::Value::String("enabled".to_string()),
+            serde_yaml::Value::Bool(false),
+        );
+        carrier.insert(
+            serde_yaml::Value::String("unselectable".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+        carrier.insert(
+            serde_yaml::Value::String("unresolved".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+
+        let projected = super::overlay_host_runtime_agent_catalog(&config);
+        let row = projected
+            .iter()
+            .find(|row| {
+                row["enabled"].as_bool() == Some(false)
+                    && row["unselectable"].as_bool() == Some(true)
+            })
+            .expect("carrier lifecycle flags should project");
+        assert_eq!(row["enabled"], false);
+        assert_eq!(row["unselectable"], true);
+        assert_eq!(row["unresolved"], true);
+
+        let alias = serde_json::json!({
+            "alias_id": "missing-lifecycle",
+            "carrier_tier": row["carrier_tier"],
+            "runtime_roles": row["runtime_roles"],
+            "task_classes": row["task_classes"]
+        });
+        let missing = serde_json::json!({
+            "role_id": "carrier-without-lifecycle",
+            "carrier_tier": row["carrier_tier"],
+            "runtime_roles": row["runtime_roles"],
+            "task_classes": row["task_classes"]
+        });
+        let materialized = super::materialize_host_runtime_dispatch_alias_catalog(
+            std::slice::from_ref(&alias),
+            std::slice::from_ref(&missing),
+        );
+        assert_eq!(materialized[0]["enabled"], false);
+        assert_eq!(materialized[0]["unselectable"], true);
+        assert_eq!(materialized[0]["unresolved"], true);
+        assert_eq!(
+            materialized[0]["unresolved_diagnostic"]["code"],
+            "carrier_lifecycle_missing"
+        );
+    }
+
+    #[test]
+    fn carrier_backend_lifecycle_matrix_keeps_internal_and_external_rows_separate() {
+        let source = configured_host_runtime_agent_catalog()
+            .first()
+            .cloned()
+            .expect("configured carrier should exist");
+        let alias = serde_json::json!({
+            "alias_id": "carrier-backend-matrix",
+            "carrier_tier": source["carrier_tier"],
+            "runtime_roles": source["runtime_roles"],
+            "task_classes": source["task_classes"]
+        });
+        for backend_class in ["internal", "external_cli"] {
+            let mut enabled = source.clone();
+            enabled["executor_backend_relation"] = serde_json::json!({
+                "backend_id": format!("opaque-backend-{backend_class}"),
+                "required_backend_class": backend_class
+            });
+            let resolved = super::materialize_host_runtime_dispatch_alias_catalog(
+                std::slice::from_ref(&alias),
+                std::slice::from_ref(&enabled),
+            );
+            assert_eq!(resolved[0]["enabled"], true);
+            assert_eq!(
+                resolved[0]["executor_backend_relation"]["required_backend_class"],
+                backend_class
+            );
+
+            enabled["enabled"] = serde_json::Value::Bool(false);
+            let blocked = super::materialize_host_runtime_dispatch_alias_catalog(
+                std::slice::from_ref(&alias),
+                std::slice::from_ref(&enabled),
+            );
+            assert_eq!(blocked[0]["unresolved"], true);
+            assert_eq!(
+                blocked[0]["unresolved_diagnostic"]["code"],
+                "carrier_disabled"
+            );
+        }
     }
 
     #[test]
@@ -1361,6 +1474,8 @@ mod tests {
                     "host system {system_id} alias {alias_id} must resolve: {}",
                     row["unresolved_diagnostic"]
                 );
+                assert_eq!(row["enabled"], true);
+                assert_eq!(row["unselectable"], false);
                 assert_eq!(row["carrier_tier"], alias["carrier_tier"]);
                 let selected_id = row["template_role_id"]
                     .as_str()
@@ -1401,6 +1516,87 @@ mod tests {
             assert_eq!(row["unresolved_diagnostic"]["code"], "invalid_alias_id");
             assert_eq!(row["unresolved_diagnostic"]["source_index"], source_index);
         }
+    }
+
+    #[test]
+    fn dispatch_alias_materialization_projects_state_and_fails_closed_matrix() {
+        let agents = configured_host_runtime_agent_catalog();
+        let source = agents.first().expect("configured carrier should exist");
+        let carrier_tier = crate::carrier_runtime_catalog::canonical_carrier_tier(source)
+            .expect("configured carrier tier");
+        let runtime_roles = source["runtime_roles"].clone();
+        let task_classes = source["task_classes"].clone();
+        let mut selected = source.clone();
+        selected["executor_backend_relation"] = serde_json::json!({
+            "backend_id": "configured-backend",
+            "required_backend_class": "configured-class"
+        });
+        let alias = serde_json::json!({
+            "alias_id": "alias-state-matrix",
+            "carrier_tier": carrier_tier,
+            "runtime_roles": runtime_roles,
+            "task_classes": task_classes
+        });
+
+        let resolved = super::materialize_host_runtime_dispatch_alias_catalog(
+            std::slice::from_ref(&alias),
+            std::slice::from_ref(&selected),
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0]["enabled"], true);
+        assert_eq!(resolved[0]["unselectable"], false);
+        assert_eq!(resolved[0]["unresolved"], false);
+        assert_eq!(
+            resolved[0]["unresolved_diagnostic"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            resolved[0]["executor_backend_relation"],
+            selected["executor_backend_relation"]
+        );
+
+        let mut disabled = selected.clone();
+        disabled["enabled"] = serde_json::Value::Bool(false);
+        let disabled_row = super::materialize_host_runtime_dispatch_alias_catalog(
+            std::slice::from_ref(&alias),
+            std::slice::from_ref(&disabled),
+        );
+        assert_eq!(disabled_row[0]["enabled"], false);
+        assert_eq!(disabled_row[0]["unselectable"], true);
+        assert_eq!(disabled_row[0]["unresolved"], true);
+        assert_eq!(
+            disabled_row[0]["unresolved_diagnostic"]["code"],
+            "carrier_disabled"
+        );
+
+        let zero_match = serde_json::json!({
+            "alias_id": "alias-zero-match",
+            "carrier_tier": alias["carrier_tier"],
+            "runtime_roles": ["missing_runtime_role"],
+            "task_classes": alias["task_classes"]
+        });
+        let zero_match_row = super::materialize_host_runtime_dispatch_alias_catalog(
+            std::slice::from_ref(&zero_match),
+            std::slice::from_ref(source),
+        );
+        assert_eq!(zero_match_row[0]["unresolved"], true);
+        assert_eq!(
+            zero_match_row[0]["unresolved_diagnostic"]["code"],
+            "carrier_capability_mismatch"
+        );
+
+        let mut duplicate = source.clone();
+        duplicate["role_id"] =
+            serde_json::Value::String("duplicate-configured-carrier".to_string());
+        let ambiguous_row = super::materialize_host_runtime_dispatch_alias_catalog(
+            std::slice::from_ref(&alias),
+            &[source.clone(), duplicate],
+        );
+        assert_eq!(ambiguous_row[0]["unresolved"], true);
+        assert_eq!(
+            ambiguous_row[0]["unresolved_diagnostic"]["code"],
+            "ambiguous_compatible_carriers"
+        );
     }
 }
 
@@ -1461,6 +1657,9 @@ pub(crate) fn host_runtime_entry_carrier_catalog(
                 "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
                 "runtime_roles": runtime_roles,
                 "task_classes": task_classes,
+                "enabled": yaml_bool(yaml_lookup(value, &["enabled"]), true),
+                "unselectable": yaml_bool(yaml_lookup(value, &["unselectable"]), false),
+                "unresolved": yaml_bool(yaml_lookup(value, &["unresolved"]), false),
             }))
         })
         .collect::<Vec<_>>();
@@ -1483,6 +1682,38 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
     configured_aliases: &[serde_json::Value],
     agent_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
+    fn carrier_row_is_selectable(row: &serde_json::Value) -> bool {
+        row.get("enabled").and_then(serde_json::Value::as_bool) == Some(true)
+            && row.get("unselectable").and_then(serde_json::Value::as_bool) == Some(false)
+            && row.get("unresolved").and_then(serde_json::Value::as_bool) == Some(false)
+    }
+
+    fn carrier_row_lifecycle_diagnostic(row: &serde_json::Value) -> Option<&'static str> {
+        if row
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .is_none()
+            || row
+                .get("unselectable")
+                .and_then(serde_json::Value::as_bool)
+                .is_none()
+            || row
+                .get("unresolved")
+                .and_then(serde_json::Value::as_bool)
+                .is_none()
+        {
+            Some("carrier_lifecycle_missing")
+        } else if row.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+            Some("carrier_disabled")
+        } else if row.get("unselectable").and_then(serde_json::Value::as_bool) == Some(true) {
+            Some("carrier_unselectable")
+        } else if row.get("unresolved").and_then(serde_json::Value::as_bool) == Some(true) {
+            Some("carrier_unresolved")
+        } else {
+            None
+        }
+    }
+
     let mut sorted_agents = agent_catalog.to_vec();
     sorted_agents.sort_by(|left, right| {
         crate::carrier_runtime_catalog::canonical_carrier_tier(left)
@@ -1526,6 +1757,31 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
                     },
                 });
             };
+            if value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+                || value.get("unselectable").and_then(serde_json::Value::as_bool) == Some(true)
+                || value.get("unresolved").and_then(serde_json::Value::as_bool) == Some(true)
+            {
+                return serde_json::json!({
+                    "role_id": lane_id,
+                    "alias_id": lane_id,
+                    "source_index": source_index,
+                    "unresolved": true,
+                    "enabled": false,
+                    "unselectable": true,
+                    "unresolved_diagnostic": {
+                        "code": if value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+                            "alias_disabled"
+                        } else if value.get("unselectable").and_then(serde_json::Value::as_bool) == Some(true) {
+                            "alias_unselectable"
+                        } else {
+                            "alias_unresolved"
+                        },
+                        "alias_id": lane_id,
+                        "source_index": source_index,
+                        "raw_source": value,
+                    },
+                });
+            }
             let carrier_tier = value["carrier_tier"]
                 .as_str()
                 .map(str::trim)
@@ -1565,6 +1821,7 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
             let compatible = candidates
                 .iter()
                 .copied()
+                .filter(|row| carrier_row_is_selectable(row))
                 .filter(|row| {
                     let row_roles = row["runtime_roles"]
                         .as_array()
@@ -1598,7 +1855,12 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
                 let code = if carrier_tier.is_empty() {
                     "carrier_tier_missing"
                 } else if compatible.is_empty() {
-                    if candidates.is_empty() {
+                    if let Some(code) = candidates
+                        .iter()
+                        .find_map(|row| carrier_row_lifecycle_diagnostic(row))
+                    {
+                        code
+                    } else if candidates.is_empty() {
                         "carrier_tier_not_available"
                     } else {
                         "carrier_capability_mismatch"
@@ -1628,6 +1890,8 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
                 };
                 return serde_json::json!({
                     "role_id": lane_id,
+                    "alias_id": lane_id,
+                    "source_index": source_index,
                     "description": value.get("description").cloned().unwrap_or(serde_json::Value::Null),
                     "carrier_tier": carrier_tier,
                     "requested_carrier_tier": carrier_tier,
@@ -1638,6 +1902,7 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
                     "default_runtime_role": runtime_role,
                     "unresolved": true,
                     "enabled": false,
+                    "unselectable": true,
                     "unresolved_diagnostic": {
                         "code": code,
                         "alias_id": lane_id,
@@ -1650,6 +1915,8 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
             }
             let mut row = compatible[0].clone().clone();
             row["role_id"] = serde_json::Value::String(lane_id.to_string());
+            row["alias_id"] = serde_json::Value::String(lane_id.to_string());
+            row["source_index"] = serde_json::json!(source_index);
             row["description"] = value
                 .get("description")
                 .cloned()
@@ -1674,7 +1941,10 @@ pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             row["provider_identity"] = row["carrier_provider"].clone();
+            row["enabled"] = serde_json::Value::Bool(true);
+            row["unselectable"] = serde_json::Value::Bool(false);
             row["unresolved"] = serde_json::Value::Bool(false);
+            row["unresolved_diagnostic"] = serde_json::Value::Null;
             row["developer_instructions"] = value
                 .get("developer_instructions")
                 .cloned()

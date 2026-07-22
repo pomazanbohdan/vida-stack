@@ -31,8 +31,8 @@ pub(crate) fn print_json_pretty(value: &serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use crate::Cli;
     use crate::test_cli_support::cli;
+    use crate::Cli;
     use clap::CommandFactory;
     use std::process::ExitCode;
 

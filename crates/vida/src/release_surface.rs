@@ -1688,7 +1688,11 @@ fn default_release_install_root_from_values(
 }
 
 fn release_env_file_name() -> &'static str {
-    if cfg!(windows) { "env.ps1" } else { "env.sh" }
+    if cfg!(windows) {
+        "env.ps1"
+    } else {
+        "env.sh"
+    }
 }
 
 fn user_home_dir() -> Option<PathBuf> {
@@ -2180,11 +2184,9 @@ mod tests {
         assert_eq!(blocked.blocker_code, "release_install_active_path_mismatch");
         assert!(blocked.next_action.contains("remove the non-canonical"));
         assert!(blocked.next_action.contains("current/bin"));
-        assert!(
-            blocked
-                .next_action
-                .contains(&active_vida.display().to_string())
-        );
+        assert!(blocked
+            .next_action
+            .contains(&active_vida.display().to_string()));
     }
 
     #[test]
@@ -2324,12 +2326,10 @@ mod tests {
             receipt.progress_path.as_deref(),
             Some(progress_path.display().to_string().as_str())
         );
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("do not start another release install"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("do not start another release install")));
         clean_release_progress_latest_markers();
     }
 
@@ -2360,12 +2360,10 @@ mod tests {
         assert_eq!(receipt.latest_status.as_deref(), Some("started"));
         assert_eq!(receipt.process_id, None);
         assert_eq!(receipt.child_state.as_deref(), Some("starting"));
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("do not start another release install"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("do not start another release install")));
         clean_release_progress_latest_markers();
     }
 
@@ -2379,11 +2377,9 @@ mod tests {
             blocker_codes,
             vec!["release_install_progress_stale_started".to_string()]
         );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("recorded build process is not alive"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("recorded build process is not alive")));
     }
 
     #[test]
@@ -2698,12 +2694,10 @@ mod tests {
             receipt.blocker_codes,
             vec!["release_install_progress_unreadable".to_string()]
         );
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("symlink"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("symlink")));
         assert!(receipt.latest_event.is_none());
         assert!(receipt.progress_path.is_none());
         assert_eq!(
@@ -2761,12 +2755,10 @@ mod tests {
             receipt.blocker_codes,
             vec!["release_install_progress_unreadable".to_string()]
         );
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("symlink"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("symlink")));
         assert!(receipt.latest_event.is_none());
         assert!(receipt.progress_path.is_none());
         assert_eq!(
@@ -2850,12 +2842,10 @@ mod tests {
             receipt.build.progress_path.as_deref(),
             Some(progress_path.display().to_string().as_str())
         );
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("release install --status"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("release install --status")));
         clean_release_progress_latest_markers();
     }
 
@@ -3122,25 +3112,19 @@ mod tests {
         assert_eq!(latest["progress_path"], progress_path);
         assert_eq!(receipt.io_error, None);
         assert_eq!(receipt.asset_update.status, "refreshed");
-        assert!(
-            receipt
-                .asset_update
-                .refreshed_paths
-                .iter()
-                .any(|path| path == "vida/config")
-        );
-        assert!(
-            harness
-                .path()
-                .join("install-root/current/vida/config/instructions/bundles/framework-source")
-                .is_dir()
-        );
-        assert!(
-            harness
-                .path()
-                .join("install-root/current/install/assets/feature-design-document.template.md")
-                .is_file()
-        );
+        assert!(receipt
+            .asset_update
+            .refreshed_paths
+            .iter()
+            .any(|path| path == "vida/config"));
+        assert!(harness
+            .path()
+            .join("install-root/current/vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("install-root/current/install/assets/feature-design-document.template.md")
+            .is_file());
         assert_eq!(receipt.installed_targets.len(), 1);
         assert_eq!(receipt.installed_targets[0].target, "current");
         assert_eq!(
@@ -3249,11 +3233,9 @@ mod tests {
                 .display()
                 .to_string()
         );
-        assert!(
-            layout
-                .env_file
-                .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" })
-        );
+        assert!(layout
+            .env_file
+            .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" }));
         assert_eq!(layout.platform, std::env::consts::OS);
     }
 

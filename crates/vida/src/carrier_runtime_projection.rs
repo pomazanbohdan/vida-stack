@@ -7,35 +7,59 @@ pub(crate) struct CarrierRuntimeProjection {
     pub(crate) validation_errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SelectedHostCliSystemError {
+    MissingSelection,
+    UnknownSelection { system: String },
+    DisabledSelection { system: String },
+}
+
+impl SelectedHostCliSystemError {
+    fn blocker_code(&self) -> &'static str {
+        taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str()
+    }
+}
+
+impl std::fmt::Display for SelectedHostCliSystemError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSelection => {
+                write!(formatter, "selected host CLI system is missing")
+            }
+            Self::UnknownSelection { system } => {
+                write!(
+                    formatter,
+                    "selected host CLI system `{system}` is not registered"
+                )
+            }
+            Self::DisabledSelection { system } => {
+                write!(formatter, "selected host CLI system `{system}` is disabled")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SelectedHostCliSystemError {}
+
 fn selected_runtime_root(
     root: &Path,
     selected_host_cli_system: Option<&str>,
     host_cli_system_registry: &HashMap<String, serde_yaml::Value>,
-) -> std::path::PathBuf {
-    if let Some(system) = selected_host_cli_system {
-        if let Some(entry) = host_cli_system_registry.get(system) {
-            return crate::project_activator_surface::host_cli_system_runtime_root(
-                entry, system, root,
-            );
-        }
+) -> Result<std::path::PathBuf, SelectedHostCliSystemError> {
+    let Some(system) = selected_host_cli_system
+        .map(str::trim)
+        .filter(|system| !system.is_empty())
+    else {
+        return Err(SelectedHostCliSystemError::MissingSelection);
+    };
+    let system = system.to_ascii_lowercase();
+    let Some(entry) = host_cli_system_registry.get(&system) else {
+        return Err(SelectedHostCliSystemError::UnknownSelection { system });
+    };
+    if !crate::project_activator_surface::host_cli_system_enabled(entry) {
+        return Err(SelectedHostCliSystemError::DisabledSelection { system });
     }
-
-    let mut enabled_entries = host_cli_system_registry
-        .iter()
-        .filter(|(_, entry)| crate::project_activator_surface::host_cli_system_enabled(entry))
-        .collect::<Vec<_>>();
-    enabled_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    if let Some((system, entry)) = enabled_entries.first() {
-        return crate::project_activator_surface::host_cli_system_runtime_root(entry, system, root);
-    }
-
-    let mut entries = host_cli_system_registry.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    if let Some((system, entry)) = entries.first() {
-        return crate::project_activator_surface::host_cli_system_runtime_root(entry, system, root);
-    }
-
-    root.join(".host-runtime")
+    Ok(crate::project_activator_surface::host_cli_system_runtime_root(entry, &system, root))
 }
 
 pub(crate) fn build_carrier_runtime_projection(
@@ -46,11 +70,15 @@ pub(crate) fn build_carrier_runtime_projection(
     dispatch_aliases_registry: &serde_yaml::Value,
     dispatch_aliases_path: Option<&str>,
 ) -> CarrierRuntimeProjection {
-    let runtime_root =
-        selected_runtime_root(root, selected_host_cli_system, host_cli_system_registry);
-    let runtime_config = read_simple_toml_sections(&runtime_root.join("config.toml"));
-    let carrier_roles =
-        crate::carrier_runtime_catalog::resolved_carrier_roles(config, &runtime_root);
+    let (runtime_config, carrier_roles, selected_host_system_error) =
+        match selected_runtime_root(root, selected_host_cli_system, host_cli_system_registry) {
+            Ok(runtime_root) => (
+                read_simple_toml_sections(&runtime_root.join("config.toml")),
+                crate::carrier_runtime_catalog::resolved_carrier_roles(config, &runtime_root),
+                None,
+            ),
+            Err(error) => (HashMap::new(), Vec::new(), Some(error)),
+        };
     let dispatch_alias_rows = registry_rows_by_key(
         dispatch_aliases_registry,
         "dispatch_aliases",
@@ -84,13 +112,18 @@ pub(crate) fn build_carrier_runtime_projection(
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
+    let selected_host_system_id = selected_host_cli_system
+        .map(str::trim)
+        .filter(|system| !system.is_empty())
+        .map(str::to_ascii_lowercase);
     let stage_attempt_policies = serde_json::to_value(
         crate::yaml_lookup(config, &["agent_system", "stage_attempt_policies"])
             .cloned()
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
-    let executor_backend_relation = selected_host_cli_system
+    let executor_backend_relation = selected_host_system_id
+        .as_deref()
         .and_then(|system_id| host_cli_system_registry.get(system_id))
         .and_then(|system| crate::yaml_lookup(system, &["executor_backend_relation"]))
         .cloned()
@@ -104,6 +137,9 @@ pub(crate) fn build_carrier_runtime_projection(
             &carrier_dispatch_aliases,
         ),
     );
+    if let Some(error) = &selected_host_system_error {
+        validation_errors.push(format!("{}: {error}", error.blocker_code()));
+    }
 
     CarrierRuntimeProjection {
         carrier_runtime: serde_json::json!({
@@ -123,13 +159,13 @@ pub(crate) fn build_carrier_runtime_projection(
                 .cloned()
                 .unwrap_or_default(),
             "materialization_mode": crate::carrier_runtime_metadata::carrier_runtime_materialization_mode(
-                selected_host_cli_system,
+                selected_host_system_id.as_deref(),
                 host_cli_system_registry,
             ),
             "roles": carrier_roles,
             "dispatch_aliases": carrier_dispatch_aliases,
             "source_of_truth": crate::carrier_runtime_metadata::carrier_runtime_source_of_truth(
-                selected_host_cli_system,
+                selected_host_system_id.as_deref(),
                 dispatch_alias_rows.is_empty(),
                 dispatch_aliases_path,
             ),
@@ -141,7 +177,10 @@ pub(crate) fn build_carrier_runtime_projection(
             "pricing_policy": pricing_policy,
             "model_selection": model_selection,
             "stage_attempt_policies": stage_attempt_policies,
-            "selected_host_system_id": selected_host_cli_system,
+            "selected_host_system_id": selected_host_system_id,
+            "selected_host_system_error": selected_host_system_error
+                .as_ref()
+                .map(ToString::to_string),
             "executor_backend_relation": executor_backend_relation,
         }),
         validation_errors,
@@ -578,11 +617,22 @@ pub(crate) fn carrier_policy_revalidation_for_project_root(
     ));
     let host_cli_system_registry =
         crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
-    let runtime_root = selected_runtime_root(
+    let runtime_root = match selected_runtime_root(
         project_root,
         selected_host_cli_system.as_deref(),
         &host_cli_system_registry,
-    );
+    ) {
+        Ok(runtime_root) => runtime_root,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": [error.blocker_code()],
+                "reason": error.to_string(),
+                "reselection_required": true,
+                "selected": assignment,
+            });
+        }
+    };
     let roles = crate::carrier_runtime_catalog::resolved_carrier_roles(&config, &runtime_root);
     let current_bundle = serde_json::json!({
         "agent_system": serde_json::to_value(
@@ -701,10 +751,7 @@ mod tests {
             result["validation_errors"],
             json!(["duplicate carrier role id `middle`: role_id must be globally unique"])
         );
-        assert_eq!(
-            result["mismatches"][0]["current"],
-            json!(["middle"])
-        );
+        assert_eq!(result["mismatches"][0]["current"], json!(["middle"]));
         assert_eq!(result["mismatches"][0]["field"], "carrier_role_id");
 
         let mut reversed = duplicate_role_bundle();
@@ -714,7 +761,10 @@ mod tests {
             .reverse();
         let reversed_result =
             super::carrier_policy_revalidation(&reversed, &duplicate_role_assignment());
-        assert_eq!(reversed_result["validation_errors"], result["validation_errors"]);
+        assert_eq!(
+            reversed_result["validation_errors"],
+            result["validation_errors"]
+        );
         assert_eq!(reversed_result["mismatches"], result["mismatches"]);
     }
 
@@ -768,13 +818,11 @@ mod tests {
         assignment["selected_reasoning_effort"] = json!("effort-stale");
         let result = super::carrier_policy_revalidation(&test_bundle(), &assignment);
         assert_eq!(result["status"], "blocked");
-        assert!(
-            result["blocker_codes"]
-                .as_array()
-                .expect("blockers")
-                .iter()
-                .any(|code| code == "active_carrier_policy_mismatch")
-        );
+        assert!(result["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "active_carrier_policy_mismatch"));
         assert_eq!(result["reselection_required"], json!(true));
     }
 
@@ -867,13 +915,14 @@ host_environment:
         let registry =
             crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
 
-        let root = selected_runtime_root(Path::new("/tmp/project"), Some("hermes"), &registry);
+        let root = selected_runtime_root(Path::new("/tmp/project"), Some("hermes"), &registry)
+            .expect("explicit enabled system should resolve");
 
         assert_eq!(root, Path::new("/tmp/project/.hermes"));
     }
 
     #[test]
-    fn selected_runtime_root_uses_first_enabled_system_without_hardcoded_internal_default() {
+    fn selected_runtime_root_fails_closed_when_selection_is_missing_even_with_enabled_system() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:
@@ -881,6 +930,9 @@ host_environment:
     hermes:
       enabled: true
       runtime_root: .hermes
+    acme:
+      enabled: true
+      runtime_root: .acme
     opencode:
       enabled: false
       runtime_root: .opencode
@@ -890,16 +942,100 @@ host_environment:
         let registry =
             crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
 
-        let root = selected_runtime_root(Path::new("/tmp/project"), None, &registry);
+        let error = selected_runtime_root(Path::new("/tmp/project"), None, &registry)
+            .expect_err("missing selection must not choose the first enabled system");
 
-        assert_eq!(root, Path::new("/tmp/project/.hermes"));
+        assert_eq!(error, super::SelectedHostCliSystemError::MissingSelection);
+        assert_eq!(
+            error.blocker_code(),
+            taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str()
+        );
     }
 
     #[test]
-    fn selected_runtime_root_has_stable_neutral_fallback_without_registry() {
-        let root = selected_runtime_root(Path::new("/tmp/project"), None, &HashMap::new());
+    fn selected_runtime_root_fails_closed_without_registry() {
+        let error = selected_runtime_root(Path::new("/tmp/project"), None, &HashMap::new())
+            .expect_err("missing selection must fail closed without a registry");
 
-        assert_eq!(root, Path::new("/tmp/project/.host-runtime"));
+        assert_eq!(error, super::SelectedHostCliSystemError::MissingSelection);
+    }
+
+    #[test]
+    fn selected_runtime_root_fails_closed_for_disabled_selected_system() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  systems:
+    hermes:
+      enabled: false
+      runtime_root: .hermes
+"#,
+        )
+        .expect("config should parse");
+        let registry =
+            crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
+
+        let error = selected_runtime_root(Path::new("/tmp/project"), Some("hermes"), &registry)
+            .expect_err("disabled selected system must fail closed");
+
+        assert_eq!(
+            error,
+            super::SelectedHostCliSystemError::DisabledSelection {
+                system: "hermes".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn selected_runtime_root_fails_closed_for_unknown_selected_system() {
+        let error =
+            selected_runtime_root(Path::new("/tmp/project"), Some("missing"), &HashMap::new())
+                .expect_err("unknown selected system must fail closed");
+
+        assert_eq!(
+            error,
+            super::SelectedHostCliSystemError::UnknownSelection {
+                system: "missing".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn build_projection_reports_typed_host_selection_blocker_without_registry_fallback() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  systems:
+    acme:
+      enabled: true
+      runtime_root: .acme
+"#,
+        )
+        .expect("config should parse");
+        let registry =
+            crate::project_activator_surface::host_cli_system_registry_from_config(Some(&config));
+        let projection = build_carrier_runtime_projection(
+            &config,
+            Path::new("/tmp/project"),
+            None,
+            &registry,
+            &serde_yaml::Value::Null,
+            None,
+        );
+
+        assert!(projection
+            .validation_errors
+            .iter()
+            .any(|error| error.starts_with("host_tool_capability_missing:")));
+        assert_eq!(
+            projection.carrier_runtime["selected_host_system_id"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            projection.carrier_runtime["selected_host_system_error"],
+            "selected host CLI system is missing"
+        );
+        assert_eq!(projection.carrier_runtime["roles"], serde_json::json!([]));
     }
 
     #[test]
@@ -1036,15 +1172,18 @@ agent_system:
         );
 
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["fanout"]["max_attempts"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["fanout"]
+                ["max_attempts"],
             2
         );
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["attempts"][0]["carrier_id"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["attempts"][0]
+                ["carrier_id"],
             "vibe_cli"
         );
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]["model_profile_id"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]
+                ["model_profile_id"],
             "codex_medium"
         );
     }

@@ -267,18 +267,14 @@ pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec
         duplicate_non_empty_carrier_role_ids(roles)
             .into_iter()
             .map(|role_id| {
-                format!(
-                    "duplicate carrier role id `{role_id}`: role_id must be globally unique"
-                )
+                format!("duplicate carrier role id `{role_id}`: role_id must be globally unique")
             }),
     );
     errors.sort();
     errors
 }
 
-pub(crate) fn duplicate_non_empty_carrier_role_ids(
-    roles: &[serde_json::Value],
-) -> Vec<String> {
+pub(crate) fn duplicate_non_empty_carrier_role_ids(roles: &[serde_json::Value]) -> Vec<String> {
     let mut counts = BTreeMap::<String, usize>::new();
     for role_id in roles.iter().filter_map(|row| {
         row["role_id"]
@@ -816,6 +812,12 @@ mod tests {
         .expect("project config yaml");
         template["agent_extensions"]["registries"] =
             project_config["agent_extensions"]["registries"].clone();
+        let master_profile = template["dev_team"]["authority_selection"]["team_profile_id"]
+            .as_str()
+            .expect("master authority profile")
+            .to_string();
+        template["dev_team"]["authority_selection"]["default_flow_id"] =
+            serde_yaml::Value::String("default_delivery".to_string());
         let enabled_system_ids = template["host_environment"]["systems"]
             .as_mapping()
             .expect("template host systems")
@@ -838,10 +840,16 @@ mod tests {
             let aliases = compiled["carrier_runtime"]["dispatch_aliases"]
                 .as_array()
                 .expect("compiled dispatch aliases");
-            for alias in aliases.iter().filter(|alias| {
-                alias["enabled"] != serde_json::Value::Bool(false)
-                    && alias["unresolved"] != serde_json::Value::Bool(true)
-            }) {
+            let ready_aliases = aliases
+                .iter()
+                .filter(|alias| {
+                    alias["enabled"] == serde_json::Value::Bool(true)
+                        && alias["unselectable"] == serde_json::Value::Bool(false)
+                        && alias["unresolved"] == serde_json::Value::Bool(false)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ready_aliases.len(), aliases.len());
+            for alias in ready_aliases {
                 let alias_id = alias["role_id"].as_str().expect("dispatch alias id");
                 let task_class = alias["task_classes"]
                     .as_array()
@@ -867,6 +875,25 @@ mod tests {
                 assert_eq!(
                     revalidation["status"], "pass",
                     "system {system_id} alias {alias_id} assignment must revalidate: {revalidation}"
+                );
+            }
+            let authority =
+                crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                    &compiled,
+                    Some("default_delivery"),
+                    Some(master_profile.as_str()),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("system {system_id} strict authority must be ready: {error}")
+                });
+            let backend_id = compiled["carrier_runtime"]["executor_backend_relation"]["backend_id"]
+                .as_str()
+                .expect("configured executor backend relation id");
+            for node in authority.ordered_nodes() {
+                assert_eq!(
+                    node.executor_backend_relation["selected_id"], backend_id,
+                    "system {system_id} node {} must preserve executor backend relation",
+                    node.node.node_id
                 );
             }
         }

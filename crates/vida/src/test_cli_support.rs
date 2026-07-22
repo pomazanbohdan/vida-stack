@@ -109,3 +109,17 @@ pub(crate) fn cli(args: &[&str]) -> Cli {
     argv.extend(args.iter().copied());
     Cli::parse_from(argv)
 }
+
+#[cfg(test)]
+pub(crate) fn canonical_team_flow_test_project_root(root: &Path) {
+    std::fs::create_dir_all(root.join(".vida/config")).expect("create project config dir");
+    std::fs::create_dir_all(root.join(".vida/db")).expect("create project db dir");
+    std::fs::create_dir_all(root.join(".vida/project")).expect("create project metadata dir");
+    std::fs::write(root.join("AGENTS.md"), "# canonical TeamFlow fixture\n")
+        .expect("write agents marker");
+    std::fs::write(
+        root.join("vida.config.yaml"),
+        include_str!("../../../vida.config.yaml"),
+    )
+    .expect("write canonical project config");
+}
