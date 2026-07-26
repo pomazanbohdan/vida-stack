@@ -4516,17 +4516,20 @@ impl StateStore {
                 .find(|task| task.id == status.task_id)
                 .cloned()
         };
-        let terminal_closed_task_with_receipt_truth = status.status == "completed"
+        let terminal_closed_task_with_close_truth = status.status == "completed"
             && task
                 .as_ref()
                 .is_some_and(|task| Self::task_status_is_closed_like(&task.status))
-            && self
-                .task_close_reconcile_has_persisted_closure_receipt_truth(
-                    &status.run_id,
-                    &status.task_id,
-                )
-                .await?;
-        let authorized_rework_route = if terminal_closed_task_with_receipt_truth {
+            && (task
+                .as_ref()
+                .is_some_and(Self::task_has_canonical_close_truth)
+                || self
+                    .task_close_reconcile_has_persisted_closure_receipt_truth(
+                        &status.run_id,
+                        &status.task_id,
+                    )
+                    .await?);
+        let authorized_rework_route = if terminal_closed_task_with_close_truth {
             None
         } else if let Some(receipt) = receipt.as_ref() {
             if receipt

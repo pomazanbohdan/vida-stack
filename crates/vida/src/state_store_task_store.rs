@@ -345,7 +345,7 @@ impl StateStore {
             .await
     }
 
-    fn task_has_canonical_close_truth(task: &TaskRecord) -> bool {
+    pub(crate) fn task_has_canonical_close_truth(task: &TaskRecord) -> bool {
         Self::task_status_is_closed_like(&task.status)
             && task
                 .closed_at
@@ -7609,6 +7609,18 @@ mod tests {
         assert_eq!(direct_closed.status, "completed");
         assert_eq!(direct_closed.active_node, "closure");
         assert_eq!(direct_closed.lifecycle_stage, "closure_complete");
+        let _: Option<crate::state_store::RunGraphDispatchReceiptStored> = store
+            .db
+            .delete(("run_graph_dispatch_receipt", run_id))
+            .await
+            .expect("remove receipt for canonical-close-only proof");
+        let direct_canonical_close_only = store
+            .run_graph_status(run_id)
+            .await
+            .expect("canonical task close truth should keep malformed run readable");
+        assert_eq!(direct_canonical_close_only.status, "completed");
+        assert_eq!(direct_canonical_close_only.active_node, "closure");
+        assert_eq!(direct_canonical_close_only.lifecycle_stage, "closure_complete");
         let mut active_receipt = receipt;
         active_receipt.run_id = "active-legacy-run".to_string();
         active_receipt.dispatch_packet_path = Some(active_packet_path.display().to_string());
