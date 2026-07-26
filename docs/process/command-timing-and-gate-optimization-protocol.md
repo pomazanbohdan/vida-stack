@@ -140,6 +140,9 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 9. If a command is expected to run longer than two minutes, state that expectation before running it and identify what smaller proof has already passed.
 10. Do not repeatedly rerun a long gate to discover hidden failure details; repair output/artifact capture first.
 10a. Do not repeatedly rerun a large-output command to recover hidden fields; add or use a selector, compact view, range/head/tail view, or artifact-backed raw output first.
+10b. Start any build/release/install gate expected to exceed the host timeout in log-backed mode from the first process spawn. Record stdout/stderr artifact paths, PID, cwd, and target-dir metadata before waiting; before retrying, check whether the original PID is still live and inspect its logs. Never blind-rerun a still-live child.
+10c. For commands that can return row lists, use a compact selector that reports count plus required status/blocker fields before raw rows; require an explicit details/full option for unbounded rows.
+10d. PowerShell helpers must not bind automatic variables such as `$Args`; use descriptive parameter/local names. A successful mutation batch is unproven until a read-back query verifies the intended rows/fields and reports selector-bounded evidence.
 11. If a CI run is superseded by a newer pushed commit, cancel the stale run once the newer run is queued or running so runner capacity and status surfaces reflect the current head.
 12. Windows local proof scripts that invoke Cargo must use deterministic target-dir behavior and report it in timing records. If `CARGO_TARGET_DIR` is already set by the caller, respect that value and record `target_dir_policy=caller_provided`. If the repository is a linked worktree under `.vida/worktrees`, use the owner repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_worktree_shared`. Otherwise use the current repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_default`.
 13. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
@@ -191,6 +194,10 @@ for missing focused evidence.
 After closure, run exactly one post-close runtime self-diagnostic for the coherent cycle. Record the truthful result, including blocker codes and a bounded blocker/rescope when any authority or projection is unavailable. When the diagnostic finds no reusable optimization, record `no_instruction_update_reason` explicitly; when it finds one, update the mapped canonical instruction/protocol owner in the same bounded batch.
 
 Every cycle must measure round trips, repeated reads, agent attempts, proof commands, and their durations/results. The optimization decision must identify which steps were removed, batched, reused, or parallelized, and demonstrate that fail-closed authority, per-defect evidence, and serialized closure gates were preserved.
+
+### Runtime-fix proof order
+
+For a runtime fix, preserve this sequence when safe and state-compatible: focused regression tests → compatible debug build → live debug `status --json`, `task reconcile-closed-runs --limit 25 --json`, and `doctor --json` (or narrower authoritative equivalents) → one final release/install validation. Use release-install only after the debug live proof and do not repeat it per defect; if the debug binary cannot read current state, record the typed incompatibility and keep the final release gate pending.
 
 ## Gate Decision Model
 
@@ -351,6 +358,7 @@ As of this protocol slice, the following observations are known from the active 
 18. The 2026-06-02 recovery-surface repair loop showed that broad local `cargo test -p vida taskflow_run_graph -- --nocapture --test-threads=1` exceeded the 120-second host-tool timeout and left test child processes alive. Do not use the whole `taskflow_run_graph` filter as the default local proof for a narrow recovery/operator-surface fix. Prefer a named focused filter such as `recovery_surface_contract`, then let workspace nextest/CI cover the broad shard unless the broad run is launched log-backed with an explicit timeout and cleanup plan.
 19. The 2026-06-26 active run repair summary proof observed repeated `Blocking waiting for file lock on artifact directory` delay during focused `cargo test -p vida ...` commands. Treat repeated waits as `runtime-optimization-cargo-artifact-lock-proof-latency-20260625` evidence. The command timing hook now emits Cargo target-dir policy metadata for Cargo-like timed commands and recommends grouped focused proof, `scripts/vida-dev-gate.ps1 -Mode focused-nextest`, serialized Cargo shards, or isolated `CARGO_TARGET_DIR` instead of rerunning many tiny proof commands that contend on the same artifact directory.
 20. The 2026-07-02 team-flow E2E repair established the normal operator command set as `vida taskflow team continue <task-id>`, `vida taskflow team status <task-id>`, and `vida taskflow team diagnose <task-id>`. Any E2E blocker diagnosis that requires `vida taskflow run-graph`, `vida lane show`, `vida agent-init --dispatch-packet`, `vida agent host-bridge`, staged JSON result authoring, or host subagent spawn/wait/close is manual bridge glue and must be classified as a runtime/operator-surface defect instead of accepted as the happy-path flow. Focused source proof and debug-runtime smoke are acceptable while the operator explicitly defers installed-runtime updates; installed-runtime validation belongs to the batch/release-install gate when that boundary is lifted.
+21. The 2026-07-26 runtime-followup cycle confirmed the reusable order above: focused tests, compatible debug/live authoritative proof, then one final release-install; long build/release gates require PID plus log artifacts from spawn, row-list commands require count/status/blocker selectors, and PowerShell mutation helpers require automatic-variable-safe names plus read-back verification.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -358,10 +366,10 @@ These observations do not prove one root cause. They prove that timing diagnosti
 artifact_path: process/command-timing-and-gate-optimization-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-07-22
+artifact_revision: 2026-07-26
 schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-07-22T00:00:00+03:00
+updated_at: 2026-07-26T00:00:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl
