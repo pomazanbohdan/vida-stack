@@ -1778,6 +1778,17 @@ impl StateStore {
                 }
                 Err(error) => return Err(error),
             };
+            if !Self::task_status_is_closed_like(&task.status) {
+                skipped_count += 1;
+                skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                    inspect_command: run_graph_status_command(&row.run_id),
+                    run_id: row.run_id,
+                    task_id: row.task_id,
+                    status: row.status,
+                    reason: format!("task_status_not_closed_like:{}", task.status),
+                });
+                continue;
+            }
             let has_canonical_close_truth = Self::task_has_canonical_close_truth(&task);
             let has_closure_receipt_truth = self
                 .task_close_reconcile_has_persisted_closure_receipt_truth(
@@ -1834,17 +1845,6 @@ impl StateStore {
                     task_id: row.task_id,
                     status: row.status,
                     reason: "already_completed".to_string(),
-                });
-                continue;
-            }
-            if !Self::task_status_is_closed_like(&task.status) {
-                skipped_count += 1;
-                skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: run_graph_status_command(&row.run_id),
-                    run_id: row.run_id,
-                    task_id: row.task_id,
-                    status: row.status,
-                    reason: format!("task_status_not_closed_like:{}", task.status),
                 });
                 continue;
             }
@@ -7645,11 +7645,11 @@ mod tests {
         );
 
         let summary = store
-            .reconcile_historical_closed_task_active_runs(1)
+            .reconcile_historical_closed_task_active_runs(2)
             .await
             .expect("reconcile receipt-backed closed run");
         assert_eq!(summary.reconciled_count, 1);
-        assert_eq!(summary.skipped_count, 0);
+        assert_eq!(summary.skipped_count, 1);
         assert_eq!(summary.reconciled_runs[0].run_id, run_id);
         let reconciled = store
             .run_graph_status(run_id)
