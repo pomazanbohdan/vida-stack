@@ -1763,33 +1763,42 @@ impl StateStore {
         let mut skipped_count = 0usize;
 
         for row in rows {
-            let status = self.run_graph_status(&row.run_id).await?;
+            let task = match self.show_task(&row.task_id).await {
+                Ok(task) => task,
+                Err(StateStoreError::MissingTask { .. }) => {
+                    skipped_count += 1;
+                    skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                        inspect_command: run_graph_status_command(&row.run_id),
+                        run_id: row.run_id,
+                        task_id: row.task_id,
+                        status: row.status,
+                        reason: "missing_task".to_string(),
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let has_canonical_close_truth = Self::task_has_canonical_close_truth(&task);
+            let has_closure_receipt_truth = self
+                .task_close_reconcile_has_persisted_closure_receipt_truth(
+                    &row.run_id,
+                    &row.task_id,
+                )
+                .await?;
+            let status = if row.status == "completed"
+                && Self::task_status_is_closed_like(&task.status)
+                && (has_canonical_close_truth || has_closure_receipt_truth)
+            {
+                self.run_graph_raw_status_from_task_rows(&row.run_id)
+                    .await?
+                    .0
+            } else {
+                self.run_graph_status(&row.run_id).await?
+            };
             if row.status == "completed" {
                 if Self::run_graph_status_is_terminal_closure(&status)
                     && !Self::run_graph_status_is_reconciled_terminal_closure(&status)
                 {
-                    let task = match self.show_task(&row.task_id).await {
-                        Ok(task) => task,
-                        Err(StateStoreError::MissingTask { .. }) => {
-                            skipped_count += 1;
-                            skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                                inspect_command: run_graph_status_command(&row.run_id),
-                                run_id: row.run_id,
-                                task_id: row.task_id,
-                                status: row.status,
-                                reason: "missing_task".to_string(),
-                            });
-                            continue;
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    let has_canonical_close_truth = Self::task_has_canonical_close_truth(&task);
-                    let has_closure_receipt_truth = self
-                        .task_close_reconcile_has_persisted_closure_receipt_truth(
-                            &row.run_id,
-                            &row.task_id,
-                        )
-                        .await?;
                     if has_canonical_close_truth || has_closure_receipt_truth {
                         let retired_status = Self::task_close_retired_run_graph_status(
                             status,
@@ -1828,21 +1837,6 @@ impl StateStore {
                 });
                 continue;
             }
-            let task = match self.show_task(&row.task_id).await {
-                Ok(task) => task,
-                Err(StateStoreError::MissingTask { .. }) => {
-                    skipped_count += 1;
-                    skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                        inspect_command: run_graph_status_command(&row.run_id),
-                        run_id: row.run_id,
-                        task_id: row.task_id,
-                        status: row.status,
-                        reason: "missing_task".to_string(),
-                    });
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
             if !Self::task_status_is_closed_like(&task.status) {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
@@ -1854,11 +1848,7 @@ impl StateStore {
                 });
                 continue;
             }
-            if !self
-                .task_close_reconcile_has_persisted_closure_receipt_truth(&row.run_id, &row.task_id)
-                .await?
-                && !Self::task_has_canonical_close_truth(&task)
-            {
+            if !has_closure_receipt_truth && !has_canonical_close_truth {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
                     inspect_command: run_graph_status_command(&row.run_id),
@@ -7404,6 +7394,134 @@ mod tests {
             .await
             .expect("close task");
 
+        let project_root = crate::resolve_runtime_project_root().expect("resolve project root");
+        let config = crate::load_project_overlay_yaml().expect("load project overlay");
+        let compiled_bundle = crate::build_compiled_agent_extension_bundle_for_root(
+            &config,
+            &project_root,
+        )
+        .expect("compile agent extension bundle");
+        store
+            .write_launcher_activation_snapshot(&crate::state_store::LauncherActivationSnapshot {
+                source: "state_store".to_string(),
+                source_config_path: project_root.join("vida.config.yaml").display().to_string(),
+                source_config_digest: crate::launcher_activation_snapshot::config_file_digest(
+                    &project_root.join("vida.config.yaml"),
+                )
+                .expect("config digest"),
+                captured_at: "2026-01-01T00:00:00Z".to_string(),
+                compiled_bundle: compiled_bundle.clone(),
+                pack_router_keywords: serde_json::json!({}),
+            })
+            .await
+            .expect("write launcher activation snapshot");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: compiled_bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+        let mut legacy_execution_plan =
+            crate::build_runtime_execution_plan_from_snapshot(&compiled_bundle, &role_selection);
+        if let Some(plan) = legacy_execution_plan.as_object_mut() {
+            plan.remove("team_flow_authority_selected_node_id");
+            if let Some(dispatch_contract) = plan
+                .get_mut("development_flow")
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|flow| flow.get_mut("dispatch_contract"))
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                dispatch_contract.remove("selected_node_id");
+                dispatch_contract.remove("team_flow_authority_selected_node_id");
+            }
+        }
+        let mut persisted_selection = serde_json::to_value(&role_selection)
+            .expect("encode persisted role selection");
+        persisted_selection["compiled_bundle"] = serde_json::Value::Null;
+        persisted_selection["execution_plan"] = legacy_execution_plan;
+        let packet_path = root.join("runtime-consumption/dispatch-packets/closed-receipt-run.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent")).expect("packet dir");
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": run_id,
+                "role_selection_full": persisted_selection.clone(),
+                "run_graph_bootstrap": { "run_id": run_id },
+            }))
+            .expect("encode malformed legacy packet"),
+        )
+        .expect("write malformed legacy packet");
+        let active_packet_path =
+            root.join("runtime-consumption/dispatch-packets/active-legacy-run.json");
+        fs::write(
+            &active_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": "active-legacy-run",
+                "role_selection_full": persisted_selection,
+                "run_graph_bootstrap": { "run_id": "active-legacy-run" },
+            }))
+            .expect("encode active malformed legacy packet"),
+        )
+        .expect("write active malformed legacy packet");
+        let active_result_path =
+            root.join("runtime-consumption/dispatch-results/active-legacy-run.json");
+        fs::create_dir_all(active_result_path.parent().expect("active result parent"))
+            .expect("active result dir");
+        fs::write(
+            &active_result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework",
+                "rework_target": "implementation",
+                "allowed_next_node": "implementer",
+                "execution_evidence": { "receipt_backed": true },
+            }))
+            .expect("encode active rework result"),
+        )
+        .expect("write active rework result");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "active-legacy-task",
+                title: "Active legacy task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some(parent_id),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create active legacy task");
+        let mut active_status = crate::taskflow_run_graph::default_run_graph_status(
+            "active-legacy-run",
+            "implementation",
+            "implementer",
+        );
+        active_status.task_id = "active-legacy-task".to_string();
+        active_status.status = "executing".to_string();
+        store
+            .record_run_graph_status(&active_status)
+            .await
+            .expect("seed active legacy run");
+
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             run_id,
             "implementation",
@@ -7480,9 +7598,20 @@ mod tests {
         let _: Option<crate::state_store::RunGraphDispatchReceiptStored> = store
             .db
             .upsert(("run_graph_dispatch_receipt", run_id))
-            .content(receipt)
+            .content(receipt.clone())
             .await
             .expect("seed receipt without current-session owner evidence");
+        let mut active_receipt = receipt;
+        active_receipt.run_id = "active-legacy-run".to_string();
+        active_receipt.dispatch_packet_path = Some(active_packet_path.display().to_string());
+        active_receipt.dispatch_result_path = Some(active_result_path.display().to_string());
+        active_receipt.recorded_at = "2026-05-18T00:00:00Z".to_string();
+        let _: Option<crate::state_store::RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "active-legacy-run"))
+            .content(active_receipt)
+            .await
+            .expect("seed active malformed receipt");
         store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "foreign-closed-run-claim".to_string(),
@@ -7516,7 +7645,7 @@ mod tests {
         );
 
         let summary = store
-            .reconcile_historical_closed_task_active_runs(25)
+            .reconcile_historical_closed_task_active_runs(1)
             .await
             .expect("reconcile receipt-backed closed run");
         assert_eq!(summary.reconciled_count, 1);
@@ -7534,6 +7663,21 @@ mod tests {
             .await
             .expect("read binding")
             .is_none());
+        let active_error = store
+            .run_graph_status("active-legacy-run")
+            .await
+            .expect_err("active malformed role selection must remain fail-closed");
+        assert!(
+            active_error
+                .to_string()
+                .contains("team_flow_authority_selected_node_id_missing"),
+            "active malformed run should expose the selected-node blocker: {active_error}"
+        );
+        let (active_raw_status, ..) = store
+            .run_graph_raw_status_from_task_rows("active-legacy-run")
+            .await
+            .expect("read active raw execution state");
+        assert_eq!(active_raw_status.status, "executing");
 
         close_store_and_remove_root(store, root).await;
     }

@@ -4340,11 +4340,20 @@ impl StateStore {
         Ok(identity)
     }
 
-    pub(crate) async fn run_graph_status_from_task_rows(
+    pub(crate) async fn run_graph_raw_status_from_task_rows(
         &self,
         run_id: &str,
-        task_rows: &[TaskRecord],
-    ) -> Result<RunGraphStatus, StateStoreError> {
+    ) -> Result<
+        (
+            RunGraphStatus,
+            Option<RunGraphDispatchReceiptStored>,
+            bool,
+            bool,
+            bool,
+            bool,
+        ),
+        StateStoreError,
+    > {
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let routed: Option<RoutedRunStateRow> =
@@ -4476,6 +4485,29 @@ impl StateStore {
                 .map(|row| row.recovery_ready)
                 .unwrap_or(false),
         };
+        Ok((
+            status,
+            receipt,
+            missing_execution,
+            missing_routed,
+            missing_governance,
+            missing_resumability,
+        ))
+    }
+
+    pub(crate) async fn run_graph_status_from_task_rows(
+        &self,
+        run_id: &str,
+        task_rows: &[TaskRecord],
+    ) -> Result<RunGraphStatus, StateStoreError> {
+        let (
+            status,
+            receipt,
+            missing_execution,
+            missing_routed,
+            missing_governance,
+            missing_resumability,
+        ) = self.run_graph_raw_status_from_task_rows(run_id).await?;
         let authorized_rework_route = if let Some(receipt) = receipt.as_ref() {
             if receipt
                 .dispatch_packet_path
