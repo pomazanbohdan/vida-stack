@@ -2134,6 +2134,33 @@ fn taskflow_run_graph_advance_with_timeout(
     }
 }
 
+fn record_run_graph_completed_lane(state_dir: &str, run_id: &str, completed_lane: &str) {
+    let session_id = run_graph_test_session_id(run_id);
+    let completed = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "run-graph completed lane update should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "update",
+                    run_id,
+                    "implementation",
+                    completed_lane,
+                    "completed",
+                    "implementation",
+                ])
+                .current_dir(repo_root())
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", state_dir)
+                .env("VIDA_SESSION_ID", &session_id);
+        },
+    );
+    assert_output_success(&completed, "run-graph record completed lane evidence");
+}
+
 fn taskflow_run_graph_with_timeout(
     state_dir: &str,
     subcommand: &str,
@@ -8943,8 +8970,8 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
         ["development_flow"]["dispatch_contract"]["selected_node_id"]
         .as_str()
         .or_else(|| {
-            initial_json["payload"]["role_selection"]["execution_plan"]
-                ["development_flow"]["dispatch_contract"]["team_flow_authority_selected_node_id"]
+            initial_json["payload"]["role_selection"]["execution_plan"]["development_flow"]
+                ["dispatch_contract"]["team_flow_authority_selected_node_id"]
                 .as_str()
         })
         .expect("initial role selection should expose exact selected TeamFlow node id");
@@ -14472,11 +14499,34 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
     assert!(seed.status.success());
 
     for step in 0..3 {
-        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
-            "advance step {step} should succeed"
+            "advance step {step} should succeed: stdout={} stderr={}",
+            String::from_utf8_lossy(&advance.stdout),
+            String::from_utf8_lossy(&advance.stderr),
         );
+        if step < 2 {
+            let completed_lane = if step == 0 { "coder" } else { "tester" };
+            let completed = vida()
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "update",
+                    "vida-dev",
+                    "implementation",
+                    completed_lane,
+                    "completed",
+                    "implementation",
+                ])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .env("VIDA_SESSION_ID", run_graph_test_session_id("vida-dev"))
+                .output()
+                .expect("run-graph completed lane update should run");
+            assert_output_success(&completed, "run-graph record completed lane evidence");
+        }
     }
 
     let mark_rework = vida()
@@ -14550,6 +14600,10 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
             advance.status.success(),
             "advance step {step} should succeed"
         );
+        if step < 2 {
+            let completed_lane = if step == 0 { "coder" } else { "tester" };
+            record_run_graph_completed_lane(&state_dir, "vida-dev", completed_lane);
+        }
     }
 
     let mark_rework = vida()
@@ -14575,7 +14629,7 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
         "run-graph mark rework before recovery assertion",
     );
 
-    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(fourth_advance.status.success());
 
     let run_graph = taskflow_run_graph_status_with_timeout(&state_dir, "vida-dev", true);
@@ -14646,8 +14700,14 @@ fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
-            "advance step {step} should succeed"
+            "advance step {step} should succeed: stdout={} stderr={}",
+            String::from_utf8_lossy(&advance.stdout),
+            String::from_utf8_lossy(&advance.stderr)
         );
+        if step < 2 {
+            let completed_lane = if step == 0 { "coder" } else { "tester" };
+            record_run_graph_completed_lane(&state_dir, "vida-dev", completed_lane);
+        }
     }
 
     let mark_rework = vida()

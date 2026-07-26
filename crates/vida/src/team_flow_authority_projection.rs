@@ -265,7 +265,11 @@ fn validate_source_dev_team(
         }
         let entry_values = ["entry_node_id", "initial_node_id"]
             .iter()
-            .filter_map(|key| flow.get(*key).and_then(|value| text(Some(value))).map(|value| (*key, value)))
+            .filter_map(|key| {
+                flow.get(*key)
+                    .and_then(|value| text(Some(value)))
+                    .map(|value| (*key, value))
+            })
             .collect::<Vec<_>>();
         if entry_values.is_empty() {
             return Err(TeamFlowAuthorityMaterializationBlocker::new(
@@ -1399,7 +1403,11 @@ fn normalize_flow(
     result.remove("ordered_steps");
     let entry_values = ["entry_node_id", "initial_node_id"]
         .iter()
-        .filter_map(|key| raw.get(*key).and_then(|value| text(Some(value))).map(|value| (*key, value)))
+        .filter_map(|key| {
+            raw.get(*key)
+                .and_then(|value| text(Some(value)))
+                .map(|value| (*key, value))
+        })
         .collect::<Vec<_>>();
     let entry_node_id = match entry_values.as_slice() {
         [] => {
@@ -1408,13 +1416,20 @@ fn normalize_flow(
                 format!("dev_team.flows.{flow_id}.entry_node_id"),
             ));
         }
-        values if values.iter().map(|(_, value)| value).collect::<BTreeSet<_>>().len() > 1 => {
+        values
+            if values
+                .iter()
+                .map(|(_, value)| value)
+                .collect::<BTreeSet<_>>()
+                .len()
+                > 1 =>
+        {
             return Err(TeamFlowAuthorityMaterializationBlocker::new(
                 "team_flow_authority_entry_node_ambiguous",
                 format!("dev_team.flows.{flow_id}.entry_node_id/initial_node_id"),
             ));
         }
-        [( _, value)] => value.clone(),
+        [(_, value)] => value.clone(),
         values => values[0].1.clone(),
     };
     result.remove("initial_node_id");
@@ -2033,7 +2048,7 @@ mod tests {
         derive_evidence_requirements, normalize_command, resolve_work_item_flow_bindings,
         source_value, test_support::canonical_compiled_bundle, validate_source_dev_team,
     };
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
 
     #[test]
     fn evidence_requirement_derivation_matrix_is_typed_and_conflict_safe() {

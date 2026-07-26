@@ -13,7 +13,7 @@ use std::{
 
 use serde_json::{Map, Value};
 use taskflow_authority::team_flow_transition::{
-    admit_transition, TeamFlowNode, TeamFlowReceipt, TeamFlowSnapshot, TransitionVerdict,
+    TeamFlowNode, TeamFlowReceipt, TeamFlowSnapshot, TransitionVerdict, admit_transition,
 };
 
 #[derive(Debug, Clone)]
@@ -724,7 +724,7 @@ fn validate_snapshot_schema(snapshot: &TeamFlowSnapshot) -> Result<(), TeamFlowR
                     "team_flow_authority_persisted_snapshot_terminal_edge_invalid",
                     node.node_id.clone(),
                     Vec::new(),
-                ))
+                ));
             }
             _ => {}
         }
@@ -955,9 +955,7 @@ fn resolve_node(
         let alias_collisions = projection
             .nodes
             .iter()
-            .filter(|node| {
-                node.node.node_id != exact_node_id && node.dispatch_alias == requested
-            })
+            .filter(|node| node.node.node_id != exact_node_id && node.dispatch_alias == requested)
             .map(|node| node.node.node_id.clone())
             .collect::<Vec<_>>();
         if !alias_collisions.is_empty() {
@@ -1476,11 +1474,13 @@ fn parse_persisted_lane(
         return Err(TeamFlowResolutionBlocker::new(
             "team_flow_authority_role_index_identity_mismatch",
             format!("{path}.profile_authority.team_role_id"),
-            vec![object
-                .get("node_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()],
+            vec![
+                object
+                    .get("node_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ],
         ));
     }
     let selected_model_profile = strict_model_profile(
@@ -2313,7 +2313,13 @@ fn compile_persisted(
         let flow_object = required_object(flow, &path)?;
         exact_keys(
             flow_object,
-            &["flow_id", "flow_identity", "flow_policy", "entry_node_id", "lanes"],
+            &[
+                "flow_id",
+                "flow_identity",
+                "flow_policy",
+                "entry_node_id",
+                "lanes",
+            ],
             &path,
         )?;
         let flow_id = required_string(flow, "flow_id", &path)?;
@@ -2545,7 +2551,7 @@ pub(crate) fn compile_team_flow_authority(
 pub(crate) mod test_support {
     use super::{compile_persisted, resolve_node};
     pub(crate) use crate::team_flow_authority_projection::test_support::canonical_compiled_bundle;
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
 
     #[derive(Debug, Clone)]
     pub(crate) struct ScenarioSpec {
@@ -2629,8 +2635,8 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_persisted, deterministic_flow_identity_id, resolve_team_flow_node,
-        test_support::canonical_compiled_bundle, TeamFlowAuthorityProjection,
+        TeamFlowAuthorityProjection, compile_persisted, deterministic_flow_identity_id,
+        resolve_team_flow_node, test_support::canonical_compiled_bundle,
     };
     use serde_json::json;
 
@@ -3057,8 +3063,8 @@ mod tests {
     #[test]
     fn flow_identity_tamper_is_rejected_after_payload_hash_refresh() {
         let mut bundle = canonical_compiled_bundle();
-        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["flow_identity"]
-            ["id"] = json!("team-flow-flow:tampered");
+        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["flow_identity"]["id"] =
+            json!("team-flow-flow:tampered");
         refresh_outer_hashes(&mut bundle["team_flow_authority"]);
         let error = compile_persisted(&bundle, None, None)
             .expect_err("flow identity must be deterministic from persisted flow payload");
@@ -3141,8 +3147,8 @@ mod tests {
         );
 
         let mut unknown = canonical_compiled_bundle();
-        unknown["team_flow_authority"]["resolved_all_flow_payload"]["work_item_flow_bindings"]
-            ["defect"] = json!("missing-flow");
+        unknown["team_flow_authority"]["resolved_all_flow_payload"]["work_item_flow_bindings"]["defect"] =
+            json!("missing-flow");
         refresh_payload_hashes(&mut unknown);
         assert_eq!(
             compile_persisted(&unknown, None, None)
@@ -3175,8 +3181,8 @@ mod tests {
     #[test]
     fn nested_proof_gate_extras_are_rejected_after_payload_hash_refresh() {
         let mut bundle = canonical_compiled_bundle();
-        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]
-            ["proof_gates"]["unexpected"] = json!(true);
+        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]["proof_gates"]
+            ["unexpected"] = json!(true);
         refresh_payload_hashes(&mut bundle);
         let error =
             compile_persisted(&bundle, None, None).expect_err("proof gate extras must fail closed");
@@ -3186,8 +3192,8 @@ mod tests {
     #[test]
     fn nested_rework_extras_are_rejected_after_payload_hash_refresh() {
         let mut bundle = canonical_compiled_bundle();
-        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]
-            ["rework"]["unexpected"] = json!("tampered");
+        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]["rework"]
+            ["unexpected"] = json!("tampered");
         refresh_payload_hashes(&mut bundle);
         let error =
             compile_persisted(&bundle, None, None).expect_err("rework extras must fail closed");
@@ -3197,8 +3203,8 @@ mod tests {
     #[test]
     fn flow_policy_extras_are_rejected_after_payload_hash_refresh() {
         let mut bundle = canonical_compiled_bundle();
-        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["flow_policy"]
-            ["unexpected"] = json!(true);
+        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["flow_policy"]["unexpected"] =
+            json!(true);
         refresh_payload_hashes(&mut bundle);
         let error = compile_persisted(&bundle, None, None)
             .expect_err("flow policy extras must fail closed");
@@ -3208,8 +3214,8 @@ mod tests {
     #[test]
     fn persisted_role_index_mismatch_is_rejected_after_payload_hash_refresh() {
         let mut bundle = canonical_compiled_bundle();
-        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]
-            ["profile_authority"]["team_role_id"] = json!("tampered-role");
+        bundle["team_flow_authority"]["resolved_all_flow_payload"]["flows"][0]["lanes"][0]["profile_authority"]
+            ["team_role_id"] = json!("tampered-role");
         refresh_payload_hashes(&mut bundle);
         let error = compile_persisted(&bundle, None, None)
             .expect_err("profile authority role key must match node identity");
@@ -3228,10 +3234,11 @@ mod tests {
             reloaded["team_flow_authority"]["selected_config"]["team_flow_enabled"],
             true
         );
-        assert!(reloaded["team_flow_authority"]["resolved_all_flow_payload"]
-            ["work_item_flow_bindings"]
-            .as_object()
-            .is_some_and(|bindings| !bindings.is_empty()));
+        assert!(
+            reloaded["team_flow_authority"]["resolved_all_flow_payload"]["work_item_flow_bindings"]
+                .as_object()
+                .is_some_and(|bindings| !bindings.is_empty())
+        );
         let first =
             compile_persisted(&reloaded, None, None).expect("materialized authority should reload");
         let second = compile_persisted(&reloaded, None, None)
@@ -3267,8 +3274,8 @@ mod tests {
     #[test]
     fn entry_node_projection_is_typed_and_rejects_unknown_or_excluded_entries() {
         let canonical = canonical_compiled_bundle();
-        let projection = compile_persisted(&canonical, None, None)
-            .expect("canonical authority must compile");
+        let projection =
+            compile_persisted(&canonical, None, None).expect("canonical authority must compile");
         assert_eq!(projection.entry_node_id, projection.snapshot.entry_node_id);
 
         let alternate = projection

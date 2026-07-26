@@ -460,8 +460,8 @@ pub fn read_snapshot_into_memory(
 #[cfg(test)]
 mod tests {
     use super::{
-        read_snapshot, read_snapshot_into_memory, restore_in_memory_store, snapshot_from_store,
-        write_snapshot, write_store_snapshot, FileOperationalJournal, TaskSnapshot,
+        FileOperationalJournal, TaskSnapshot, read_snapshot, read_snapshot_into_memory,
+        restore_in_memory_store, snapshot_from_store, write_snapshot, write_store_snapshot,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -476,7 +476,7 @@ mod tests {
         JournalProjectionFailure, OperationalJournal, TaskStore, TaskflowStateError,
     };
     use vida_test_support::state_conformance::{
-        run_state_adapter_conformance, StateAdapterFactory,
+        StateAdapterFactory, run_state_adapter_conformance,
     };
 
     fn temp_snapshot_path() -> std::path::PathBuf {
@@ -718,9 +718,11 @@ mod tests {
         super::arm_partial_write_injection();
         operation(&mut journal);
 
-        assert!(journal
-            .persistence_error()
-            .is_some_and(|error| error.contains("injected partial write interruption")));
+        assert!(
+            journal
+                .persistence_error()
+                .is_some_and(|error| error.contains("injected partial write interruption"))
+        );
         assert!(journal.ensure_persistence_healthy().is_err());
 
         drop(journal);
@@ -784,17 +786,21 @@ mod tests {
         let error = FileOperationalJournal::create(&journal_path)
             .expect_err("journal symlink should fail closed");
 
-        assert!(error
-            .to_string()
-            .contains("refusing filesystem journal symlink"));
+        assert!(
+            error
+                .to_string()
+                .contains("refusing filesystem journal symlink")
+        );
         assert_eq!(
             fs::read(&victim).expect("victim should remain readable"),
             b"unchanged"
         );
-        assert!(fs::symlink_metadata(&journal_path)
-            .expect("journal symlink should remain")
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(&journal_path)
+                .expect("journal symlink should remain")
+                .file_type()
+                .is_symlink()
+        );
         fs::remove_file(journal_path).expect("journal symlink should be removed");
         fs::remove_file(victim).expect("victim should be removed");
     }
@@ -814,9 +820,11 @@ mod tests {
         let error = FileOperationalJournal::open(&journal_path)
             .expect_err("backup symlink should fail closed");
 
-        assert!(error
-            .to_string()
-            .contains("refusing filesystem journal symlink"));
+        assert!(
+            error
+                .to_string()
+                .contains("refusing filesystem journal symlink")
+        );
         assert_eq!(
             fs::read(&journal_path).expect("primary should remain readable"),
             b"invalid journal"

@@ -19,7 +19,10 @@ impl ModelProfileSelectionBlocker {
     }
 }
 
-fn profile_selection_error(blocker: ModelProfileSelectionBlocker, detail: impl Into<String>) -> String {
+fn profile_selection_error(
+    blocker: ModelProfileSelectionBlocker,
+    detail: impl Into<String>,
+) -> String {
     format!("{}:{}", blocker.code(), detail.into())
 }
 
@@ -536,7 +539,9 @@ pub(crate) fn selected_model_profile_from_json_row_checked(
         return resolve(persisted_id);
     }
 
-    let legacy_model_only = !row["model"].as_str().is_none_or(|value| value.trim().is_empty())
+    let legacy_model_only = !row["model"]
+        .as_str()
+        .is_none_or(|value| value.trim().is_empty())
         && row["model_profiles"].as_object().is_none_or(Map::is_empty);
     if legacy_model_only && profiles.len() == 1 {
         let profile_id = profiles[0]["profile_id"].as_str().ok_or_else(|| {
@@ -757,8 +762,8 @@ model_reasoning_effort: low
             ),
         ];
         for (label, row, expected_code) in cases {
-            let error = super::selected_model_profile_from_json_row_checked(&row, None)
-                .expect_err(label);
+            let error =
+                super::selected_model_profile_from_json_row_checked(&row, None).expect_err(label);
             assert!(error.starts_with(expected_code), "{label}: {error}");
         }
     }

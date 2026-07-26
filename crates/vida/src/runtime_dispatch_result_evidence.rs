@@ -441,11 +441,11 @@ fn team_flow_authority_from_rehydrated_selection(
             vec![error],
         )
     })?;
-    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
-        ["team_flow_authority_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    if let Some(plan_authority_id) =
+        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     {
         if plan_authority_id != projection.authority_id {
             return Err(rework_authority_blocker(
@@ -512,11 +512,11 @@ fn packet_team_flow_authority(
             vec![error],
         )
     })?;
-    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
-        ["team_flow_authority_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    if let Some(plan_authority_id) =
+        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     {
         if plan_authority_id != projection.authority_id {
             return Err(rework_authority_blocker(
@@ -1002,180 +1002,6 @@ mod tests {
         assert!(dispatch_rework_route_from_result(&result).is_none());
     }
 
-    fn rework_projection_step(
-        node_id: &str,
-        dispatch_alias: &str,
-        runtime_role: &str,
-        task_class: &str,
-        proof_id: &str,
-        next_node: Option<&str>,
-        rework_targets: &[&str],
-        terminal: bool,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "node_id": node_id,
-            "lane_id": node_id,
-            "dispatch_target": dispatch_alias,
-            "dispatch_alias": dispatch_alias,
-            "runtime_role": runtime_role,
-            "task_class": task_class,
-            "packet_template_kind": "fixture-packet",
-            "closure_class": "fixture-proof",
-            "stage": "fixture-execution",
-            "completion_blocker": "fixture-pending-proof",
-            "inclusion_rule": "always",
-            "included": true,
-            "required": true,
-            "evidence_requirements": [proof_id],
-            "proof_gates": {"required_outputs": [proof_id]},
-            "command_ref": "fixture-command",
-            "command_mapping": {
-                "command_id": "fixture-command",
-                "surface": "vida agent-init"
-            },
-            "next_node": next_node,
-            "terminal": terminal,
-            "requires_user_approval": false,
-            "approval_policy": {},
-            "lifecycle_hook_templates": ["command_timing_summary"],
-            "resume_transitions": {},
-            "rework": {"targets": rework_targets},
-            "policy_diagnostics": {
-                "source": "team_flow_authority.selected_config",
-                "fallback_used": false,
-                "fallback_fields": []
-            },
-            "activation": {
-                "source": "configured",
-                "dispatch_alias": dispatch_alias
-            },
-            "runtime_assignment": {
-                "source": "configured",
-                "backend_id": "fixture-backend"
-            },
-            "carrier_runtime_assignment": {
-                "source": "configured",
-                "carrier_id": node_id
-            },
-            "profile_authority": {
-                "team_role_id": node_id,
-                "runtime_role": runtime_role,
-                "task_class": task_class,
-                "source_path": format!("fixture-config#roles.{node_id}")
-            },
-            "selected_model_profile": {
-                "profile_id": "fixture-model-profile",
-                "selection_source": "fixture-config"
-            },
-            "carrier_relation": {
-                "relation_kind": "carrier_catalog",
-                "source_path": "carrier_runtime.dispatch_aliases",
-                "selected_id": node_id
-            },
-            "executor_backend_relation": {
-                "relation_kind": "executor_backend",
-                "source_path": "carrier_runtime.executor_backend_relation",
-                "selected_id": "fixture-backend"
-            },
-            "authority_identities": [
-                {
-                    "kind": "config",
-                    "id": "fixture-config",
-                    "source_path": "team_flow_authority.config"
-                },
-                {
-                    "kind": "registry",
-                    "id": "fixture-registry",
-                    "source_path": "team_flow_authority.registries"
-                }
-            ],
-            "execution_identity": {
-                "id": format!("fixture-flow:{node_id}"),
-                "source_fields": ["flow_id", "node_id", "dispatch_alias"]
-            }
-        })
-    }
-
-    fn rework_authority_config() -> serde_json::Value {
-        serde_json::json!({
-            "schema_version": "team-flow-authority.v1",
-            "authority_selection": {
-                "schema_version": "team-flow-authority.v1",
-                "config_id": "fixture-config",
-                "team_profile_id": "fixture-profile",
-                "default_flow_id": "fixture-flow",
-                "projection_mode": "typed_fail_closed",
-                "registry_identity_algorithm": "canonical_json_blake3_v1",
-                "terminal_source": "config_only",
-                "edge_source": "explicit_config_only",
-                "command_resolution_mode": "registry_ref_only",
-                "approval_enforcement_mode": "required",
-                "alias_conflict_policy": "reject",
-                "node_field_source_mode": "typed_exact_one",
-                "dispatch_alias_resolution_mode": "registry_ref_exactly_one",
-                "carrier_relation_mode": "distinct_from_executor_backend",
-                "profile_model_resolution_mode": "registry_identity_ref"
-            },
-            "command_catalog": {
-                "fixture-command": {
-                    "command_id": "fixture-command",
-                    "surface": "vida agent-init"
-                }
-            },
-            "roles": {
-                "stage-a": {
-                    "task_classes": ["class-a"],
-                    "default_carrier": "fixture-tier"
-                },
-                "stage-b": {
-                    "task_classes": ["class-b"],
-                    "default_carrier": "fixture-tier"
-                },
-                "stage-c": {
-                    "task_classes": ["class-c"],
-                    "default_carrier": "fixture-tier"
-                }
-            },
-            "flows": {
-                "fixture-flow": {
-                    "flow_id": "fixture-flow",
-                    "steps": [
-                        rework_projection_step(
-                            "stage-a",
-                            "dispatch-a",
-                            "runtime-a",
-                            "class-a",
-                            "proof-a",
-                            Some("stage-b"),
-                            &["stage-c"],
-                            false,
-                        ),
-                        rework_projection_step(
-                            "stage-b",
-                            "dispatch-b",
-                            "runtime-b",
-                            "class-b",
-                            "proof-b",
-                            Some("stage-c"),
-                            &["stage-a"],
-                            false,
-                        ),
-                        rework_projection_step(
-                            "stage-c",
-                            "dispatch-c",
-                            "runtime-c",
-                            "class-c",
-                            "proof-c",
-                            None,
-                            &["stage-a"],
-                            true,
-                        )
-                    ]
-                }
-            }
-        })
-    }
-
     fn rework_authority_fixture(
         duplicate_target_alias: bool,
     ) -> (
@@ -1183,93 +1009,71 @@ mod tests {
         crate::team_flow_authority_adapter::TeamFlowAuthorityProjection,
         serde_json::Value,
     ) {
-        let mut config = rework_authority_config();
-        if duplicate_target_alias {
-            let duplicate_alias =
-                config["flows"]["fixture-flow"]["steps"][1]["dispatch_alias"].clone();
-            config["flows"]["fixture-flow"]["steps"][2]["dispatch_alias"] = duplicate_alias.clone();
-            config["flows"]["fixture-flow"]["steps"][2]["dispatch_target"] =
-                duplicate_alias.clone();
-            config["flows"]["fixture-flow"]["steps"][2]["activation"]["dispatch_alias"] =
-                duplicate_alias;
-        }
-        let command_catalog = config["command_catalog"].clone();
-        let dispatch_aliases = config["flows"]["fixture-flow"]["steps"]
-            .as_array()
-            .expect("valid fixture steps")
-            .iter()
-            .map(|step| {
-                let node_id = step["node_id"].as_str().expect("fixture node id");
-                let role = &config["roles"][node_id];
-                serde_json::json!({
-                    "alias_id": step["dispatch_alias"].clone(),
-                    "template_role_id": node_id,
-                    "carrier_tier": role["default_carrier"].clone(),
-                    "runtime_roles": [step["runtime_role"].clone()],
-                    "task_classes": [step["task_class"].clone()],
-                    "selected_model_profile_id": step["selected_model_profile"]["profile_id"].clone(),
-                    "enabled": true,
-                    "backend_id": "fixture-backend",
-                    "backend_class": "fixture"
-                })
-            })
-            .collect::<Vec<_>>();
-        let config_hash = taskflow_authority::team_flow_transition::hash_json(&config);
-        let bundle = serde_json::json!({
-            "team_flow_authority": {
-                "authority_id": "team-flow-authority:fixture",
-                "config": {
-                    "id": "config:fixture-config",
-                    "content_blake3": config_hash
-                },
-                "registries": {
-                    "content_blake3": "fixture-registry",
-                    "dispatch_aliases": {"id": "registry:dispatch-aliases"},
-                    "commands": {"id": "registry:commands"},
-                    "profiles": {"id": "registry:profiles"}
-                },
-                "selected_config": config,
-                "source_of_truth": {
-                    "selection": "fixture-config",
-                    "options": "fixture-master",
-                    "schema": "fixture-schema"
-                }
-            },
-            "command_catalog": command_catalog,
-            "carrier_runtime": {
-                "dispatch_aliases": dispatch_aliases,
-                "executor_backend_relation": {
-                    "backend_id": "fixture-backend",
-                    "backend_class": "fixture"
-                }
-            }
-        });
-        let authority =
+        let bundle = crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let mut authority =
             crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
-                .expect("fixture authority should compile");
+                .expect("canonical fixture authority should compile");
+        let flow_id = authority.snapshot.flow_ref.clone();
+        let selected_node_id = authority.entry_node_id.clone();
         let lane_catalog =
             authority
                 .nodes
                 .iter()
                 .fold(serde_json::Map::new(), |mut catalog, node| {
                     catalog.insert(
-                        node.dispatch_alias.clone(),
+                        node.node.node_id.clone(),
                         serde_json::json!({
-                            "node_id": node.node.node_id,
-                            "dispatch_target": node.dispatch_alias
+                        "node_id": node.node.node_id.clone(),
+                        "dispatch_target": node.dispatch_target.clone(),
+                        "dispatch_alias": node.dispatch_alias.clone(),
+                        "runtime_role": node.node.runtime_role.clone(),
+                        "task_class": node.node.task_class.clone()
                         }),
                     );
                     catalog
                 });
         let execution_plan = serde_json::json!({
+            "team_flow_authority_selected_flow_id": flow_id.clone(),
+            "team_flow_authority_selected_node_id": selected_node_id.clone(),
+            "selected_flow_contract": {
+                "flow_id": flow_id.clone(),
+                "selected_node_id": selected_node_id.clone()
+            },
             "development_flow": {
                 "dispatch_contract": {
-                    "selected_flow_set": authority.snapshot.flow_ref,
-                    "team_flow_authority_id": authority.authority_id,
+                    "selected_flow_set": flow_id.clone(),
+                    "selected_node_id": selected_node_id.clone(),
+                    "team_flow_authority_selected_node_id": selected_node_id.clone(),
+                    "team_flow_authority_id": authority.authority_id.clone(),
+                    "team_flow_config_hash": authority.config_authority_hash.clone(),
+                    "team_flow_registry_hash": authority.registry_authority_hash.clone(),
                     "lane_catalog": lane_catalog
                 }
             }
         });
+        if duplicate_target_alias {
+            let source_id = authority
+                .nodes
+                .iter()
+                .find(|node| !node.node.rework_targets.is_empty())
+                .map(|node| node.node.node_id.clone())
+                .expect("canonical fixture should declare a rework source");
+            let target_id = authority
+                .node(&source_id)
+                .and_then(|node| node.node.rework_targets.first())
+                .cloned()
+                .expect("canonical fixture should declare a rework target");
+            let target_dispatch_target = authority
+                .node(&target_id)
+                .map(|node| node.dispatch_target.clone())
+                .expect("canonical fixture target should resolve");
+            authority
+                .nodes
+                .iter_mut()
+                .find(|node| node.node.node_id != source_id && node.node.node_id != target_id)
+                .expect("canonical fixture should expose a duplicate-alias candidate")
+                .dispatch_alias = target_dispatch_target;
+        }
         (bundle, authority, execution_plan)
     }
 
@@ -1499,24 +1303,22 @@ mod tests {
         let unconfigured_target = authority
             .nodes
             .iter()
-            .find(|node| {
-                node.node.node_id != source.node_id
-                    && node.node.node_id != configured_target.node_id
-            })
-            .map(|node| node.node.node_id.as_str())
-            .and_then(|node_id| {
+            .find_map(|node| {
+                if node.node.node_id == source.node_id
+                    || node.node.node_id == configured_target.node_id
+                {
+                    return None;
+                }
                 crate::team_flow_authority_adapter::resolve_team_flow_node(
                     &authority,
                     Some(&execution_plan),
-                    node_id,
+                    &node.node.node_id,
                 )
                 .ok()
             })
             .expect("fixture should expose an unconfigured target");
-        let route = receipt_backed_rework_route(
-            &unconfigured_target.node_id,
-            &unconfigured_target.dispatch_target,
-        );
+        let route =
+            receipt_backed_rework_route(&unconfigured_target.node_id, &unconfigured_target.node_id);
 
         let blocker =
             rework_route_is_authorized(&authority, &execution_plan, &source.node_id, &route)
@@ -1664,9 +1466,11 @@ mod tests {
             outcome_blocker.code,
             taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_NOT_COMPLETED
         );
-        assert!(outcome_blocker
-            .candidates
-            .iter()
-            .any(|code| code == "host_bridge_result_decision_verdict_mismatch"));
+        assert!(
+            outcome_blocker
+                .candidates
+                .iter()
+                .any(|code| code == "host_bridge_result_decision_verdict_mismatch")
+        );
     }
 }

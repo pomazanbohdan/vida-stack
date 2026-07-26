@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use taskflow_host_bridge::{
-    effective_host_bridge_request_with_registry, HostBridgeAdapterOperations,
+    HostBridgeAdapterOperations, effective_host_bridge_request_with_registry,
 };
 
 #[path = "support/runtime_consumption.rs"]
@@ -402,38 +402,387 @@ fn project_bound_state_dir() -> (String, String) {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");
     std::fs::create_dir_all(&state_dir).expect("create project-bound state dir");
-    std::fs::write(format!("{project_root}/AGENTS.md"), "project").expect("write AGENTS.md");
-    std::fs::write(
-        format!("{project_root}/vida.config.yaml"),
-        concat!(
-            "project:\n",
-            "  id: test\n",
-            "operator_surfaces:\n",
-            "  taskflow:\n",
-            "    graph_summary:\n",
-            "      cache_policy:\n",
-            "        mode: cache_first_with_authoritative_fallback\n",
-            "        read_cache_before_authoritative_open: true\n",
-            "        freshness_contract: projection_contract_version_and_state_marker\n",
-            "        stale_projection_behavior: reject_and_recompute\n",
-            "        refresh_flag_supported: false\n",
-            "        authoritative_fallback: true\n",
-            "        help_summary: \"Cache policy is cache-first with authoritative fallback; stale or mismatched projections are rejected and recomputed.\"\n",
-            "agent_extensions:\n",
-            "  role_selection:\n",
-            "    mode: auto\n",
-            "    fallback_role: orchestrator\n",
-            "agent_system:\n",
-            "  mode: native\n",
-            "  state_owner: orchestrator_only\n",
-        ),
+    std::fs::copy(
+        format!("{}/../../AGENTS.md", env!("CARGO_MANIFEST_DIR")),
+        format!("{project_root}/AGENTS.md"),
     )
-    .expect("write vida.config.yaml");
+    .expect("copy canonical AGENTS.md");
+    std::fs::copy(
+        format!("{}/../../AGENTS.sidecar.md", env!("CARGO_MANIFEST_DIR")),
+        format!("{project_root}/AGENTS.sidecar.md"),
+    )
+    .expect("copy canonical AGENTS.sidecar.md");
+    std::fs::copy(
+        format!("{}/../../vida.config.yaml", env!("CARGO_MANIFEST_DIR")),
+        format!("{project_root}/vida.config.yaml"),
+    )
+    .expect("copy canonical vida.config.yaml");
+    let canonical_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for relative in [
+        "docs/process/agent-extensions/roles.yaml",
+        "docs/process/agent-extensions/skills.yaml",
+        "docs/process/agent-extensions/profiles.yaml",
+        "docs/process/agent-extensions/flows.yaml",
+        "docs/process/agent-extensions/packs.yaml",
+        "docs/process/agent-extensions/commands.yaml",
+        "docs/process/agent-extensions/dispatch-aliases.yaml",
+        "docs/product/spec/hook-templates.yaml",
+    ] {
+        let destination = std::path::Path::new(&project_root).join(relative);
+        std::fs::create_dir_all(destination.parent().expect("registry parent should exist"))
+            .expect("registry parent should be created");
+        std::fs::copy(canonical_root.join(relative), destination)
+            .expect("canonical registry should be copied");
+    }
+    for relative in [
+        "vida/config/instructions/bundles/framework-source",
+        "vida/config/instructions/bundles/framework-memory-source",
+    ] {
+        copy_canonical_source_tree(
+            &canonical_root,
+            std::path::Path::new(&project_root),
+            relative,
+        );
+    }
     for relative in [".vida/config", ".vida/db", ".vida/project"] {
         std::fs::create_dir_all(format!("{project_root}/{relative}"))
             .expect("runtime project marker dir should exist");
     }
+    let project_root = normalize_fixture_path(
+        std::fs::canonicalize(&project_root)
+            .expect("project-bound fixture root should canonicalize"),
+    );
+    let state_dir = normalize_fixture_path(
+        std::fs::canonicalize(&state_dir)
+            .expect("project-bound fixture state dir should canonicalize"),
+    );
     (project_root, state_dir)
+}
+
+fn normalize_fixture_path(path: std::path::PathBuf) -> String {
+    let display = path.display().to_string();
+    display
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&display)
+        .to_owned()
+}
+
+fn copy_canonical_source_tree(
+    canonical_root: &std::path::Path,
+    project_root: &std::path::Path,
+    relative: &str,
+) {
+    let source = canonical_root.join(relative);
+    let target = project_root.join(relative);
+    assert!(
+        source.starts_with(canonical_root),
+        "canonical instruction source must remain under canonical project root: {relative}"
+    );
+    assert!(
+        target.starts_with(project_root),
+        "fixture instruction target must remain under fixture project root: {relative}"
+    );
+    copy_canonical_source_tree_at(&source, &target, relative);
+}
+
+fn copy_canonical_source_tree_at(
+    source: &std::path::Path,
+    target: &std::path::Path,
+    relative: &str,
+) {
+    std::fs::create_dir_all(target).unwrap_or_else(|error| {
+        panic!("canonical instruction target should be creatable ({relative}): {error}")
+    });
+    for entry in std::fs::read_dir(source).unwrap_or_else(|error| {
+        panic!("canonical instruction source should be readable ({relative}): {error}")
+    }) {
+        let entry = entry.expect("canonical instruction source entry should resolve");
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("canonical instruction source entry type should resolve")
+            .is_dir()
+        {
+            copy_canonical_source_tree_at(&source_path, &target_path, relative);
+        } else {
+            std::fs::copy(&source_path, &target_path).unwrap_or_else(|error| {
+                panic!("canonical instruction source should copy ({relative}): {error}")
+            });
+        }
+    }
+}
+
+fn activate_adaptive_task_flow_nodes(project_root: &str, selected_node_id: &str) {
+    let config_path = std::path::Path::new(project_root).join("vida.config.yaml");
+    let config = std::fs::read_to_string(&config_path)
+        .expect("fixture vida.config.yaml should be readable before flow activation");
+    let flow_start = config
+        .find("\n  flows:\n")
+        .map(|offset| offset + 1)
+        .expect("fixture config should declare project flows");
+    let (prefix, flows) = config.split_at(flow_start);
+    let adaptive_start = flows
+        .find("    adaptive-task-flow:\n")
+        .expect("fixture config should declare adaptive-task-flow");
+    let adaptive_prefix_end = adaptive_start + "    adaptive-task-flow:\n".len();
+    let adaptive_prefix = &flows[..adaptive_prefix_end];
+    let adaptive_rest = &flows[adaptive_prefix_end..];
+    let mut activated_rest = adaptive_rest.to_string();
+    let mut requested_nodes = vec![selected_node_id];
+    if selected_node_id == "tester" {
+        requested_nodes.push("coach_validator");
+    } else if selected_node_id == "coach_validator" {
+        requested_nodes.push("architect");
+    }
+    for node_id in requested_nodes {
+        let marker = format!("        - role_id: {node_id}\n");
+        let node_start = activated_rest
+            .find(&marker)
+            .unwrap_or_else(|| panic!("adaptive-task-flow should declare {node_id}"));
+        let node_end = activated_rest[node_start + marker.len()..]
+            .find("\n        - role_id:")
+            .map(|offset| node_start + marker.len() + offset)
+            .unwrap_or(activated_rest.len());
+        let node = &activated_rest[node_start..node_end];
+        let node = node
+            .replace(
+                "inclusion_rule: when_review_triggered",
+                "inclusion_rule: always",
+            )
+            .replace(
+                "inclusion_rule: when_architecture_triggered",
+                "inclusion_rule: always",
+            )
+            .replace("          included: false", "          included: true");
+        activated_rest.replace_range(node_start..node_end, &node);
+    }
+    let updated = format!("{prefix}{adaptive_prefix}{activated_rest}");
+    std::fs::write(config_path, updated).expect("activated fixture flow config should be written");
+}
+
+fn orchestrator_init_team_flow_authority(project_root: &str, state_dir: &str) -> serde_json::Value {
+    let output = vida()
+        .args(["orchestrator-init", "--full", "--json"])
+        .current_dir(project_root)
+        .env("VIDA_STATE_DIR", state_dir)
+        .env("VIDA_ROOT", project_root)
+        .output()
+        .expect("orchestrator-init should run");
+    assert_success(&output, "orchestrator-init");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("orchestrator-init json should parse");
+    payload
+        .pointer("/dev_team_readiness/team_flow_authority")
+        .cloned()
+        .expect("orchestrator-init should expose TeamFlow authority")
+}
+
+fn apply_team_flow_authority_identity(
+    mut dispatch_contract: serde_json::Value,
+    authority: &serde_json::Value,
+) -> serde_json::Value {
+    dispatch_contract["team_flow_authority_id"] = authority
+        .get("authority_id")
+        .cloned()
+        .expect("TeamFlow authority should expose authority_id");
+    dispatch_contract["team_flow_config_hash"] = authority
+        .pointer("/config/content_blake3")
+        .cloned()
+        .expect("TeamFlow authority should expose config.content_blake3");
+    dispatch_contract["team_flow_registry_hash"] = authority
+        .pointer("/selected_config/registry_hash")
+        .cloned()
+        .expect("TeamFlow authority should expose selected registry hash");
+    dispatch_contract
+}
+
+fn canonical_development_flow_dispatch_contract(
+    _state_dir: &str,
+    flow_id: &str,
+    selected_node_id: &str,
+) -> serde_json::Value {
+    assert_eq!(flow_id, "adaptive-task-flow");
+    let lane_specs = [
+        (
+            "coder",
+            "development_implementer",
+            "implementation",
+            "worker",
+            "tester",
+            true,
+            false,
+        ),
+        (
+            "tester",
+            "development_verifier",
+            "verification",
+            "verifier",
+            "coach_validator",
+            true,
+            false,
+        ),
+        (
+            "coach_validator",
+            "development_coach",
+            "coach",
+            "coach",
+            "architect",
+            false,
+            false,
+        ),
+        (
+            "architect",
+            "development_escalation",
+            "architecture",
+            "solution_architect",
+            "release_closure",
+            false,
+            false,
+        ),
+        (
+            "release_closure",
+            "development_verifier",
+            "release_readiness",
+            "prover",
+            "",
+            true,
+            true,
+        ),
+    ];
+    let mut resolved_lanes = lane_specs
+        .iter()
+        .map(|(node_id, dispatch_alias, task_class, runtime_role, next_node, included, terminal)| {
+            serde_json::json!({
+                "node_id": node_id,
+                "lane_id": node_id,
+                "role_id": node_id,
+                "dispatch_target": dispatch_alias,
+                "dispatch_alias": dispatch_alias,
+                "task_class": task_class,
+                "runtime_role": runtime_role,
+                "selected_carrier_id": canonical_host_bridge_carrier_id(runtime_role, task_class),
+                "packet_template_kind": if *task_class == "coach" { "coach_review_packet" } else if *task_class == "verification" || *task_class == "release_readiness" { "verifier_proof_packet" } else { "delivery_task_packet" },
+                "closure_class": if *task_class == "architecture" { "refactor" } else { "proof" },
+                "stage": "execution",
+                "inclusion_rule": if *included { "always" } else { "when_review_triggered" },
+                "included": included,
+                "required": true,
+                "next_node": if next_node.is_empty() { serde_json::Value::Null } else { serde_json::json!(next_node) },
+                "completion_blocker": "pending_verification_evidence",
+                "evidence_requirements": [],
+                "proof_gates": {"required_outputs": []},
+                "command_ref": "agent-init-worker",
+                "rework": {"targets": if *task_class == "implementation" || *task_class == "verification" || *task_class == "coach" || *task_class == "architecture" { serde_json::json!(["coder"]) } else { serde_json::json!([]) }},
+                "terminal": terminal
+            })
+        })
+        .collect::<Vec<_>>();
+    let lane_sequence = lane_specs
+        .iter()
+        .map(|(node_id, ..)| (*node_id).to_owned())
+        .collect::<Vec<_>>();
+    let selected_node_id = selected_node_id.trim();
+    assert!(
+        lane_sequence
+            .iter()
+            .any(|node_id| node_id == selected_node_id),
+        "canonical development flow selected node should exist: {selected_node_id}"
+    );
+    let activated_nodes: &[&str] = match selected_node_id {
+        "tester" => &["coach_validator"],
+        "coach_validator" => &["coach_validator", "architect"],
+        "architect" => &["architect"],
+        _ => &[],
+    };
+    for lane in &mut resolved_lanes {
+        if activated_nodes.contains(&lane["node_id"].as_str().unwrap_or_default()) {
+            lane["included"] = serde_json::json!(true);
+            lane["inclusion_rule"] = serde_json::json!("always");
+        }
+    }
+    let execution_lane_sequence = resolved_lanes
+        .iter()
+        .filter(|lane| lane["included"].as_bool().unwrap_or(false))
+        .filter_map(|lane| lane["node_id"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    let mut lane_catalog = serde_json::Map::new();
+    let mut dispatch_target_index = serde_json::Map::new();
+    let mut runtime_role_index = serde_json::Map::new();
+    for lane in &resolved_lanes {
+        let Some(node_id) = lane["node_id"].as_str() else {
+            continue;
+        };
+        lane_catalog.insert(node_id.to_string(), lane.clone());
+        for (index, field) in [
+            ("dispatch_target", &mut dispatch_target_index),
+            ("runtime_role", &mut runtime_role_index),
+        ] {
+            for value in [lane[index].as_str(), Some(node_id)].into_iter().flatten() {
+                field
+                    .entry(value.to_string())
+                    .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .expect("canonical flow index should be an array")
+                    .push(serde_json::Value::String(node_id.to_string()));
+            }
+        }
+    }
+    serde_json::json!({
+        "schema_version": "team-flow-authority.v1",
+        "status": "ready",
+        "blocker_codes": [],
+        "selected_flow_set": flow_id,
+        "team_flow_authority_id": "team-flow-authority:e06013100fb8761bf279e5687fdc9e71f3be5681c5b0306debe714f9a10222b6",
+        "team_flow_config_hash": "ba6d19ea2c63f72585ccd12099f7aa12772c6ece1de79d7259718a04da8ca4da",
+        "team_flow_registry_hash": "a7a7e8efa425dfcfa95e404c3cc56c0f4c3bd4a2d3dbe12454a28e840bbdd4aa",
+        "team_flow_authority_selected_node_id": selected_node_id,
+        "selected_node_id": selected_node_id,
+        "execution_preparation_required": false,
+        "root_session_must_remain_orchestrator": true,
+        "resolved_lanes": resolved_lanes,
+        "lane_sequence": lane_sequence,
+        "execution_lane_sequence": execution_lane_sequence,
+        "lane_catalog": lane_catalog,
+        "dispatch_target_index": dispatch_target_index,
+        "runtime_role_index": runtime_role_index,
+        "packet_family_required": {},
+        "packet_family_by_task_class": {},
+        "activation_by_task_class": {},
+        "design_owner_runtime_role": null
+    })
+}
+
+fn canonical_host_bridge_role_selection_full(
+    request: &str,
+    selected_role: &str,
+    selected_node_id: &str,
+    dispatch_contract: serde_json::Value,
+) -> serde_json::Value {
+    let flow_id = dispatch_contract["selected_flow_set"]
+        .as_str()
+        .unwrap_or("adaptive-task-flow");
+    serde_json::json!({
+        "ok": true,
+        "activation_source": "test_fixture",
+        "selection_mode": "test",
+        "fallback_role": "orchestrator",
+        "request": request,
+        "selected_role": selected_role,
+        "conversational_mode": null,
+        "single_task_only": true,
+        "tracked_flow_entry": flow_id,
+        "allow_freeform_chat": false,
+        "confidence": "high",
+        "matched_terms": [format!("dev_team_flow_id:{flow_id}")],
+        "compiled_bundle": {"team_flow_authority": dispatch_contract.clone()},
+        "reason": "test fixture",
+        "execution_plan": {
+            "team_flow_authority_selected_flow_id": flow_id,
+            "team_flow_authority_selected_node_id": selected_node_id,
+            "development_flow": {"dispatch_contract": dispatch_contract}
+        }
+    })
 }
 
 fn is_canonical_operator_status(value: &str) -> bool {
@@ -1855,11 +2204,13 @@ fn active_task_attribution_json_blocks_dirty_owner_contradiction() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
     assert_eq!(payload["status"], "blocked");
-    assert!(payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should be array")
-        .iter()
-        .any(|code| code == "dirty_ownership_ambiguous"));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should be array")
+            .iter()
+            .any(|code| code == "dirty_ownership_ambiguous")
+    );
     assert_eq!(
         payload["dirty_summary"]["unmatched_files"],
         serde_json::json!(["README.md"])
@@ -1954,11 +2305,13 @@ fn active_task_attribution_json_ignores_tampered_task_snapshot() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
     assert_eq!(payload["status"], "blocked");
-    assert!(payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should be array")
-        .iter()
-        .any(|code| code == "dirty_ownership_ambiguous"));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should be array")
+            .iter()
+            .any(|code| code == "dirty_ownership_ambiguous")
+    );
     assert_eq!(
         payload["dirty_summary"]["unmatched_files"],
         serde_json::json!(["README.md"])
@@ -2077,9 +2430,11 @@ fn task_steps_outputs_default_toon_json_and_filters() {
     assert_eq!(row["status"], "in_progress");
     assert_eq!(row["parent_id"], "task-steps-parent-a");
     assert_eq!(row["parent_title"], "Task steps parent A");
-    assert!(row["created"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        row["created"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert!(row["closed"].is_null());
     assert!(row["close_reason"].is_null());
     assert_eq!(
@@ -2113,9 +2468,11 @@ fn task_steps_rejects_oversized_since_filter() {
         payload["blocker_codes"],
         serde_json::json!(["invalid_since_filter"])
     );
-    assert!(payload["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("too large")));
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("too large"))
+    );
 }
 
 #[test]
@@ -2244,13 +2601,15 @@ fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
     assert_eq!(payload["unmatched_files"], serde_json::json!(["README.md"]));
     assert_eq!(payload["unowned_paths"], serde_json::json!(["README.md"]));
     assert_eq!(payload["confidence"], "mixed");
-    assert!(payload["next_actions"]
-        .as_array()
-        .expect("next_actions should be array")
-        .iter()
-        .any(|action| action
-            .as_str()
-            .is_some_and(|text| text.contains("unrelated dirty files"))));
+    assert!(
+        payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|text| text.contains("unrelated dirty files")))
+    );
 
     let file_override_output = vida()
         .args([
@@ -2395,21 +2754,25 @@ fn classify_dirty_groups_owned_paths_and_reports_unclassified() {
         serde_json::json!(["crates/vida/src/task_surface.rs"])
     );
     assert_eq!(payload["groups"][0]["confidence"], "high");
-    assert!(payload["groups"][0]["reasons"]
-        .as_array()
-        .expect("reasons should be array")
-        .iter()
-        .any(|reason| reason
-            .as_str()
-            .is_some_and(|text| text.contains("proof targets"))));
+    assert!(
+        payload["groups"][0]["reasons"]
+            .as_array()
+            .expect("reasons should be array")
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .is_some_and(|text| text.contains("proof targets")))
+    );
     assert_eq!(payload["unclassified"], serde_json::json!(["README.md"]));
-    assert!(payload["next_actions"]
-        .as_array()
-        .expect("next_actions should be array")
-        .iter()
-        .any(|action| action
-            .as_str()
-            .is_some_and(|text| text.contains("unclassified files"))));
+    assert!(
+        payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|text| text.contains("unclassified files")))
+    );
 }
 
 #[test]
@@ -3119,10 +3482,12 @@ fn agent_host_bridge_json_retains_sanitized_lock_open_diagnostic() {
     assert_eq!(payload["state_access"]["open_stage"], "datastore_open");
     assert_eq!(payload["state_access"]["lock_evidence"], "datastore");
     assert!(payload.get("error").is_none());
-    assert!(payload["state_access"]
-        .to_string()
-        .find(&state_dir)
-        .is_none());
+    assert!(
+        payload["state_access"]
+            .to_string()
+            .find(&state_dir)
+            .is_none()
+    );
     assert!(payload["state_access"].to_string().find("999999").is_none());
     assert!(payload["state_access"].to_string().find("LOCK").is_none());
 
@@ -3157,7 +3522,10 @@ fn persist_host_bridge_lane_receipt_with_helper(
     };
     let (downstream_target, task_class) = match dispatch_target {
         "coach" => ("tester".to_string(), "coach".to_string()),
-        "tester" => (closure_gate.role_id.clone(), "verification".to_string()),
+        "coach_validator" => ("architect".to_string(), "coach".to_string()),
+        "coder" => ("tester".to_string(), "implementation".to_string()),
+        "tester" => ("coach_validator".to_string(), "verification".to_string()),
+        "architect" => ("release_closure".to_string(), "architecture".to_string()),
         target if target == closure_gate.role_id => (
             closure_gate.next_role.clone(),
             closure_gate.task_class.clone(),
@@ -3317,7 +3685,35 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
     downstream_ready: &str,
     downstream_status: &str,
 ) {
-    let closure_gate = canonical_host_bridge_closure_gate();
+    let selected_node_id = if active_node.trim().is_empty() {
+        dispatch_target
+    } else {
+        active_node
+    };
+    let dispatch_contract = canonical_development_flow_dispatch_contract(
+        state_dir,
+        "adaptive-task-flow",
+        selected_node_id,
+    );
+    let runtime_role = dispatch_contract
+        .get("lane_catalog")
+        .and_then(|catalog| catalog.get(selected_node_id))
+        .and_then(|lane| lane.get("runtime_role"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| match dispatch_target {
+            "tester" | "reviewer" => "verifier".to_owned(),
+            "coach" | "coach_validator" => "coach".to_owned(),
+            "architect" => "solution_architect".to_owned(),
+            "release_closure" => "prover".to_owned(),
+            _ => "worker".to_owned(),
+        });
+    let role_selection_full = canonical_host_bridge_role_selection_full(
+        "test fixture",
+        &runtime_role,
+        selected_node_id,
+        dispatch_contract,
+    );
     let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let downstream_packet_dir =
@@ -3342,60 +3738,7 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
             "proof_target": "host bridge completion receipt",
             "read_only_paths": ["crates/vida/src"],
             "blocking_question": "none",
-            "role_selection_full": {
-                "execution_plan": {
-                    "development_flow": {
-                        "dispatch_contract": {
-                            "execution_lane_sequence": [
-                                "developer",
-                                "developer_rework",
-                                "coach",
-                                "tester",
-                                closure_gate.role_id.clone(),
-                                closure_gate.next_role.clone()
-                            ],
-                            "lane_catalog": {
-                                "developer": {
-                                    "dispatch_target": "developer",
-                                    "task_class": "implementation",
-                                    "stage": "execution",
-                                    "runtime_role": "worker"
-                                },
-                                "developer_rework": {
-                                    "dispatch_target": "developer_rework",
-                                    "task_class": "implementation",
-                                    "stage": "execution",
-                                    "runtime_role": "worker"
-                                },
-                                "coach": {
-                                    "dispatch_target": "coach",
-                                    "task_class": "coach",
-                                    "stage": "quality_gate",
-                                    "runtime_role": "coach"
-                                },
-                                "tester": {
-                                    "dispatch_target": "tester",
-                                    "task_class": "verification",
-                                    "stage": "verification",
-                                    "runtime_role": "verifier"
-                                },
-                                (closure_gate.role_id.clone()): {
-                                    "dispatch_target": closure_gate.dispatch_target.clone(),
-                                    "task_class": closure_gate.task_class,
-                                    "stage": "quality_gate",
-                                    "runtime_role": closure_gate.runtime_role
-                                },
-                                (closure_gate.next_role.clone()): {
-                                    "dispatch_target": closure_gate.next_role.clone(),
-                                    "task_class": closure_gate.next_task_class.clone(),
-                                    "stage": "release_readiness",
-                                    "runtime_role": closure_gate.next_runtime_role.clone()
-                                }
-                            }
-                        }
-                    }
-                }
-            },
+            "role_selection_full": role_selection_full.clone(),
             "verifier_proof_packet": {
                 "proof_goal": "Complete host bridge proof.",
                 "verification_command": "cargo test -p vida host_bridge_public_cli",
@@ -3418,6 +3761,7 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
             "proof_target": "host bridge downstream packet",
             "read_only_paths": ["crates/vida/src"],
             "blocking_question": "none",
+            "role_selection_full": role_selection_full,
             "verifier_proof_packet": {
                 "proof_goal": "Continue downstream host bridge proof.",
                 "verification_command": "cargo test -p vida host_bridge_public_cli",
@@ -3532,7 +3876,7 @@ fn delete_run_graph_row_with_helper(state_dir: &str, table: &str, run_id: &str) 
 }
 
 fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostBridgeLaneFixture {
-    create_host_bridge_lane_fixture_for_target(test_name, changed_file, "implementer")
+    create_host_bridge_lane_fixture_for_target(test_name, changed_file, "coder")
 }
 
 fn create_host_bridge_lane_fixture_for_target(
@@ -3540,13 +3884,19 @@ fn create_host_bridge_lane_fixture_for_target(
     changed_file: &str,
     dispatch_target: &str,
 ) -> HostBridgeLaneFixture {
-    let state_dir = unique_state_dir();
+    let (project_root, state_dir) = project_bound_state_dir();
+    if matches!(dispatch_target, "tester" | "coach_validator" | "architect") {
+        activate_adaptive_task_flow_nodes(&project_root, dispatch_target);
+    }
     let boot = vida()
         .arg("boot")
+        .current_dir(&project_root)
         .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_ROOT", &project_root)
         .output()
         .expect("boot should run");
     assert_success(&boot, "boot");
+    let team_flow_authority = orchestrator_init_team_flow_authority(&project_root, &state_dir);
 
     let run_id = format!("run-{test_name}");
     let parent_id = format!("{run_id}-epic");
@@ -3650,7 +4000,10 @@ fn create_host_bridge_lane_fixture_for_target(
     let pass_case = test_name.contains("-pass");
     let (task_class, runtime_role, downstream_target) = match dispatch_target {
         "coach" => ("coach", "coach", "tester"),
+        "coach_validator" => ("coach", "coach", "architect"),
         "tester" => ("verification", "verifier", closure_gate.role_id.as_str()),
+        "architect" => ("architecture", "solution_architect", "release_closure"),
+        "coder" => ("implementation", "worker", "tester"),
         target if target == closure_gate.role_id => (
             closure_gate.task_class.as_str(),
             closure_gate.runtime_role.as_str(),
@@ -3663,81 +4016,21 @@ fn create_host_bridge_lane_fixture_for_target(
     } else {
         dispatch_target
     };
-    let role_selection_full = serde_json::json!({
-        "ok": true,
-        "activation_source": "test_fixture",
-        "selection_mode": "test",
-        "fallback_role": "orchestrator",
-        "request": "test",
-        "selected_role": runtime_role,
-        "conversational_mode": null,
-        "single_task_only": true,
-        "tracked_flow_entry": null,
-        "allow_freeform_chat": false,
-        "confidence": "high",
-        "matched_terms": [],
-        "compiled_bundle": {},
-        "reason": "test fixture",
-        "execution_plan": {
-            "development_flow": {
-                "dispatch_contract": {
-                    "execution_lane_sequence": [
-                        "implementer",
-                        "developer",
-                        "developer_rework",
-                        "coach",
-                        "tester",
-                        closure_gate.role_id.clone(),
-                        closure_gate.next_role.clone()
-                    ],
-                    "lane_catalog": {
-                        "implementer": {
-                            "dispatch_target": "implementer",
-                            "task_class": "implementation",
-                            "stage": "execution",
-                            "runtime_role": "worker"
-                        },
-                        "developer": {
-                            "dispatch_target": "developer",
-                            "task_class": "implementation",
-                            "stage": "execution",
-                            "runtime_role": "worker"
-                        },
-                        "developer_rework": {
-                            "dispatch_target": "developer_rework",
-                            "task_class": "implementation",
-                            "stage": "execution",
-                            "runtime_role": "worker"
-                        },
-                        "coach": {
-                            "dispatch_target": "coach",
-                            "task_class": "coach",
-                            "stage": "quality_gate",
-                            "runtime_role": "coach"
-                        },
-                        "tester": {
-                            "dispatch_target": "tester",
-                            "task_class": "verification",
-                            "stage": "verification",
-                            "runtime_role": "verifier"
-                        },
-                        (closure_gate.role_id.clone()): {
-                            "dispatch_target": closure_gate.dispatch_target.clone(),
-                            "task_class": closure_gate.task_class.clone(),
-                            "stage": "quality_gate",
-                            "runtime_role": closure_gate.runtime_role.clone()
-                        },
-                        (closure_gate.next_role.clone()): {
-                            "dispatch_target": closure_gate.next_role.clone(),
-                            "task_class": closure_gate.next_task_class.clone(),
-                            "stage": "release_readiness",
-                            "runtime_role": closure_gate.next_runtime_role.clone()
-                        }
-                    }
-                }
-            }
-        }
-    });
+    let selected_node_id = dispatch_target;
+    let dispatch_contract = apply_team_flow_authority_identity(
+        canonical_development_flow_dispatch_contract(
+            &state_dir,
+            "adaptive-task-flow",
+            selected_node_id,
+        ),
+        &team_flow_authority,
+    );
+    let role_selection_full = canonical_host_bridge_role_selection_full(
+        &format!("dispatch target {dispatch_target}"),
+        runtime_role,
+        selected_node_id,
+        dispatch_contract,
+    );
     let canonical_request = host_bridge_request_value(
         test_name,
         &run_id,
@@ -3754,7 +4047,7 @@ fn create_host_bridge_lane_fixture_for_target(
     let downstream_dispatch_active_target = if pass_case {
         request_dispatch_target
     } else {
-        "implementer"
+        "coder"
     };
     let downstream_dispatch_ready = pass_case;
     let downstream_dispatch_status = if pass_case { "packet_ready" } else { "blocked" };
@@ -3809,6 +4102,13 @@ fn create_host_bridge_lane_fixture_for_target(
             "downstream_dispatch_blockers": downstream_dispatch_blockers,
             "downstream_dispatch_status": downstream_dispatch_status,
             "downstream_lane_status": downstream_lane_status,
+            "dispatch_result_path": result_path,
+            "result_path": result_path,
+            "host_tool_bridge_request": {
+                "request_path": request_path,
+                "result_path": result_path,
+                "receipt_path": bridge_receipt_path
+            },
             "run_graph_bootstrap": {},
             "role_selection_full": role_selection_full
         })
@@ -3855,14 +4155,45 @@ fn create_host_bridge_lane_fixture_for_target(
     )
     .expect("request should be written");
 
+    let completion_receipt_id = format!("{run_id}-{dispatch_target}-completion");
     std::fs::write(
         &activation_result_path,
         serde_json::json!({
             "artifact_kind": "runtime_dispatch_result",
             "status": "blocked",
             "execution_state": "bridge_request_pending",
+            "dispatch_target": request_dispatch_target,
+            "completed_target": request_dispatch_target,
+            "source_node_id": selected_node_id,
+            "current_node_id": selected_node_id,
+            "target_node_id": downstream_target,
+            "allowed_next_node": downstream_target,
+            "source_dispatch_packet_path": &packet_path,
+            "decision": if pass_case { "pass" } else { "rework" },
+            "verdict": if pass_case { "pass" } else { "rework" },
+            "completion_verdict": if pass_case { "pass" } else { "rework" },
+            "completion_receipt_id": &completion_receipt_id,
+            "proof_outputs": match dispatch_target {
+                "coder" => vec!["changed_files", "verification_notes", "explicit_blockers"],
+                "tester" => vec!["verification_evidence", "failing_or_passing_checks"],
+                "coach" | "coach_validator" => vec![
+                    "root_cause_validation",
+                    "false_green_risk_review",
+                    "rework_or_approve_decision"
+                ],
+                "architect" => vec!["implementation_plan", "architecture_decisions", "explicit_blockers"],
+                _ => Vec::<&str>::new(),
+            },
+            "execution_evidence": {
+                "receipt_backed": true,
+                "receipt_id": &completion_receipt_id,
+                "source_node_id": selected_node_id,
+                "current_node_id": selected_node_id,
+                "target_node_id": downstream_target
+            },
             "host_tool_bridge_request": {
                 "request_path": request_path,
+                "packet_path": packet_path,
                 "result_path": result_path,
                 "receipt_path": bridge_receipt_path
             }
@@ -4037,13 +4368,13 @@ fn host_bridge_public_cli_receipt_contract_failure_maps_to_mismatch_without_stat
     persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
         &fixture.state_dir,
         &fixture.run_id,
-        "implementer",
-        "implementer",
-        "developer",
+        "tester",
+        "tester",
+        "coder",
         "",
         "lane_open",
         "host_tool_bridge_adapter_required",
-        "implementer_blocked",
+        "coder_blocked",
         "false",
         "blocked",
     );
@@ -4082,7 +4413,7 @@ fn host_bridge_public_cli_receipt_contract_failure_maps_to_mismatch_without_stat
 #[test]
 fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
     let fixture = create_host_bridge_lane_fixture(
-        "host-bridge-verification-summary",
+        "host-bridge-verification-summary-pass",
         "crates/vida/src/lib.rs",
     );
 
@@ -4132,23 +4463,22 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
 
 #[test]
 fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions() {
-    let closure_gate = canonical_host_bridge_closure_gate();
     let cases = [
         (
-            "coach",
+            "coach_validator",
             "coach decision=approve; implementation accepted",
             true,
             None,
             None,
-            "tester",
+            "architect",
         ),
         (
-            "coach",
+            "coach_validator",
             "coach decision=blocked; scheduledAt missing for non-all-day meeting",
             false,
             Some("coach_rework_required"),
-            Some("developer"),
-            "developer_rework",
+            Some("coder"),
+            "coder",
         ),
         (
             "tester",
@@ -4156,31 +4486,31 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            closure_gate.dispatch_target.as_str(),
+            "coach_validator",
         ),
         (
             "tester",
             "tester decision=blocked; focused proof failed",
             false,
             Some("verification_rework_required"),
-            Some("developer"),
-            "developer_rework",
+            Some("coder"),
+            "coder",
         ),
         (
-            closure_gate.role_id.as_str(),
+            "architect",
             "configured closure-gate decision=approve; proof review accepted",
             true,
             None,
             None,
-            closure_gate.next_role.as_str(),
+            "release_closure",
         ),
         (
-            closure_gate.role_id.as_str(),
+            "architect",
             "configured closure-gate decision=blocked; proof review needs tester rework",
             false,
             Some("review_rework_required"),
-            Some("tester"),
-            closure_gate.next_role.as_str(),
+            Some("coder"),
+            "coder",
         ),
     ];
 
@@ -4193,21 +4523,27 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             "crates/vida/src/lib.rs",
             target,
         );
-        if target == closure_gate.role_id.as_str() {
-            let packet: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(&fixture.packet_path)
-                    .expect("quality gate dispatch packet should exist"),
-            )
-            .expect("quality gate dispatch packet should parse");
+        let packet: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&fixture.packet_path)
+                .expect("quality gate dispatch packet should exist"),
+        )
+        .expect("quality gate dispatch packet should parse");
+        let expected_allowed_next_node = packet
+            .pointer(&format!(
+                "/role_selection_full/execution_plan/development_flow/dispatch_contract/lane_catalog/{allowed_next_node}/dispatch_target"
+            ))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(allowed_next_node);
+        if target == "architect" {
             let lane = packet
                 .pointer(&format!(
                     "/role_selection_full/execution_plan/development_flow/dispatch_contract/lane_catalog/{}",
-                    closure_gate.role_id
+                    target
                 ))
                 .expect("closure gate lane catalog row should exist");
-            assert_eq!(lane["dispatch_target"], closure_gate.dispatch_target);
-            assert_eq!(lane["runtime_role"], closure_gate.runtime_role);
-            assert_eq!(lane["task_class"], closure_gate.task_class);
+            assert_eq!(lane["dispatch_target"], "development_escalation");
+            assert_eq!(lane["runtime_role"], "solution_architect");
+            assert_eq!(lane["task_class"], "architecture");
         }
         let receipt_id = format!(
             "host-bridge-{target}-{}-summary-receipt",
@@ -4254,11 +4590,10 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
         let output = command
             .output()
             .expect("quality-gate lane complete should run");
-        if should_pass {
-            assert_success(&output, &format!("lane complete should pass for {target}"));
-        } else {
-            assert_failure(&output, &format!("lane complete should block for {target}"));
-        }
+        assert_success(
+            &output,
+            &format!("lane completion should accept the typed decision for {target}"),
+        );
         let payload: serde_json::Value =
             serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
                 panic!(
@@ -4268,11 +4603,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                 )
             });
         assert_eq!(payload["surface"], "vida lane", "{target}");
-        assert_eq!(
-            payload["status"],
-            if should_pass { "pass" } else { "blocked" },
-            "{target}"
-        );
+        assert_eq!(payload["status"], "pass", "{target}");
 
         let bridge_result: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
@@ -4332,23 +4663,23 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                 "{target}"
             );
             assert_eq!(
-                bridge_result["allowed_next_node"], allowed_next_node,
+                bridge_result["allowed_next_node"], expected_allowed_next_node,
                 "{target}"
             );
         } else {
             let blocker_code = blocker_code.expect("blocked case should name blocker code");
             let rework_target = rework_target.expect("blocked case should name rework target");
             assert!(
-                !payload["blocker_codes"]
+                payload["blocker_codes"]
                     .as_array()
                     .expect("blocker codes should be an array")
                     .is_empty(),
-                "lane payload should expose a blocked envelope for {target}: {payload}"
+                "accepted rework dispatch should not block the lane envelope for {target}: {payload}"
             );
-            let completion_result_path = payload["artifact_refs"]
-                ["downstream_dispatch_result_path"]
-                .as_str()
-                .expect("completion result path should be present");
+            let completion_result_path =
+                payload["artifact_refs"]["downstream_dispatch_result_path"]
+                    .as_str()
+                    .expect("completion result path should be present");
             let completion_result: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string(completion_result_path)
                     .expect("completion result should exist"),
@@ -4359,7 +4690,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             assert_eq!(completion_result["decision"], "rework_required", "{target}");
             assert_eq!(completion_result["verdict"], "rework_required", "{target}");
             assert_eq!(
-                completion_result["completion_verdict"], "rework_required",
+                completion_result["execution_evidence"]["completion_verdict"], "rework_required",
                 "{target}"
             );
             assert_eq!(
@@ -4367,14 +4698,13 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                 "{target}"
             );
             assert_eq!(
-                completion_result["allowed_next_node"], allowed_next_node,
+                completion_result["allowed_next_node"], expected_allowed_next_node,
                 "{target}"
             );
             assert_eq!(
                 completion_result["blocker_code"], blocker_code,
                 "completion result should preserve blocker for {target}: {completion_result}"
             );
-            assert_eq!(completion_result["closure_ready"], false, "{target}");
         }
     }
 }
@@ -4384,7 +4714,7 @@ fn coach_blocked_flow_does_not_dispatch_verification() {
     let fixture = create_host_bridge_lane_fixture_for_target(
         "host-bridge-coach-blocked-no-verification",
         "crates/vida/src/lib.rs",
-        "coach",
+        "coach_validator",
     );
 
     let output = vida()
@@ -4407,37 +4737,44 @@ fn coach_blocked_flow_does_not_dispatch_verification() {
             "--blocker-code",
             "coach_rework_required",
             "--rework-target",
-            "developer",
+            "coder",
             "--state-dir",
             &fixture.state_dir,
             "--json",
         ])
         .output()
         .expect("blocked coach lane complete should run");
-    assert_failure(&output, "blocked coach lane complete");
+    assert_success(
+        &output,
+        "blocked coach lane should dispatch typed developer rework",
+    );
 
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("lane complete json should parse");
-    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["status"], "pass");
     assert!(
-        !payload["blocker_codes"]
+        payload["blocker_codes"]
             .as_array()
             .expect("lane blocker codes should be an array")
             .is_empty(),
-        "lane payload should expose a blocked envelope: {payload}"
+        "accepted developer rework should not block the lane envelope: {payload}"
     );
-    assert_ne!(payload["downstream_dispatch_target"], "tester");
-    assert_ne!(payload["downstream_dispatch_target"], "verification");
-    assert_ne!(payload["downstream_dispatch_target"], "verifier");
+    assert_eq!(
+        payload["artifact_refs"]["downstream_dispatch_target"],
+        "development_implementer"
+    );
     let downstream_packet_path = payload["artifact_refs"]["downstream_dispatch_packet_path"]
         .as_str()
-        .expect("blocked lane payload should retain the current coach packet path");
+        .expect("rework lane payload should reference the developer packet");
     let downstream_packet: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(downstream_packet_path)
             .expect("downstream packet reference should be readable"),
     )
     .expect("downstream packet reference should parse");
-    assert_eq!(downstream_packet["dispatch_target"], "coach");
+    assert_eq!(
+        downstream_packet["dispatch_target"],
+        "development_implementer"
+    );
     assert_ne!(downstream_packet["dispatch_target"], "tester");
     assert_ne!(downstream_packet["activation_runtime_role"], "verifier");
 
@@ -4457,8 +4794,11 @@ fn coach_blocked_flow_does_not_dispatch_verification() {
         completion_result["blocker_codes"],
         serde_json::json!(["coach_rework_required"])
     );
-    assert_eq!(completion_result["rework_target"], "developer");
-    assert_eq!(completion_result["allowed_next_node"], "developer_rework");
+    assert_eq!(completion_result["rework_target"], "coder");
+    assert_eq!(
+        completion_result["allowed_next_node"],
+        "development_implementer"
+    );
     assert_ne!(completion_result["allowed_next_node"], "verification");
     assert_ne!(completion_result["allowed_next_node"], "tester");
 }
@@ -4489,15 +4829,15 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
                 "request_id": "host-bridge-public-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "implementer",
+                "dispatch_target": "coder",
                 "backend_id": "internal_subagents",
                 "source_dispatch_packet_path": &fixture.packet_path,
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "blocker_code": "implementation_artifacts_missing",
                 "blocker_codes": ["implementation_artifacts_missing"],
-                "rework_target": "developer",
-                "allowed_next_node": "developer"
+                "rework_target": "coder",
+                "allowed_next_node": "coder"
             }),
             &request,
         )
@@ -4513,7 +4853,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
                 "request_id": "host-bridge-public-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "implementer",
+                "dispatch_target": "coder",
                 "backend_id": "internal_subagents",
                 "dispatch_packet_path": &fixture.packet_path,
                 "blocker_code": "implementation_artifacts_missing",
@@ -4535,12 +4875,14 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         serde_json::from_slice(&lane_show.stdout).expect("lane show json should parse");
     assert_eq!(
         lane_payload["recommended_surface"], "vida agent host-bridge",
-        "lane payload should recommend active implementer request: {lane_payload}"
+        "lane payload should recommend active coder request: {lane_payload}"
     );
-    assert!(lane_payload["recommended_command"]
-        .as_str()
-        .expect("recommended command")
-        .starts_with("vida agent host-bridge --request "));
+    assert!(
+        lane_payload["recommended_command"]
+            .as_str()
+            .expect("recommended command")
+            .starts_with("vida agent host-bridge --request ")
+    );
     assert!(
         !lane_payload["recommended_command"]
             .as_str()
@@ -4561,7 +4903,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
                 "request_id": "host-bridge-public-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "implementer",
+                "dispatch_target": "coder",
                 "backend_id": "internal_subagents",
                 "source_dispatch_packet_path": &fixture.packet_path,
                 "decision": "pass",
@@ -4600,11 +4942,13 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "pass");
-    assert!(!payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should render")
-        .iter()
-        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
+    assert!(
+        !payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
+    );
 }
 
 #[test]
@@ -4612,7 +4956,7 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     let fixture = create_host_bridge_lane_fixture_for_target(
         "host-bridge-blocked-contract-retry",
         "crates/vida/src/lib.rs",
-        "coach",
+        "coach_validator",
     );
     let mut request: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
@@ -4624,8 +4968,8 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
         "status": "blocked",
         "decision": "rework_required",
         "verdict": "rework_required",
-        "allowed_next_node": "developer_rework",
-        "rework_target": "developer",
+        "allowed_next_node": "coder",
+        "rework_target": "coder",
         "blocker_codes": ["coach_rework_required"]
     });
     std::fs::write(
@@ -4640,20 +4984,29 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
             serde_json::json!({
                 "artifact_kind": "host_tool_bridge_result",
                 "status": "blocked",
-                "execution_state": "executed",
+                "execution_state": "blocked",
                 "request_id": "host-bridge-blocked-contract-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "coach",
+                "dispatch_target": "coach_validator",
                 "backend_id": "internal_subagents",
                 "source_dispatch_packet_path": &fixture.packet_path,
                 "decision": "rework_required",
                 "verdict": "rework_required",
+                "completion_verdict": "rework",
                 "blocker_codes": ["coach_rework_required"],
-                "rework_target": "developer",
-                "allowed_next_node": "developer_rework",
+                "rework_target": "coder",
+                "allowed_next_node": "coder",
+                "source_node_id": "coach_validator",
+                "current_node_id": "coach_validator",
+                "target_node_id": "coder",
+                "completion_receipt_id": "host-bridge-blocked-contract-retry-coach-validator-rework",
                 "execution_evidence": {
-                    "receipt_backed": true
+                    "receipt_backed": true,
+                    "receipt_id": "host-bridge-blocked-contract-retry-coach-validator-rework",
+                    "source_node_id": "coach_validator",
+                    "current_node_id": "coach_validator",
+                    "target_node_id": "coder"
                 }
             }),
             &request,
@@ -4686,11 +5039,13 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane");
-    assert!(!payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should render")
-        .iter()
-        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
+    assert!(
+        !payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
+    );
     let result_path = payload["artifact_refs"]["host_bridge_result_path"]
         .as_str()
         .expect("host bridge result path should be present");
@@ -4698,22 +5053,24 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
         &std::fs::read_to_string(result_path).expect("host bridge result should be readable"),
     )
     .expect("host bridge result should parse");
-    assert_eq!(result["allowed_next_node"], "developer_rework");
+    assert_eq!(result["allowed_next_node"], "coder");
     assert_eq!(result["decision"], "rework_required");
     assert_eq!(result["verdict"], "rework_required");
     assert_eq!(
         payload["artifact_refs"]["downstream_dispatch_target"],
-        "developer_rework"
+        "coder"
     );
     assert_eq!(
         payload["artifact_refs"]["downstream_dispatch_status"],
         "packet_ready"
     );
     assert_eq!(payload["artifact_refs"]["downstream_dispatch_ready"], true);
-    assert!(payload["artifact_refs"]["downstream_dispatch_blockers"]
-        .as_array()
-        .expect("downstream blockers should render")
-        .is_empty());
+    assert!(
+        payload["artifact_refs"]["downstream_dispatch_blockers"]
+            .as_array()
+            .expect("downstream blockers should render")
+            .is_empty()
+    );
     let downstream_packet_path = payload["artifact_refs"]["downstream_dispatch_packet_path"]
         .as_str()
         .expect("rework retry should write downstream dispatch packet");
@@ -4722,7 +5079,7 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
             .expect("downstream dispatch packet should be readable"),
     )
     .expect("downstream dispatch packet should parse");
-    assert_eq!(downstream_packet["dispatch_target"], "developer_rework");
+    assert_eq!(downstream_packet["dispatch_target"], "coder");
     let status_output = vida()
         .args([
             "taskflow",
@@ -4740,19 +5097,19 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
         serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
     assert_eq!(run_graph_status["status"], "pass");
     assert_eq!(run_graph_status["blocker_codes"], serde_json::json!([]));
-    assert_eq!(run_graph_status["run_graph_status"]["active_node"], "coach");
     assert_eq!(
-        run_graph_status["run_graph_status"]["next_node"],
-        "developer_rework"
+        run_graph_status["run_graph_status"]["active_node"],
+        "coach_validator"
     );
+    assert_eq!(run_graph_status["run_graph_status"]["next_node"], "coder");
     assert_eq!(
         run_graph_status["run_graph_status"]["lifecycle_stage"],
-        "developer_rework_dispatch_ready"
+        "coder_dispatch_ready"
     );
     assert_eq!(run_graph_status["run_graph_status"]["status"], "ready");
     assert_eq!(
         run_graph_status["run_graph_status"]["resume_target"],
-        "dispatch.developer_rework"
+        "dispatch.coder"
     );
     assert_eq!(
         run_graph_status["delegation_gate"]["delegated_cycle_open"],
@@ -4776,18 +5133,18 @@ fn run_graph_status_reconciles_half_applied_rework_downstream_packet() {
     persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
         &state_dir,
         run_id,
-        "coach",
-        "coach",
-        "developer",
-        "executed",
-        "lane_completed",
-        "",
-        "coach_blocked",
-        "true",
-        "packet_ready",
+        "coder",
+        "coder",
+        "coder",
+        "blocked",
+        "lane_blocked",
+        "meeting_attendee_selector_contract_incomplete",
+        "coder_blocked",
+        "false",
+        "blocked",
     );
     let result_path =
-        format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}-coach.json");
+        format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}-coder.json");
     std::fs::write(
         &result_path,
         serde_json::json!({
@@ -4797,18 +5154,22 @@ fn run_graph_status_reconciles_half_applied_rework_downstream_packet() {
             "request_id": run_id,
             "run_id": run_id,
             "task_id": run_id,
-            "dispatch_target": "coach",
+            "dispatch_target": "coder",
             "backend_id": "internal_subagents",
+            "blocker_code": "meeting_attendee_selector_contract_incomplete",
             "source_dispatch_packet_path": format!(
-                "{state_dir}/runtime-consumption/downstream-dispatch-packets/{run_id}-coach.json"
+                "{state_dir}/runtime-consumption/dispatch-packets/{run_id}-coder.json"
             ),
             "decision": "rework_required",
             "verdict": "rework_required",
+            "completion_verdict": "rework_required",
             "blocker_codes": ["meeting_attendee_selector_contract_incomplete"],
-            "rework_target": "developer",
-            "allowed_next_node": "developer_rework",
+            "rework_target": "coder",
+            "allowed_next_node": "coder",
             "execution_evidence": {
-                "receipt_backed": true
+                "receipt_backed": true,
+                "backend_id": "internal_subagents",
+                "completion_verdict": "rework_required"
             }
         })
         .to_string(),
@@ -4831,19 +5192,22 @@ fn run_graph_status_reconciles_half_applied_rework_downstream_packet() {
     assert_success(&status_output, "half-applied rework run graph status");
     let payload: serde_json::Value =
         serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(payload["status"], "blocked", "payload={payload}");
     assert_eq!(
-        payload["run_graph_status"]["active_node"],
-        "developer_rework"
+        payload["blocker_codes"],
+        serde_json::json!(["tool_execution_failed"])
     );
+    assert_eq!(payload["run_graph_status"]["active_node"], "coder");
+    assert_eq!(payload["run_graph_status"]["next_node"], "coder");
+    assert_eq!(payload["run_graph_status"]["status"], "ready");
+    assert_eq!(payload["run_graph_status"]["recovery_ready"], true);
     assert_eq!(
         payload["run_graph_status"]["lifecycle_stage"],
-        "developer_rework_dispatch_ready"
+        "coder_dispatch_ready"
     );
     assert_eq!(
         payload["run_graph_status"]["resume_target"],
-        "dispatch.developer_rework"
+        "dispatch.coder"
     );
     assert_eq!(payload["delegation_gate"]["delegated_cycle_open"], false);
 }
@@ -4866,13 +5230,13 @@ fn run_graph_status_reconciles_half_applied_verifier_rework_downstream_packet() 
         run_id,
         "tester",
         "tester",
-        "developer",
-        "executed",
-        "lane_completed",
-        "",
+        "coder",
+        "blocked",
+        "lane_blocked",
+        "meeting_attendee_selector_contract_incomplete",
         "tester_blocked",
-        "true",
-        "packet_ready",
+        "false",
+        "blocked",
     );
     let result_path =
         format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}-tester.json");
@@ -4884,16 +5248,22 @@ fn run_graph_status_reconciles_half_applied_verifier_rework_downstream_packet() 
             "execution_state": "blocked",
             "request_id": run_id,
             "run_id": run_id,
+            "task_id": run_id,
             "dispatch_target": "tester",
-            "decision": "rework",
-            "verdict": "fail",
+            "backend_id": "internal_subagents",
+            "source_dispatch_packet_path": format!(
+                "{state_dir}/runtime-consumption/dispatch-packets/{run_id}-tester.json"
+            ),
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "completion_verdict": "rework_required",
             "blocker_codes": [
                 "meeting_attendee_selector_contract_incomplete",
                 "meeting_current_user_attendee_default_missing",
                 "meeting_attendee_add_remove_widget_proof_missing"
             ],
-            "rework_target": "developer",
-            "allowed_next_node": "developer_rework",
+            "rework_target": "coder",
+            "allowed_next_node": "coder",
             "execution_evidence": {
                 "receipt_backed": true
             }
@@ -4921,19 +5291,22 @@ fn run_graph_status_reconciles_half_applied_verifier_rework_downstream_packet() 
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(payload["status"], "blocked", "payload={payload}");
     assert_eq!(
-        payload["run_graph_status"]["active_node"],
-        "developer_rework"
+        payload["blocker_codes"],
+        serde_json::json!(["tool_execution_failed"])
     );
+    assert_eq!(payload["run_graph_status"]["active_node"], "tester");
+    assert_eq!(payload["run_graph_status"]["next_node"], "coder");
+    assert_eq!(payload["run_graph_status"]["status"], "ready");
+    assert_eq!(payload["run_graph_status"]["recovery_ready"], true);
     assert_eq!(
         payload["run_graph_status"]["lifecycle_stage"],
-        "developer_rework_dispatch_ready"
+        "coder_dispatch_ready"
     );
     assert_eq!(
         payload["run_graph_status"]["resume_target"],
-        "dispatch.developer_rework"
+        "dispatch.coder"
     );
     assert_eq!(payload["delegation_gate"]["delegated_cycle_open"], false);
 }
@@ -4943,7 +5316,7 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
     let fixture = create_host_bridge_lane_fixture_for_target(
         "host-bridge-submitted-rework-retry",
         "crates/vida/src/lib.rs",
-        "coach",
+        "coach_validator",
     );
     let mut request: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
@@ -4967,20 +5340,30 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
             serde_json::json!({
                 "artifact_kind": "host_tool_bridge_result",
                 "status": "blocked",
-                "execution_state": "executed",
+                "execution_state": "blocked",
                 "request_id": "host-bridge-submitted-rework-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "coach",
+                "dispatch_target": "coach_validator",
                 "backend_id": "internal_subagents",
                 "source_dispatch_packet_path": &fixture.packet_path,
                 "decision": "rework_required",
                 "verdict": "rework_required",
+                "completion_verdict": "rework",
                 "blocker_codes": ["host_agent_execution_failed"],
-                "rework_target": "developer",
-                "allowed_next_node": "developer_rework",
+                "rework_target": "coder",
+                "allowed_next_node": "coder",
+                "source_node_id": "coach_validator",
+                "current_node_id": "coach_validator",
+                "target_node_id": "coder",
+                "completion_receipt_id": "host-bridge-submitted-rework-retry-coach-validator-rework",
                 "execution_evidence": {
-                    "receipt_backed": true
+                    "receipt_backed": true,
+                    "receipt_id": "host-bridge-submitted-rework-retry-coach-validator-rework",
+                    "source_node_id": "coach_validator",
+                    "current_node_id": "coach_validator",
+                    "target_node_id": "coder",
+                    "completion_verdict": "rework_required"
                 }
             }),
             &request,
@@ -4998,7 +5381,7 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
                 "request_id": "host-bridge-submitted-rework-retry",
                 "run_id": &fixture.run_id,
                 "task_id": &fixture.run_id,
-                "dispatch_target": "coach",
+                "dispatch_target": "coach_validator",
                 "backend_id": "internal_subagents",
                 "dispatch_packet_path": &fixture.packet_path
             }),
@@ -5028,11 +5411,13 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane", "payload: {payload:#}");
-    assert!(!payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should render")
-        .iter()
-        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
+    assert!(
+        !payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
+    );
     assert!(payload["artifact_refs"]["host_bridge_result_path"].is_string());
     let receipt: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.bridge_receipt_path)
@@ -5064,16 +5449,16 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
     persist_host_bridge_lane_receipt_with_target_and_active_node(
         &fixture.state_dir,
         &fixture.run_id,
-        "coach",
-        "implementer",
+        "coach_validator",
+        "coder",
         "tester",
         "bridge_request_pending",
         "lane_open",
         "host_tool_bridge_adapter_required",
-        "implementer_blocked",
+        "coder_blocked",
     );
     let stale_result_path = format!(
-        "{}/runtime-consumption/dispatch-results/{}-coach.json",
+        "{}/runtime-consumption/dispatch-results/{}-coach_validator.json",
         fixture.state_dir, fixture.run_id
     );
     let mut stale_result: serde_json::Value = serde_json::from_str(
@@ -5092,13 +5477,13 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
     .expect("stale result should retain host bridge request metadata");
     std::fs::write(
         format!(
-            "{}/runtime-consumption/dispatch-packets/{}-coach.json",
+            "{}/runtime-consumption/dispatch-packets/{}-coach_validator.json",
             fixture.state_dir, fixture.run_id
         ),
         serde_json::json!({
             "run_id": fixture.run_id,
-            "dispatch_target": "coach",
-            "source_dispatch_target": "implementer",
+            "dispatch_target": "coach_validator",
+            "source_dispatch_target": "coder",
             "source_dispatch_status": "bridge_request_pending",
             "source_blocker_code": "host_tool_bridge_adapter_required",
             "downstream_dispatch_ready": false,
@@ -5106,7 +5491,7 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         })
         .to_string(),
     )
-    .expect("stale coach packet should preserve blocked implementer source");
+    .expect("stale coach packet should preserve blocked coder source");
 
     let lane_show = vida()
         .args(["lane", "show", &fixture.run_id, "--json"])
@@ -5131,10 +5516,12 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         lane_payload["recommended_surface"],
         "vida agent host-bridge"
     );
-    assert!(lane_payload["recommended_command"]
-        .as_str()
-        .expect("recommended command")
-        .contains(&fixture.request_path));
+    assert!(
+        lane_payload["recommended_command"]
+            .as_str()
+            .expect("recommended command")
+            .contains(&fixture.request_path)
+    );
     drop(lane_show);
 
     let output = vida()
@@ -5189,14 +5576,18 @@ fn lane_show_recommends_host_bridge_completion_before_exception_takeover() {
         payload["recommended_surface"], "vida agent host-bridge",
         "payload={payload}"
     );
-    assert!(payload["recommended_command"]
-        .as_str()
-        .expect("recommended command should exist")
-        .starts_with("vida agent host-bridge --request "));
-    assert!(payload["recommended_command"]
-        .as_str()
-        .expect("recommended command should exist")
-        .contains(&fixture.request_path));
+    assert!(
+        payload["recommended_command"]
+            .as_str()
+            .expect("recommended command should exist")
+            .starts_with("vida agent host-bridge --request ")
+    );
+    assert!(
+        payload["recommended_command"]
+            .as_str()
+            .expect("recommended command should exist")
+            .contains(&fixture.request_path)
+    );
     assert!(
         !payload["recommended_command"]
             .as_str()
@@ -5238,11 +5629,13 @@ fn host_bridge_public_cli_blocks_out_of_scope_taskflow_attempt_artifacts_without
     assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(payload["dispatch_status"], "blocked");
-    assert!(payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should be an array")
-        .iter()
-        .any(|code| code == "implementation_attempt_scope_guard_violation"));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should be an array")
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation")
+    );
     let bridge_result: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
     )
@@ -6461,8 +6854,7 @@ fn doctor_json_uses_current_run_final_snapshot_over_newer_retired_and_malformed_
         "doctor-current-run"
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]
-            ["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
         serde_json::json!(current_snapshot_path)
     );
     for blocker in [
@@ -6615,9 +7007,11 @@ fn doctor_json_fails_closed_without_matching_effective_run_final_despite_valid_g
             "{blocker} must remain blocked without same-run final evidence: {doctor_json}"
         );
     }
-    assert!(trace_blocker_codes
-        .iter()
-        .any(|code| code == "trace_missing"));
+    assert!(
+        trace_blocker_codes
+            .iter()
+            .any(|code| code == "trace_missing")
+    );
     assert_eq!(
         doctor_json["trace_evidence"]["root_trace"]["effective_run_id"],
         "doctor-missing-final-run"
@@ -6635,8 +7029,7 @@ fn doctor_json_fails_closed_without_matching_effective_run_final_despite_valid_g
         serde_json::Value::Null
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]
-            ["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
         serde_json::Value::Null
     );
 }
@@ -6698,9 +7091,11 @@ fn doctor_json_fails_closed_on_malformed_effective_run_final_despite_valid_globa
             "{blocker} must remain blocked for malformed effective-run evidence: {doctor_json}"
         );
     }
-    assert!(trace_blocker_codes
-        .iter()
-        .any(|code| code == "trace_incomplete"));
+    assert!(
+        trace_blocker_codes
+            .iter()
+            .any(|code| code == "trace_incomplete")
+    );
     assert_eq!(
         doctor_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
         serde_json::json!(malformed_snapshot_path)
@@ -6714,8 +7109,7 @@ fn doctor_json_fails_closed_on_malformed_effective_run_final_despite_valid_globa
         serde_json::json!(malformed_snapshot_path)
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]
-            ["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
         serde_json::json!(malformed_snapshot_path)
     );
 }
@@ -6772,9 +7166,11 @@ fn doctor_json_keeps_global_final_fallback_without_effective_run() {
             "{blocker} must stay clear for no-run global fallback: {doctor_json}"
         );
     }
-    assert!(!trace_blocker_codes
-        .iter()
-        .any(|code| code == "trace_incomplete"));
+    assert!(
+        !trace_blocker_codes
+            .iter()
+            .any(|code| code == "trace_incomplete")
+    );
     assert_eq!(
         doctor_json["trace_evidence"]["root_trace"]["effective_run_id"],
         serde_json::Value::Null
@@ -6792,8 +7188,7 @@ fn doctor_json_keeps_global_final_fallback_without_effective_run() {
         serde_json::json!(global_snapshot_path)
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]
-            ["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
         serde_json::Value::Null
     );
 }
@@ -7481,11 +7876,13 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
         status_json["continuation_binding"]["ambiguity_reason"],
         "latest_run_graph_status_blocked"
     );
-    assert!(!status_json["operator_contracts"]["blocker_codes"]
-        .as_array()
-        .expect("status blocker codes")
-        .iter()
-        .any(|code| code == "continuation_binding_ambiguous"));
+    assert!(
+        !status_json["operator_contracts"]["blocker_codes"]
+            .as_array()
+            .expect("status blocker codes")
+            .iter()
+            .any(|code| code == "continuation_binding_ambiguous")
+    );
 
     let doctor = vida()
         .args(["doctor", "--json"])
@@ -7498,9 +7895,11 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
     let doctor_blockers = doctor_json["blocker_codes"]
         .as_array()
         .expect("doctor blocker codes");
-    assert!(!doctor_blockers
-        .iter()
-        .any(|code| code == "recovery_readiness_blocked"));
+    assert!(
+        !doctor_blockers
+            .iter()
+            .any(|code| code == "recovery_readiness_blocked")
+    );
 }
 
 #[test]

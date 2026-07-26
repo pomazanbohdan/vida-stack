@@ -3,7 +3,7 @@ use crate::runtime_contract_vocab::{
     TASK_CLASS_VERIFICATION,
 };
 pub(crate) use crate::runtime_lane_summary::{
-    build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
+    RuntimeConsumptionLaneSelection, build_runtime_lane_selection_with_store,
 };
 
 fn canonicalize_moved_test_request(request: &str) -> String {
@@ -71,14 +71,16 @@ fn pre_plan_team_flow_authority(
     let mut authority_selection = selection.clone();
     authority_selection.compiled_bundle = compiled_bundle.clone();
     match mode {
-        PrePlanTeamFlowSelectionMode::Fresh =>
+        PrePlanTeamFlowSelectionMode::Fresh => {
             crate::runtime_dispatch_state::require_team_flow_authority_for_selection(
                 &authority_selection,
-            ),
-        PrePlanTeamFlowSelectionMode::Persisted =>
+            )
+        }
+        PrePlanTeamFlowSelectionMode::Persisted => {
             crate::runtime_dispatch_state::require_persisted_team_flow_authority_for_selection(
                 &authority_selection,
-            ),
+            )
+        }
     }
     .map_err(|error| error.to_string())
 }
@@ -358,7 +360,8 @@ pub(crate) fn normalize_selected_flow_for_execution_plan(
     compiled_bundle: &serde_json::Value,
     selected_flow_id: &str,
 ) -> Result<(), String> {
-    let selected_node_id = crate::runtime_dispatch_state::validated_selected_flow_node_ref(selection)?;
+    let selected_node_id =
+        crate::runtime_dispatch_state::validated_selected_flow_node_ref(selection)?;
     normalize_selected_flow_for_execution_plan_with_selected_node(
         selection,
         compiled_bundle,
@@ -589,14 +592,21 @@ fn derive_configured_dispatch_relations(
                 .push(format!("team_flow_authority_task_class_missing:{node_id}"));
         }
         if packet_family.is_empty() {
-            relations
-                .blockers
-                .push(format!("team_flow_authority_packet_template_kind_missing:{node_id}"));
-        } else if !relations.packet_families.iter().any(|value| value == packet_family) {
+            relations.blockers.push(format!(
+                "team_flow_authority_packet_template_kind_missing:{node_id}"
+            ));
+        } else if !relations
+            .packet_families
+            .iter()
+            .any(|value| value == packet_family)
+        {
             relations.packet_families.push(packet_family.to_string());
         }
         if !task_class.is_empty() && !packet_family.is_empty() {
-            if relations.packet_family_by_task_class.contains_key(task_class) {
+            if relations
+                .packet_family_by_task_class
+                .contains_key(task_class)
+            {
                 relations.blockers.push(format!(
                     "team_flow_authority_task_class_packet_template_ambiguous:{task_class}"
                 ));
@@ -607,7 +617,10 @@ fn derive_configured_dispatch_relations(
                 );
             }
         }
-        let activation = lane.get("activation").cloned().unwrap_or(serde_json::Value::Null);
+        let activation = lane
+            .get("activation")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let activation_present = match &activation {
             serde_json::Value::Null => false,
             serde_json::Value::String(value) => !value.trim().is_empty(),
@@ -676,7 +689,10 @@ fn configured_tracked_flow_sequence(
         if !sequence.iter().any(|value| value == &entry) {
             sequence.push(entry.clone());
         }
-        binding_modes.entry(entry).or_default().push(mode_id.clone());
+        binding_modes
+            .entry(entry)
+            .or_default()
+            .push(mode_id.clone());
     }
     let Some(selected) = selection
         .tracked_flow_entry
@@ -844,33 +860,33 @@ fn build_resolved_development_dispatch_contract_using_authority(
             });
         }
     };
-    let requires_execution_preparation =
-        match request_requires_execution_preparation(
-            compiled_bundle,
-            selection,
-            authority,
-            &selected_node_id,
-        ) {
-            Ok(value) => value,
-            Err(blocker) => {
-                return serde_json::json!({
-                    "status": "blocked",
-                    "blocker_codes": [blocker],
-                    "selected_flow_set": serde_json::Value::Null,
-                    "team_flow_authority_id": identity["team_flow_authority_id"],
-                    "team_flow_config_hash": identity["team_flow_config_hash"],
-                    "team_flow_registry_hash": identity["team_flow_registry_hash"],
-                    "execution_preparation_required": false,
-                    "resolved_lanes": [],
-                    "lane_sequence": [],
-                    "execution_lane_sequence": [],
-                    "lane_catalog": {},
-                    "dispatch_target_index": {},
-                    "runtime_role_index": {},
-                });
-            }
-        };
-    let configured_flow = match resolved_development_flow_templates(authority, Some(&selected_node_id)) {
+    let requires_execution_preparation = match request_requires_execution_preparation(
+        compiled_bundle,
+        selection,
+        authority,
+        &selected_node_id,
+    ) {
+        Ok(value) => value,
+        Err(blocker) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": [blocker],
+                "selected_flow_set": serde_json::Value::Null,
+                "team_flow_authority_id": identity["team_flow_authority_id"],
+                "team_flow_config_hash": identity["team_flow_config_hash"],
+                "team_flow_registry_hash": identity["team_flow_registry_hash"],
+                "execution_preparation_required": false,
+                "resolved_lanes": [],
+                "lane_sequence": [],
+                "execution_lane_sequence": [],
+                "lane_catalog": {},
+                "dispatch_target_index": {},
+                "runtime_role_index": {},
+            });
+        }
+    };
+    let configured_flow =
+        match resolved_development_flow_templates(authority, Some(&selected_node_id)) {
             Ok(flow) => flow,
             Err(blocker_codes) => {
                 return serde_json::json!({
@@ -1074,9 +1090,7 @@ fn dispatch_contract_lane<'a>(
             }
         })
         .ok_or_else(|| {
-            format!(
-                "team_flow_authority_dispatch_target_ambiguous_or_unknown:{dispatch_target}"
-            )
+            format!("team_flow_authority_dispatch_target_ambiguous_or_unknown:{dispatch_target}")
         })?;
     Ok(lane)
 }
@@ -1157,14 +1171,12 @@ fn build_runtime_orchestration_contract(
             .filter(|lane| lane["stage"].as_str() == Some("design_gate"))
             .collect::<Vec<_>>();
         match design_gate_nodes.as_slice() {
-            [lane] => {
-                match lane["node_id"].as_str() {
-                    Some(node_id) => {
-                        orchestration_lane_step_label_for_contract(dispatch_contract, node_id)
-                    }
-                    None => Err("team_flow_authority_design_gate_node_id_missing".to_string()),
+            [lane] => match lane["node_id"].as_str() {
+                Some(node_id) => {
+                    orchestration_lane_step_label_for_contract(dispatch_contract, node_id)
                 }
-            }
+                None => Err("team_flow_authority_design_gate_node_id_missing".to_string()),
+            },
             [] => Err("team_flow_authority_design_gate_lane_missing".to_string()),
             _ => Err("team_flow_authority_design_gate_lane_ambiguous".to_string()),
         }
@@ -1342,11 +1354,13 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
                 authority,
             )
         })
-        .unwrap_or_else(|| serde_json::json!({
-            "status": "blocked",
-            "blocker_codes": ["team_flow_selected_flow_authority_missing"],
-            "route_id": "implementation",
-        }));
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["team_flow_selected_flow_authority_missing"],
+                "route_id": "implementation",
+            })
+        });
     let analysis_route_id = implementation["analysis_route_task_class"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -1361,11 +1375,13 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
                 authority,
             )
         })
-        .unwrap_or_else(|| serde_json::json!({
-            "status": "blocked",
-            "blocker_codes": ["team_flow_selected_flow_authority_missing"],
-            "route_id": analysis_route_id,
-        }));
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["team_flow_selected_flow_authority_missing"],
+                "route_id": analysis_route_id,
+            })
+        });
     apply_implementation_analysis_route_overrides(&mut analysis, &implementation);
     let coach_route_id = implementation["coach_route_task_class"]
         .as_str()
@@ -1385,11 +1401,8 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
             .as_deref()
             .is_some_and(|entry| !entry.trim().is_empty())
             || !feature_design_terms.is_empty());
-    let tracked_flow_sequence = configured_tracked_flow_sequence(
-        compiled_bundle,
-        selection,
-        requires_design_gate,
-    );
+    let tracked_flow_sequence =
+        configured_tracked_flow_sequence(compiled_bundle, selection, requires_design_gate);
     let tracked_flow_bootstrap = if requires_design_gate {
         serde_json::json!({
             "required": true,
@@ -1658,18 +1671,18 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
-        build_resolved_development_dispatch_contract, configured_dev_team_flow_templates,
-        configured_tracked_flow_sequence, derive_configured_dispatch_relations,
+        PrePlanTeamFlowSelectionMode, apply_implementation_analysis_route_overrides,
+        build_design_first_tracked_flow_bootstrap, build_resolved_development_dispatch_contract,
+        configured_dev_team_flow_templates, configured_tracked_flow_sequence,
+        derive_configured_dispatch_relations,
         normalize_fresh_selected_or_default_flow_for_execution_plan,
         normalize_selected_flow_for_execution_plan,
-        normalize_selected_or_default_flow_for_execution_plan,
-        PrePlanTeamFlowSelectionMode,
-        pre_plan_team_flow_authority, request_requires_execution_preparation,
-        supported_autonomous_execution_settings, task_class_for_selection,
+        normalize_selected_or_default_flow_for_execution_plan, pre_plan_team_flow_authority,
+        request_requires_execution_preparation, supported_autonomous_execution_settings,
+        task_class_for_selection,
     };
-    use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::RuntimeConsumptionLaneSelection;
+    use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use serde_json::json;
 
     fn strict_team_flow_bundle() -> serde_json::Value {
@@ -1730,7 +1743,7 @@ mod tests {
             &selection,
             PrePlanTeamFlowSelectionMode::Persisted,
         )
-            .expect_err("missing selected node must fail closed");
+        .expect_err("missing selected node must fail closed");
         assert!(
             error.contains("team_flow_authority_selected_node_id_missing"),
             "unexpected blocker: {error}"
@@ -1982,8 +1995,9 @@ mod tests {
             }
         });
 
-        let error = normalize_fresh_selected_or_default_flow_for_execution_plan(&mut selection, &bundle)
-            .expect_err("fresh compatibility candidate must fail closed");
+        let error =
+            normalize_fresh_selected_or_default_flow_for_execution_plan(&mut selection, &bundle)
+                .expect_err("fresh compatibility candidate must fail closed");
         assert!(error.contains("team_flow_authority_unknown_flow"));
         assert!(error.contains("minimal"));
     }
@@ -2029,19 +2043,18 @@ mod tests {
         let mut selection = strict_team_flow_selection(&bundle);
         selection.request = format!("dev_team_flow_id:{alternate_flow}");
         selection.matched_terms = vec![format!("dev_team_flow_id:{alternate_flow}")];
-        let authority = pre_plan_team_flow_authority(
-            &bundle,
-            &selection,
-            PrePlanTeamFlowSelectionMode::Fresh,
-        )
-        .expect("selected alternate authority must compile");
-        assert!(!request_requires_execution_preparation(
-            &bundle,
-            &selection,
-            &authority,
-            &authority.entry_node_id,
-        )
-        .expect("selected flow policy should resolve"));
+        let authority =
+            pre_plan_team_flow_authority(&bundle, &selection, PrePlanTeamFlowSelectionMode::Fresh)
+                .expect("selected alternate authority must compile");
+        assert!(
+            !request_requires_execution_preparation(
+                &bundle,
+                &selection,
+                &authority,
+                &authority.entry_node_id,
+            )
+            .expect("selected flow policy should resolve")
+        );
     }
 
     #[test]
@@ -2068,26 +2081,18 @@ mod tests {
             .as_array()
             .into_iter()
             .flatten()
-            .find(|flow| {
-                flow["flow_id"].as_str()
-                    != bundle["default_flow_set"].as_str()
-            })
+            .find(|flow| flow["flow_id"].as_str() != bundle["default_flow_set"].as_str())
             .and_then(|flow| flow["flow_id"].as_str())
             .expect("alternate authority flow");
         let mut selection = strict_team_flow_selection(&bundle);
         selection.request = format!("dev_team_flow_id:{alternate_flow}");
         selection.matched_terms = vec![format!("dev_team_flow_id:{alternate_flow}")];
-        let contract = build_resolved_development_dispatch_contract(
-            &bundle,
-            &selection,
-            false,
-        );
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
         assert_eq!(contract["selected_flow_set"].as_str(), Some(alternate_flow));
         assert!(contract["lane_catalog"].as_object().is_some_and(|catalog| {
             !catalog.is_empty()
                 && catalog.values().all(|lane| {
-                    lane["node_id"].as_str().is_some()
-                        && lane["included"].as_bool() == Some(true)
+                    lane["node_id"].as_str().is_some() && lane["included"].as_bool() == Some(true)
                 })
         }));
     }
@@ -2115,8 +2120,14 @@ mod tests {
             "Research the feature, write detailed specifications, create a plan, and implement runtime flow",
         );
         assert_eq!(bootstrap["status"], "blocked");
-        assert_eq!(bootstrap["activation_semantics"], "configured_team_flow_relation_required");
-        assert_eq!(bootstrap["schema_vocabulary"], json!(["epic", "spec_task", "work_pool_task", "dev_task"]));
+        assert_eq!(
+            bootstrap["activation_semantics"],
+            "configured_team_flow_relation_required"
+        );
+        assert_eq!(
+            bootstrap["schema_vocabulary"],
+            json!(["epic", "spec_task", "work_pool_task", "dev_task"])
+        );
         assert!(bootstrap.get("work_pool_task").is_none());
         assert!(bootstrap.get("dev_task").is_none());
     }
@@ -2213,9 +2224,11 @@ mod tests {
 
         assert_eq!(contract["status"], "blocked");
         assert_eq!(contract["lane_sequence"], json!([]));
-        assert!(contract["blocker_codes"][0]
-            .as_str()
-            .is_some_and(|code| code.contains("team_flow_authority_missing")));
+        assert!(
+            contract["blocker_codes"][0]
+                .as_str()
+                .is_some_and(|code| code.contains("team_flow_authority_missing"))
+        );
     }
 
     #[test]
@@ -2386,16 +2399,15 @@ mod tests {
     #[test]
     fn strict_team_flow_projection_preserves_typed_authority_fields() {
         let bundle = strict_team_flow_bundle();
-        let selected_node_id = crate::team_flow_authority_adapter::TeamFlowExecutionAuthority::require(
-            &bundle,
-            None,
-            None,
-        )
-        .expect("strict authority")
-        .ordered_nodes()
-        .find(|node| node.node.included)
-        .map(|node| node.node.node_id.clone())
-        .expect("strict authority selected node");
+        let selected_node_id =
+            crate::team_flow_authority_adapter::TeamFlowExecutionAuthority::require(
+                &bundle, None, None,
+            )
+            .expect("strict authority")
+            .ordered_nodes()
+            .find(|node| node.node.included)
+            .map(|node| node.node.node_id.clone())
+            .expect("strict authority selected node");
         let mut selection = strict_team_flow_selection(&bundle);
         selection.execution_plan = json!({
             "team_flow_authority_selected_node_id": selected_node_id
@@ -2629,7 +2641,10 @@ mod tests {
             relations.activation_by_task_class["verification"],
             json!({"runtime_role": "verifier"})
         );
-        assert_eq!(relations.design_owner_runtime_role.as_deref(), Some("business_analyst"));
+        assert_eq!(
+            relations.design_owner_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
     }
 
     #[test]
@@ -2661,9 +2676,11 @@ mod tests {
         assert!(blockers.iter().any(|code| {
             code == "team_flow_authority_packet_template_kind_missing:missing-node"
         }));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "team_flow_authority_activation_missing:missing-node"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "team_flow_authority_activation_missing:missing-node")
+        );
         assert!(blockers.iter().any(|code| {
             code == "team_flow_authority_task_class_packet_template_ambiguous:verification"
         }));
@@ -2711,10 +2728,17 @@ mod tests {
                 None,
                 vec!["proof", "write"],
             ),
-            ("zero", Vec::new(), Some("team_flow_authority_packet_relation_missing"), vec![]),
+            (
+                "zero",
+                Vec::new(),
+                Some("team_flow_authority_packet_relation_missing"),
+                vec![],
+            ),
             (
                 "missing",
-                vec![json!({"node_id":"missing","task_class":"implementation","runtime_role":"worker","packet_template_kind":"","activation":null})],
+                vec![
+                    json!({"node_id":"missing","task_class":"implementation","runtime_role":"worker","packet_template_kind":"","activation":null}),
+                ],
                 Some("team_flow_authority_packet_template_kind_missing:missing"),
                 vec![],
             ),
@@ -2738,7 +2762,11 @@ mod tests {
                     "{name} missing blocker {blocker}: {:?}",
                     relations.blockers
                 ),
-                None => assert!(relations.blockers.is_empty(), "{name}: {:?}", relations.blockers),
+                None => assert!(
+                    relations.blockers.is_empty(),
+                    "{name}: {:?}",
+                    relations.blockers
+                ),
             }
         }
     }

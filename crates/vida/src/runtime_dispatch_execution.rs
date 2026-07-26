@@ -12,18 +12,17 @@ use std::os::windows::process::ExitStatusExt;
 use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
-use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
+use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 use taskflow_host_bridge::{
-    default_host_bridge_required_result_fields,
+    DispatchReceiptBindingInput, HostBridgeAdapterOperations, HostBridgeReceiptIdentityV1,
+    HostBridgeRequest, HostBridgeRequestPath, default_host_bridge_required_result_fields,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
     host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
-    read_host_bridge_request, validate_dispatch_receipt_binding, DispatchReceiptBindingInput,
-    HostBridgeAdapterOperations, HostBridgeReceiptIdentityV1, HostBridgeRequest,
-    HostBridgeRequestPath,
+    read_host_bridge_request, validate_dispatch_receipt_binding,
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -6039,7 +6038,8 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
+        CommandTimeoutWrapper, InternalHostDispatchRouteMode, agent_lane_dispatch_result,
+        configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
         configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
@@ -6061,10 +6061,9 @@ mod tests {
         parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
-        CommandTimeoutWrapper, InternalHostDispatchRouteMode,
     };
-    use crate::yaml_lookup;
     use crate::RuntimeConsumptionLaneSelection;
+    use crate::yaml_lookup;
     use std::path::{Path, PathBuf};
     #[cfg(any(unix, windows))]
     use std::process::Stdio;
@@ -6184,8 +6183,8 @@ dispatch:
     }
 
     #[test]
-    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text(
-    ) {
+    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text()
+     {
         let parsed = parse_external_provider_output(
             r#"{"type":"result","subtype":"success","is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"packet text mentions authentication failed and invalid api key as configuration examples"}"#,
         )
@@ -6412,9 +6411,11 @@ dispatch:
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"Under-development features enabled: memories. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in config.toml."}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(parsed_with_unstable_feature_warning
-            .error_messages
-            .is_empty());
+        assert!(
+            parsed_with_unstable_feature_warning
+                .error_messages
+                .is_empty()
+        );
         assert!(internal_codex_output_confirms_execution(
             &parsed_with_unstable_feature_warning,
             "",
@@ -6464,11 +6465,13 @@ dispatch:
             super::internal_host_provider_failure_blocker_code(stderr, &[]),
             Some("internal_codex_windows_sandbox_unavailable")
         );
-        assert!(super::internal_host_provider_failure_blocker_reason(
-            "internal_codex_windows_sandbox_unavailable",
-            stderr.to_string()
-        )
-        .contains("configured backend/runtime profile whose sandbox is supported"));
+        assert!(
+            super::internal_host_provider_failure_blocker_reason(
+                "internal_codex_windows_sandbox_unavailable",
+                stderr.to_string()
+            )
+            .contains("configured backend/runtime profile whose sandbox is supported")
+        );
     }
 
     #[test]
@@ -6899,7 +6902,9 @@ agent_system:
             effective_internal_host_dispatch_route(None, None, &backend_id, &serde_json::json!({}))
                 .expect_err("missing route evidence must fail closed");
         assert!(error.starts_with("internal_host_dispatch_route_config_invalid:"));
-        assert!(error.contains("missing_fields=execution_boundary,dispatch_transport,receipt_mode"));
+        assert!(
+            error.contains("missing_fields=execution_boundary,dispatch_transport,receipt_mode")
+        );
         assert!(error.contains("sources=selected_system,selected_backend,selected_carrier"));
     }
 
@@ -6989,8 +6994,8 @@ agent_system:
     }
 
     #[test]
-    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport(
-    ) {
+    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport()
+     {
         let system_entry = serde_yaml::from_str(
             r#"
 execution_class: internal
@@ -7155,9 +7160,11 @@ host_environment:
         let error = super::configured_host_carrier_id(&carrier)
             .expect_err("missing configured carrier role must fail closed");
         assert!(error.starts_with("internal_codex_carrier_unavailable:"));
-        assert!(!project_root
-            .join(".vida/data/state/host-tool-bridge")
-            .exists());
+        assert!(
+            !project_root
+                .join(".vida/data/state/host-tool-bridge")
+                .exists()
+        );
         assert!(!project_root.join("host-tool-bridge").exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -7244,9 +7251,11 @@ dispatch:
         .expect_err("missing selected CLI entry must block before materialization");
 
         assert!(error.starts_with("host_bridge_adapter_registry_missing:"));
-        assert!(!project_root
-            .join(".vida/data/state/host-tool-bridge")
-            .exists());
+        assert!(
+            !project_root
+                .join(".vida/data/state/host-tool-bridge")
+                .exists()
+        );
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -7844,13 +7853,17 @@ host_tool_bridge:
             .expect("write first dispatch packet");
         std::fs::write(&second_packet_path, r#"{"owned_paths":["second.rs"]}"#)
             .expect("write second dispatch packet");
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({}),
+            "default_delivery",
+            "coach_implementation_gate",
+        );
         let mut receipt = internal_codex_fallback_receipt(
             first_packet_path
                 .to_str()
                 .expect("first packet path should render"),
         );
-        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
 
         let first_request = materialize_host_tool_bridge_request(
             &project_root,
@@ -7904,14 +7917,18 @@ host_tool_bridge:
             first_request["request_path"],
             second_request["request_path"]
         );
-        assert!(first_request["request_id"]
-            .as_str()
-            .expect("first request id should render")
-            .contains("dispatch-a"));
-        assert!(second_request["request_id"]
-            .as_str()
-            .expect("second request id should render")
-            .contains("dispatch-b"));
+        assert!(
+            first_request["request_id"]
+                .as_str()
+                .expect("first request id should render")
+                .contains("dispatch-a")
+        );
+        assert!(
+            second_request["request_id"]
+                .as_str()
+                .expect("second request id should render")
+                .contains("dispatch-b")
+        );
         assert!(
             result_path.exists(),
             "first result path should remain owned by first packet"
@@ -7943,7 +7960,7 @@ host_tool_bridge:
             &dispatch_packet_path,
             current_host_bridge_dispatch_packet(
                 "run-internal-codex-fallback",
-                "analysis",
+                "analyst",
                 &["crates/vida/src/runtime_dispatch_execution.rs"],
                 "cargo test -p vida host_bridge -- --nocapture",
             )
@@ -7993,32 +8010,36 @@ agent_system:
           normalized_cost_units: 4
           write_scope: orchestrator_native
           runtime_roles: [business_analyst]
-          task_classes: [analysis]
+          task_classes: [specification]
 "#,
         )
         .expect("write overlay");
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "backend_admissibility_matrix": [
-                {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "analysis": true,
-                        "implementation": true
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "specification": true,
+                            "implementation": true
+                        }
                     }
+                ],
+                "development_flow": {
+                    "analyst": {
+                        "executor_backend": "internal_subagents"
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "internal_fast"
                 }
-            ],
-            "development_flow": {
-                "analysis": {
-                    "executor_backend": "internal_subagents"
-                }
-            },
-            "runtime_assignment": {
-                "activation_agent_type": "middle",
-                "selected_tier": "middle",
-                "selected_model_profile_id": "internal_fast"
-            }
-        }));
+            }),
+            "default_delivery",
+            "analyst",
+        );
         let overlay =
             crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
                 .expect("project overlay should load");
@@ -8026,11 +8047,12 @@ agent_system:
             crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
         assert_eq!(selected_cli_system, "codex");
         let selected_cli_entry = selected_cli_entry.expect("codex cli entry should be selected");
-        let receipt = internal_codex_fallback_receipt(
+        let mut receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
+        receipt.dispatch_target = "analyst".to_string();
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
@@ -8231,7 +8253,7 @@ agent_system:
             &dispatch_packet_path,
             current_host_bridge_dispatch_packet(
                 "run-internal-codex-fallback",
-                "coach",
+                "coach_implementation_gate",
                 &["crates/vida/src/runtime_dispatch_execution.rs"],
                 "cargo test -p vida internal_host_tool_bridge_preserves_blocked_coach_product_rework_result",
             )
@@ -8247,6 +8269,7 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      execution_boundary: parent_host_session
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
       host_tool_bridge:
@@ -8265,6 +8288,9 @@ host_environment:
           model: gpt-5.5
           model_reasoning_effort: medium
           sandbox_mode: read-only
+          execution_boundary: parent_host_session
+          dispatch_transport: host_tool_bridge
+          receipt_mode: host_bridge_receipt
           runtime_roles: [coach]
           task_classes: [coach]
 agent_system:
@@ -8272,6 +8298,10 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
+      execution_boundary: parent_host_session
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      receipt_backed_completion_supported: true
       default_model_profile: coach_fast
       model_profiles:
         coach_fast:
@@ -8285,27 +8315,31 @@ agent_system:
 "#,
         )
         .expect("write overlay");
-        let mut role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "backend_admissibility_matrix": [
-                {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "coach": true
+        let mut role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
                     }
+                ],
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "internal_subagents"
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "coach_fast"
                 }
-            ],
-            "development_flow": {
-                "coach": {
-                    "executor_backend": "internal_subagents"
-                }
-            },
-            "runtime_assignment": {
-                "activation_agent_type": "middle",
-                "selected_tier": "middle",
-                "selected_model_profile_id": "coach_fast"
-            }
-        }));
+            }),
+            "default_delivery",
+            "coach_implementation_gate",
+        );
         role_selection.selected_role = "coach".to_string();
         let overlay =
             crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
@@ -8319,7 +8353,7 @@ agent_system:
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
-        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
         receipt.activation_runtime_role = Some("coach".to_string());
         let request = materialize_host_tool_bridge_request(
             &project_root,
@@ -8392,7 +8426,7 @@ agent_system:
                 "blocker_details": [{
                     "code": "coach_rework_required",
                     "message": blocker_text,
-                    "completed_target": "coach"
+                     "completed_target": "coach_implementation_gate"
                 }],
                 "source_dispatch_packet_path": packet_path,
                 "activation_semantics": {
@@ -8666,7 +8700,7 @@ agent_system:
             &dispatch_packet_path,
             current_host_bridge_dispatch_packet(
                 "run-internal-codex-fallback",
-                "analysis",
+                 "analyst",
                 &["crates/vida/src/runtime_dispatch_execution.rs"],
                 "cargo test -p vida internal_host_tool_bridge_pending_result_preserves_execute_dispatch_mode",
             )
@@ -8713,7 +8747,7 @@ agent_system:
           normalized_cost_units: 4
           write_scope: orchestrator_native
           runtime_roles: [business_analyst]
-          task_classes: [analysis]
+          task_classes: [specification]
 "#,
         )
         .expect("overlay should parse");
@@ -8741,38 +8775,42 @@ agent_system:
             serde_yaml::to_string(&config).expect("overlay should serialize"),
         )
         .expect("write overlay");
-        let mut role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "backend_admissibility_matrix": [
-                {
-                    "backend_id": "internal_subagents",
-                    "backend_class": "internal",
-                    "lane_admissibility": {
-                        "analysis": true,
-                        "implementation": true
+        let mut role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "specification": true,
+                            "implementation": true
+                        }
                     }
+                ],
+                "development_flow": {
+                    "analyst": {
+                        "executor_backend": "internal_subagents"
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "internal_fast"
                 }
-            ],
-            "development_flow": {
-                "analysis": {
-                    "executor_backend": "internal_subagents"
-                }
-            },
-            "runtime_assignment": {
-                "activation_agent_type": "middle",
-                "selected_tier": "middle",
-                "selected_model_profile_id": "internal_fast"
-            }
-        }));
-        role_selection.compiled_bundle = serde_json::json!({
-            "large_default_output_regression_guard": "x".repeat(200_000)
-        });
+            }),
+            "default_delivery",
+            "analyst",
+        );
+        role_selection.compiled_bundle["large_default_output_regression_guard"] =
+            serde_json::json!("x".repeat(200_000));
         role_selection.execution_plan["large_default_output_regression_guard"] =
             serde_json::json!("y".repeat(200_000));
-        let receipt = internal_codex_fallback_receipt(
+        let mut receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
+        receipt.dispatch_target = "analyst".to_string();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -8932,16 +8970,19 @@ agent_system:
           normalized_cost_units: 4
           write_scope: orchestrator_native
           runtime_roles: [business_analyst]
-          task_classes: [analysis]
+          task_classes: [specification]
 "#,
         )
         .expect("write overlay");
-        let role_selection =
-            internal_codex_fallback_role_selection(serde_json::json!({ "runtime_assignment": {
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({ "runtime_assignment": {
                 "activation_agent_type": "middle",
                 "selected_tier": "middle",
                 "selected_model_profile_id": "internal_fast"
-            }}));
+            }}),
+            "default_delivery",
+            "analyst",
+        );
         let overlay =
             crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
                 .expect("project overlay should load");
@@ -8949,11 +8990,12 @@ agent_system:
             crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
         assert_eq!(selected_cli_system, "codex");
         let selected_cli_entry = selected_cli_entry.expect("codex cli entry should be selected");
-        let receipt = internal_codex_fallback_receipt(
+        let mut receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
+        receipt.dispatch_target = "analyst".to_string();
         let request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
@@ -9129,18 +9171,23 @@ agent_system:
             r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"]}"#,
         )
         .expect("write dispatch packet");
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "runtime_assignment": {
-                "activation_agent_type": "middle",
-                "selected_tier": "middle",
-                "selected_model_profile_id": "internal_fast"
-            }
-        }));
-        let receipt = internal_codex_fallback_receipt(
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "internal_fast"
+                }
+            }),
+            "default_delivery",
+            "analyst",
+        );
+        let mut receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
+        receipt.dispatch_target = "analyst".to_string();
         let selected_entry = configured_host_bridge_test_entry();
         let request = materialize_host_tool_bridge_request(
             &project_root,
@@ -9213,18 +9260,23 @@ agent_system:
             r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"]}"#,
         )
         .expect("write dispatch packet");
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "runtime_assignment": {
-                "activation_agent_type": "middle",
-                "selected_tier": "middle",
-                "selected_model_profile_id": "internal_fast"
-            }
-        }));
-        let receipt = internal_codex_fallback_receipt(
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "internal_fast"
+                }
+            }),
+            "default_delivery",
+            "analyst",
+        );
+        let mut receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
         );
+        receipt.dispatch_target = "analyst".to_string();
         let stale_request = materialize_host_tool_bridge_request(
             &project_root,
             &project_root.join(".vida/data/state"),
@@ -10469,6 +10521,13 @@ agent_system:
     fn internal_codex_fallback_role_selection(
         execution_plan: serde_json::Value,
     ) -> RuntimeConsumptionLaneSelection {
+        if execution_plan["development_flow"]["dispatch_contract"].is_object() {
+            return internal_codex_fallback_role_selection_for_flow(
+                execution_plan,
+                "adaptive-task-flow",
+                "coder",
+            );
+        }
         RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -10484,6 +10543,89 @@ agent_system:
             matched_terms: vec![],
             compiled_bundle:
                 crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
+            execution_plan,
+            reason: "test".to_string(),
+        }
+    }
+
+    fn internal_codex_fallback_role_selection_for_flow(
+        mut execution_plan: serde_json::Value,
+        flow_id: &str,
+        selected_node_id: &str,
+    ) -> RuntimeConsumptionLaneSelection {
+        let compiled_bundle =
+            crate::runtime_dispatch_state::repository_team_flow_test_bundle_for_flow(Some(flow_id));
+        let authority = crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+            &compiled_bundle,
+            Some(flow_id),
+            None,
+        )
+        .expect("fixture TeamFlow authority should resolve");
+        let plan = execution_plan
+            .as_object_mut()
+            .expect("fixture execution plan should be an object");
+        plan.insert(
+            "team_flow_authority_selected_flow_id".to_string(),
+            serde_json::Value::String(flow_id.to_string()),
+        );
+        plan.insert(
+            "team_flow_authority_selected_node_id".to_string(),
+            serde_json::Value::String(selected_node_id.to_string()),
+        );
+        plan.insert(
+            "selected_flow_contract".to_string(),
+            serde_json::json!({
+                "flow_id": flow_id,
+                "selected_node_id": selected_node_id,
+            }),
+        );
+        let dispatch_contract = plan
+            .entry("development_flow".to_string())
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .expect("fixture development flow should be an object")
+            .entry("dispatch_contract".to_string())
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .expect("fixture dispatch contract should be an object");
+        dispatch_contract.insert(
+            "selected_flow_set".to_string(),
+            serde_json::Value::String(flow_id.to_string()),
+        );
+        dispatch_contract.insert(
+            "selected_node_id".to_string(),
+            serde_json::Value::String(selected_node_id.to_string()),
+        );
+        dispatch_contract.insert(
+            "team_flow_authority_selected_node_id".to_string(),
+            serde_json::Value::String(selected_node_id.to_string()),
+        );
+        dispatch_contract.insert(
+            "team_flow_authority_id".to_string(),
+            serde_json::Value::String(authority.projection().authority_id.clone()),
+        );
+        dispatch_contract.insert(
+            "team_flow_config_hash".to_string(),
+            serde_json::Value::String(authority.projection().config_authority_hash.clone()),
+        );
+        dispatch_contract.insert(
+            "team_flow_registry_hash".to_string(),
+            serde_json::Value::String(authority.projection().registry_authority_hash.clone()),
+        );
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Analyze the bounded handoff".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle,
             execution_plan,
             reason: "test".to_string(),
         }
@@ -10535,11 +10677,12 @@ host_tool_bridge:
         let command = yaml_lookup(&system, &["host_tool_bridge", "adapter_command"])
             .expect("canonical adapter command should remain in config");
         assert!(yaml_lookup(command, &["executable"]).is_some());
-        assert!(argv
-            .as_array()
-            .expect("adapter argv should be an array")
-            .iter()
-            .any(|value| value.as_str() == Some(request_path)));
+        assert!(
+            argv.as_array()
+                .expect("adapter argv should be an array")
+                .iter()
+                .any(|value| value.as_str() == Some(request_path))
+        );
     }
 
     fn internal_codex_fallback_receipt(
@@ -11542,10 +11685,15 @@ host_tool_bridge:
 "#,
         )
         .expect("host bridge config should parse");
-        let receipt = internal_codex_fallback_receipt(
+        let mut receipt = internal_codex_fallback_receipt(
             packet_path.to_str().expect("packet path should render"),
         );
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        receipt.dispatch_target = "analyst".to_string();
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({}),
+            "default_delivery",
+            "analyst",
+        );
 
         let request = materialize_host_tool_bridge_request(
             &project_root,
@@ -11665,7 +11813,11 @@ host_tool_bridge:
         receipt.run_id = "activity-meeting-event-form-fields".to_string();
         receipt.dispatch_target = "developer".to_string();
         receipt.activation_runtime_role = Some("worker".to_string());
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({}),
+            "default_delivery",
+            "developer",
+        );
 
         let request = materialize_host_tool_bridge_request(
             &project_root,
@@ -11682,8 +11834,7 @@ host_tool_bridge:
         assert_eq!(request["proof_artifact_paths"], normalized_proof_paths);
         assert_eq!(request["proof_artifact_scope"], normalized_proof_paths);
         assert_eq!(
-            request["implementation_isolation"]["scope_policy"]
-                ["changed_files_must_be_subset_of_owned_or_proof_paths"],
+            request["implementation_isolation"]["scope_policy"]["changed_files_must_be_subset_of_owned_or_proof_paths"],
             true
         );
 
@@ -11707,22 +11858,8 @@ host_tool_bridge:
             .join("dispatch-packets");
         std::fs::create_dir_all(&packet_dir).expect("create packet dir");
         let packet_path = packet_dir.join("generated-developer.json");
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "Implement list view chatter and keep proof tests in scope".to_string(),
-            selected_role: "worker".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: Some("dev-pack".to_string()),
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: Vec::new(),
-            compiled_bundle:
-                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
-            execution_plan: serde_json::json!({
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
                 "orchestration_contract": {},
                 "runtime_assignment": {
                     "activation_agent_type": "middle",
@@ -11755,13 +11892,20 @@ host_tool_bridge:
                             }
                         }
                     }
+                },
+                "team_flow_authority_selected_flow_id": "default_delivery",
+                "team_flow_authority_selected_node_id": "developer",
+                "selected_flow_contract": {
+                    "flow_id": "default_delivery",
+                    "selected_node_id": "developer"
                 }
             }),
-            reason: "test".to_string(),
-        };
+            "default_delivery",
+            "developer",
+        );
         let mut upstream_receipt = internal_codex_fallback_receipt("upstream.json");
         upstream_receipt.run_id = "activity-meeting-event-form-fields".to_string();
-        upstream_receipt.dispatch_target = "autotester".to_string();
+        upstream_receipt.dispatch_target = "test_author".to_string();
         upstream_receipt.downstream_dispatch_target = Some("developer".to_string());
         crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet_at_with_owned_paths(
             &packet_path,
@@ -11843,7 +11987,7 @@ host_tool_bridge:
             &packet_path,
             serde_json::json!({
                 "packet_kind": "runtime_downstream_dispatch_packet",
-                "dispatch_target": "autotester",
+                "dispatch_target": "test_author",
                 "handoff_runtime_role": "worker",
                 "handoff_task_class": "test_authoring",
                 "runtime_role": "business_analyst",
@@ -11885,9 +12029,13 @@ host_tool_bridge:
             packet_path.to_str().expect("packet path should render"),
         );
         receipt.run_id = "activity-meeting-event-form-fields".to_string();
-        receipt.dispatch_target = "autotester".to_string();
+        receipt.dispatch_target = "test_author".to_string();
         receipt.activation_runtime_role = Some("business_analyst".to_string());
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({}),
+            "default_delivery",
+            "test_author",
+        );
 
         let request = materialize_host_tool_bridge_request(
             &project_root,
@@ -11903,7 +12051,7 @@ host_tool_bridge:
 
         assert_eq!(request["runtime_role"], "worker");
         assert_eq!(request["task_class"], "test_authoring");
-        assert_eq!(request["dispatch_target"], "autotester");
+        assert_eq!(request["dispatch_target"], "test_author");
         assert_eq!(request["implementation_isolation"], serde_json::Value::Null);
         assert_eq!(
             request["expected_implementation_artifact_kinds"],
@@ -11939,7 +12087,7 @@ host_tool_bridge:
             &packet_path,
             serde_json::json!({
                 "packet_kind": "runtime_downstream_dispatch_packet",
-                "dispatch_target": "autotester",
+                "dispatch_target": "test_author",
                 "handoff_runtime_role": "business_analyst",
                 "handoff_task_class": "specification",
                 "runtime_role": "business_analyst",
@@ -11981,9 +12129,13 @@ host_tool_bridge:
             packet_path.to_str().expect("packet path should render"),
         );
         receipt.run_id = "activity-meeting-event-form-fields".to_string();
-        receipt.dispatch_target = "autotester".to_string();
+        receipt.dispatch_target = "test_author".to_string();
         receipt.activation_runtime_role = Some("business_analyst".to_string());
-        let stale_role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let stale_role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({}),
+            "default_delivery",
+            "test_author",
+        );
 
         let stale_request = materialize_host_tool_bridge_request(
             &project_root,
@@ -11996,8 +12148,8 @@ host_tool_bridge:
             &stale_role_selection,
         )
         .expect("stale request should materialize");
-        assert_eq!(stale_request["runtime_role"], "business_analyst");
-        assert_eq!(stale_request["task_class"], "specification");
+        assert_eq!(stale_request["runtime_role"], "worker");
+        assert_eq!(stale_request["task_class"], "test_authoring");
         let request_path = stale_request["request_path"]
             .as_str()
             .expect("request path should render");
@@ -12018,21 +12170,25 @@ host_tool_bridge:
         )
         .expect("rewrite stale request with path metadata drift");
 
-        let refreshed_role_selection = internal_codex_fallback_role_selection(serde_json::json!({
-            "development_flow": {
-                "dispatch_contract": {
-                    "lane_catalog": {
-                        "autotester": {
-                            "dispatch_target": "autotester",
-                            "runtime_role": "worker",
-                            "task_class": "implementation_medium",
-                            "closure_class": "implementation",
-                            "packet_template_kind": "delivery_task_packet"
+        let refreshed_role_selection = internal_codex_fallback_role_selection_for_flow(
+            serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "test_author": {
+                                "dispatch_target": "test_author",
+                                "runtime_role": "worker",
+                                "task_class": "implementation_medium",
+                                "closure_class": "implementation",
+                                "packet_template_kind": "delivery_task_packet"
+                            }
                         }
                     }
                 }
-            }
-        }));
+            }),
+            "default_delivery",
+            "test_author",
+        );
         let refreshed_request = materialize_host_tool_bridge_request(
             &project_root,
             &state_root,
@@ -12046,21 +12202,25 @@ host_tool_bridge:
         .expect("pending stale request should refresh from lane contract");
 
         assert_eq!(refreshed_request["runtime_role"], "worker");
-        assert_eq!(refreshed_request["task_class"], "implementation_medium");
+        assert_eq!(refreshed_request["task_class"], "test_authoring");
         assert_eq!(
             refreshed_request["implementation_isolation"]["canonical_worktree_writes_allowed"],
             false
         );
-        assert!(refreshed_request["owned_paths"]
-            .as_array()
-            .expect("request owned paths")
-            .iter()
-            .any(|path| path == "test"));
-        assert!(refreshed_request["implementation_isolation"]["owned_paths"]
-            .as_array()
-            .expect("isolation owned paths")
-            .iter()
-            .any(|path| path == "test"));
+        assert!(
+            refreshed_request["owned_paths"]
+                .as_array()
+                .expect("request owned paths")
+                .iter()
+                .any(|path| path == "test")
+        );
+        assert!(
+            refreshed_request["implementation_isolation"]["owned_paths"]
+                .as_array()
+                .expect("isolation owned paths")
+                .iter()
+                .any(|path| path == "test")
+        );
 
         let _ = std::fs::remove_dir_all(project_root);
     }
@@ -12445,8 +12605,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -12517,8 +12677,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -12991,10 +13151,12 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -13214,14 +13376,18 @@ agent_system:
             result["external_backend_readiness"]["status"],
             "external_backend_dispatch_blocked"
         );
-        assert!(result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("disabled"));
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("disabled")
+        );
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

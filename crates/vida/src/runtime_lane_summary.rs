@@ -4,8 +4,8 @@ use crate::taskflow_routing::{
     route_primary_backend_hint_from_route, runtime_assignment_backend_for_route,
 };
 use crate::{
-    json_bool, json_lookup, json_string, json_string_list,
-    read_or_sync_launcher_activation_snapshot, StateStore,
+    StateStore, json_bool, json_lookup, json_string, json_string_list,
+    read_or_sync_launcher_activation_snapshot,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -691,19 +691,21 @@ fn selected_flow_route_node(
     authority: &crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
     route_id: &str,
 ) -> Option<crate::team_flow_authority_adapter::TeamFlowNodeResolution> {
-    let node_id = authority.ordered_nodes().find(|node| {
-        [
-            node.node.node_id.as_str(),
-            node.lane_id.as_str(),
-            node.dispatch_target.as_str(),
-            node.dispatch_alias.as_str(),
-            node.node.task_class.as_str(),
-            node.node.runtime_role.as_str(),
-        ]
-        .into_iter()
-        .any(|candidate| candidate == route_id)
-    })
-    .map(|node| node.node.node_id.clone())?;
+    let node_id = authority
+        .ordered_nodes()
+        .find(|node| {
+            [
+                node.node.node_id.as_str(),
+                node.lane_id.as_str(),
+                node.dispatch_target.as_str(),
+                node.dispatch_alias.as_str(),
+                node.node.task_class.as_str(),
+                node.node.runtime_role.as_str(),
+            ]
+            .into_iter()
+            .any(|candidate| candidate == route_id)
+        })
+        .map(|node| node.node.node_id.clone())?;
     authority.resolve_target(None, &node_id).ok()
 }
 
@@ -790,15 +792,14 @@ mod tests {
     use super::{
         build_executor_backend_admissibility_matrix, build_runtime_execution_plan_from_snapshot,
         build_runtime_lane_selection_from_bundle, summarize_agent_route_from_snapshot,
-        summarize_agent_route_from_snapshot_with_authority,
-        summarize_execution_truth_for_route,
+        summarize_agent_route_from_snapshot_with_authority, summarize_execution_truth_for_route,
     };
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::project_activator_surface::read_yaml_file_checked;
     use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::{build_compiled_agent_extension_bundle_for_root, run, Cli};
+    use crate::{Cli, build_compiled_agent_extension_bundle_for_root, run};
     use clap::Parser;
     use std::fs;
     use std::path::Path;
@@ -913,12 +914,14 @@ mod tests {
             &authority,
         );
         assert_eq!(summary["status"], "blocked");
-        assert!(summary["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| {
-                code.as_str()
-                    .is_some_and(|code| code.starts_with("agent_extensions_route_missing:"))
-            })));
+        assert!(
+            summary["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.iter().any(|code| {
+                    code.as_str()
+                        .is_some_and(|code| code.starts_with("agent_extensions_route_missing:"))
+                }))
+        );
     }
 
     #[test]
@@ -1028,9 +1031,11 @@ mod tests {
         let coach_fanout = coach["fanout_executor_backends"]
             .as_array()
             .expect("coach fanout should be an array");
-        assert!(coach_fanout
-            .iter()
-            .any(|value| { value.as_str() == Some(configured_executor("coach")) }));
+        assert!(
+            coach_fanout
+                .iter()
+                .any(|value| { value.as_str() == Some(configured_executor("coach")) })
+        );
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -1050,9 +1055,11 @@ mod tests {
         let review_ensemble_fanout = review_ensemble["fanout_executor_backends"]
             .as_array()
             .expect("review ensemble fanout should be an array");
-        assert!(review_ensemble_fanout
-            .iter()
-            .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) }));
+        assert!(
+            review_ensemble_fanout
+                .iter()
+                .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) })
+        );
     }
 
     #[test]
@@ -1258,10 +1265,12 @@ mod tests {
         assert_eq!(selection.selected_role, "worker");
         assert!(selection.conversational_mode.is_none());
         assert_eq!(selection.reason, "auto_explicit_implementation_request");
-        assert!(selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "write-producing" || term == "move the test"));
+        assert!(
+            selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "write-producing" || term == "move the test")
+        );
     }
 
     #[test]
@@ -1306,10 +1315,14 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "implement" || term == "bounded patch" || term == "code change"));
+        assert!(
+            selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "implement"
+                    || term == "bounded patch"
+                    || term == "code change")
+        );
     }
 
     #[test]
@@ -1354,10 +1367,12 @@ mod tests {
             Some("scope_discussion")
         );
         assert_eq!(selection.reason, "auto_keyword_match");
-        assert!(selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "scope" || term == "spec" || term == "acceptance"));
+        assert!(
+            selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "scope" || term == "spec" || term == "acceptance")
+        );
     }
 
     #[test]
@@ -1402,14 +1417,18 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "repair" || term == "fix" || term == "regression test"));
-        assert!(selection
-            .matched_terms
-            .iter()
-            .any(|term| term == ".rs" || term == "crates/" || term == "rust file"));
+        assert!(
+            selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "repair" || term == "fix" || term == "regression test")
+        );
+        assert!(
+            selection
+                .matched_terms
+                .iter()
+                .any(|term| term == ".rs" || term == "crates/" || term == "rust file")
+        );
     }
 
     #[test]

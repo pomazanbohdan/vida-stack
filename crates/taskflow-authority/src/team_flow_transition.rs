@@ -254,13 +254,9 @@ impl TeamFlowSnapshot {
         if steps.is_empty() {
             return Err(TeamFlowSnapshotError::EmptyFlow);
         }
-        let entry_node_id = strict_string_aliases(
-            flow,
-            &["entry_node_id"],
-            "entry_node_id",
-            "flow",
-        )?
-        .ok_or(TeamFlowSnapshotError::MissingField("entry_node_id"))?;
+        let entry_node_id =
+            strict_string_aliases(flow, &["entry_node_id"], "entry_node_id", "flow")?
+                .ok_or(TeamFlowSnapshotError::MissingField("entry_node_id"))?;
 
         let roles_value = strict_source(
             config,
