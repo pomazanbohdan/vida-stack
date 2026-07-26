@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "process-runner-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -31,6 +31,7 @@ $WindowsEnvScript = Join-Path $PSScriptRoot "vida-windows-env.ps1"
 if (Test-Path -LiteralPath $WindowsEnvScript) {
     . $WindowsEnvScript
 }
+. (Join-Path $PSScriptRoot "vida-process-runner.ps1")
 
 function Test-IsWindowsHost {
     return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -586,19 +587,12 @@ function Invoke-Timed {
         [Console]::Error.WriteLine(("latest: {0}" -f $latestArtifactPath))
     }
     try {
-        $process = Start-Process `
+        $exitCode = Invoke-VidaProcess `
             -FilePath $exe `
-            -ArgumentList (Join-WindowsProcessArguments $args) `
+            -ArgumentList $args `
             -WorkingDirectory $RootDir `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -NoNewWindow `
-            -Wait `
-            -PassThru
-        $exitCode = $process.ExitCode
-        if ($null -eq $exitCode) {
-            $exitCode = 0
-        }
+            -StdoutPath $stdoutPath `
+            -StderrPath $stderrPath
         $compactProofOutput = Test-CompactProofOutputCommand -Command $Command
         if (-not $Json -and $exitCode -eq 0 -and -not $compactProofOutput) {
             if ((Test-Path -LiteralPath $stdoutPath) -and (Get-Item -LiteralPath $stdoutPath).Length -gt 0) {
@@ -2042,6 +2036,16 @@ exit 3
             throw "proof scheduler smoke failed: Cargo commands overlapped."
         }
         Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath, $statusFailProbePath -Force -ErrorAction SilentlyContinue
+    } elseif ($Mode -eq "process-runner-smoke") {
+        Invoke-Timed "process-runner-smoke" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/vida-process-runner-smoke.ps1"
+        )
     } elseif ($Mode -eq "nextest-summary-smoke") {
         Invoke-NextestSummarySmoke
     } elseif ($Mode -eq "compact-cargo-test-smoke") {
@@ -2076,6 +2080,22 @@ exit 3
             "-NoProfile",
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-agent-evaluation-log.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
+        Invoke-Timed "powershell-process-runner-parse" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-process-runner.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
+        Invoke-Timed "process-runner-smoke" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/vida-process-runner-smoke.ps1"
         )
         Invoke-Timed "agent-evaluation-log-fixture-lint" @(
             $PwshPath,

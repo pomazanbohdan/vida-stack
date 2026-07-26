@@ -7,6 +7,7 @@ if (-not (Test-Path -LiteralPath $windowsEnvScript -PathType Leaf)) {
 }
 
 . $windowsEnvScript
+. (Join-Path $PSScriptRoot "vida-process-runner.ps1")
 
 # Leave VIDA_MSVC_TEMP_DIR unset by default so vida-windows-env can pick an
 # external writable temp root. Repo-local temp roots create nested VIDA projects
@@ -61,5 +62,6 @@ function Convert-VidaCargoTestArgs {
 }
 
 $cargoArgs = @(Convert-VidaCargoTestArgs -Arguments $cargoArgs)
-& $cargo.Source @cargoArgs
-exit $LASTEXITCODE
+
+$exitCode = Invoke-VidaProcess -FilePath $cargo.Source -ArgumentList $cargoArgs -WorkingDirectory $rootDir
+exit $exitCode
