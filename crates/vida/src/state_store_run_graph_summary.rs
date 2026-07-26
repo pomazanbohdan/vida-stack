@@ -4508,7 +4508,27 @@ impl StateStore {
             missing_governance,
             missing_resumability,
         ) = self.run_graph_raw_status_from_task_rows(run_id).await?;
-        let authorized_rework_route = if let Some(receipt) = receipt.as_ref() {
+        let task = if task_rows.is_empty() {
+            self.show_task(&status.task_id).await.ok()
+        } else {
+            task_rows
+                .iter()
+                .find(|task| task.id == status.task_id)
+                .cloned()
+        };
+        let terminal_closed_task_with_receipt_truth = status.status == "completed"
+            && task
+                .as_ref()
+                .is_some_and(|task| Self::task_status_is_closed_like(&task.status))
+            && self
+                .task_close_reconcile_has_persisted_closure_receipt_truth(
+                    &status.run_id,
+                    &status.task_id,
+                )
+                .await?;
+        let authorized_rework_route = if terminal_closed_task_with_receipt_truth {
+            None
+        } else if let Some(receipt) = receipt.as_ref() {
             if receipt
                 .dispatch_packet_path
                 .as_deref()
@@ -4540,14 +4560,6 @@ impl StateStore {
             receipt.as_ref(),
             authorized_rework_route.as_ref(),
         )?;
-        let task = if task_rows.is_empty() {
-            self.show_task(&status.task_id).await.ok()
-        } else {
-            task_rows
-                .iter()
-                .find(|task| task.id == status.task_id)
-                .cloned()
-        };
         let status =
             reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
         if missing_execution || missing_routed || missing_governance || missing_resumability {

@@ -1253,7 +1253,7 @@ impl StateStore {
             .await
     }
 
-    async fn task_close_reconcile_has_persisted_closure_receipt_truth(
+    pub(crate) async fn task_close_reconcile_has_persisted_closure_receipt_truth(
         &self,
         run_id: &str,
         task_id: &str,
@@ -7530,10 +7530,11 @@ mod tests {
         status.task_id = task_id.to_string();
         status.active_node = "closure".to_string();
         status.next_node = None;
-        status.status = "executing".to_string();
+        status.status = "completed".to_string();
         status.lifecycle_stage = "closure_complete".to_string();
         status.policy_gate = "closure_receipt_ready".to_string();
         status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
         status.checkpoint_kind = "none".to_string();
         status.resume_target = "none".to_string();
         status.recovery_ready = false;
@@ -7601,6 +7602,13 @@ mod tests {
             .content(receipt.clone())
             .await
             .expect("seed receipt without current-session owner evidence");
+        let direct_closed = store
+            .run_graph_status(run_id)
+            .await
+            .expect("closed malformed packet should remain readable");
+        assert_eq!(direct_closed.status, "completed");
+        assert_eq!(direct_closed.active_node, "closure");
+        assert_eq!(direct_closed.lifecycle_stage, "closure_complete");
         let mut active_receipt = receipt;
         active_receipt.run_id = "active-legacy-run".to_string();
         active_receipt.dispatch_packet_path = Some(active_packet_path.display().to_string());
