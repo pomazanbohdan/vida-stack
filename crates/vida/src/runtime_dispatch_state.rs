@@ -3269,7 +3269,7 @@ fn receipt_result_path_has_target_execution_evidence(path: Option<&str>, target:
     let Some(result) = path
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .and_then(|value| crate::read_json_file_if_present(Path::new(value)))
+        .and_then(crate::runtime_dispatch_result_evidence::read_bounded_dispatch_evidence_json)
     else {
         return false;
     };
