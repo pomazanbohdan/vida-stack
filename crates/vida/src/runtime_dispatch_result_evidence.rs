@@ -842,6 +842,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn bounded_dispatch_evidence_reader_rejects_empty_missing_and_malformed_files() {
+        let root = unique_test_dir("invalid-dispatch-evidence");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let malformed_path = root.join("malformed.json");
+        std::fs::write(&malformed_path, "not-json").expect("malformed result should write");
+
+        assert!(read_bounded_dispatch_evidence_json("").is_none());
+        assert!(read_bounded_dispatch_evidence_json(
+            &root.join("missing.json").display().to_string()
+        )
+        .is_none());
+        assert!(read_bounded_dispatch_evidence_json(&malformed_path.display().to_string()).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn bounded_dispatch_evidence_reader_rejects_special_files() {
