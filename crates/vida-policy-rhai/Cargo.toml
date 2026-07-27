@@ -1,0 +1,11 @@
+[package]
+name = "vida-policy-rhai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rhai = { version = "=1.25.1", default-features = false, features = ["sync"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
