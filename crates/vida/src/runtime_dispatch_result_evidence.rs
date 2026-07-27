@@ -364,7 +364,7 @@ fn read_dispatch_packet_json(path: &str) -> Option<serde_json::Value> {
     read_bounded_dispatch_evidence_json(path)
 }
 
-fn read_bounded_dispatch_evidence_json(path: &str) -> Option<serde_json::Value> {
+pub(crate) fn read_bounded_dispatch_evidence_json(path: &str) -> Option<serde_json::Value> {
     use std::io::Read;
 
     let path = path.trim();
@@ -827,6 +827,43 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_dispatch_evidence_reader_rejects_oversized_files() {
+        let root = unique_test_dir("oversized-dispatch-evidence");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let path = root.join("result.json");
+        let file = std::fs::File::create(&path).expect("result file should be created");
+        file.set_len(MAX_DISPATCH_EVIDENCE_JSON_BYTES + 1)
+            .expect("result file should be oversized");
+
+        assert!(read_bounded_dispatch_evidence_json(&path.display().to_string()).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bounded_dispatch_evidence_reader_rejects_empty_missing_and_malformed_files() {
+        let root = unique_test_dir("invalid-dispatch-evidence");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let malformed_path = root.join("malformed.json");
+        std::fs::write(&malformed_path, "not-json").expect("malformed result should write");
+
+        assert!(read_bounded_dispatch_evidence_json("").is_none());
+        assert!(read_bounded_dispatch_evidence_json(
+            &root.join("missing.json").display().to_string()
+        )
+        .is_none());
+        assert!(read_bounded_dispatch_evidence_json(&malformed_path.display().to_string()).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_dispatch_evidence_reader_rejects_special_files() {
+        assert!(read_bounded_dispatch_evidence_json("/dev/zero").is_none());
+    }
 
     fn identity_test_receipt(
         selected_backend: Option<&str>,
