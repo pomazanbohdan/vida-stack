@@ -150,15 +150,20 @@ dependency, proof, release-install, or monorepo optimization work:
    - override script resolution with `VIDA_PWSH=<path-to-pwsh.exe>` only when a
      newer verified PowerShell Core executable is intentionally selected.
 3. `rustup`
-   - canonical executable: `C:\Users\pomaz\.cargo\bin\rustup.exe`,
-   - current default toolchain: `1.95.0-x86_64-pc-windows-msvc`,
-   - set this default explicitly when `stable-x86_64-pc-windows-msvc` resolves
-     to an invalid or stale local binary:
+    - canonical executable: `C:\Users\pomaz\.cargo\bin\rustup.exe`,
+    - current default toolchain: `1.97.1-x86_64-pc-windows-msvc`,
+    - set this default explicitly when `stable-x86_64-pc-windows-msvc` resolves
+      to an invalid or stale local binary:
 
 ```powershell
-& 'C:\Users\pomaz\.cargo\bin\rustup.exe' default 1.95.0-x86_64-pc-windows-msvc
+& 'C:\Users\pomaz\.cargo\bin\rustup.exe' default 1.97.1-x86_64-pc-windows-msvc
 & 'C:\Users\pomaz\.cargo\bin\rustup.exe' show active-toolchain
 ```
+
+The repository pin is `rust-toolchain.toml` with exact channel `1.97.1`. Every
+Cargo package inherits `rust-version = "1.97.1"`, and the project Cargo/release
+gates run `scripts/verify-rust-toolchain.ps1` or
+`scripts/verify-rust-toolchain.sh`, which fail closed on an older compiler.
 
 4. `cargo`
    - canonical executable: `C:\Users\pomaz\.cargo\bin\cargo.exe`,
@@ -405,10 +410,10 @@ Before reporting a runtime environment/docs/skill update as complete:
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
 artifact_version: 1
-artifact_revision: 2026-07-15
+artifact_revision: 2026-07-27
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-07-15T15:45:21.9333516Z
+updated_at: 2026-07-27T08:30:00.0000000Z
 changelog_ref: vida-runtime-development-environment.changelog.jsonl

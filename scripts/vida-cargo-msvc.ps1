@@ -21,6 +21,8 @@ if ([string]::IsNullOrWhiteSpace($env:CARGO_TERM_PROGRESS_WHEN)) {
 
 Import-VidaMsvcEnvironment
 
+& (Join-Path $PSScriptRoot "verify-rust-toolchain.ps1") | Out-Null
+
 $cargo = Get-Command "cargo" -ErrorAction Stop
 $cargoArgs = @($args)
 if ($cargoArgs.Count -eq 0) {

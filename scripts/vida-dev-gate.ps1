@@ -1890,6 +1890,8 @@ try {
         Import-VisualStudioBuildEnvironment
     }
 
+    & (Join-Path $PSScriptRoot "verify-rust-toolchain.ps1") | Out-Null
+
     if ($Mode -eq "target-dir-policy") {
         $Records.Add([pscustomobject]@{
             operation_id = "target-dir-policy"
@@ -2067,6 +2069,13 @@ exit 3
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/build-release.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
+        Invoke-Timed "powershell-rust-toolchain-parse" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/verify-rust-toolchain.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
         Invoke-Timed "powershell-release-package-check-parse" @(
             $PwshPath,
             "-NoLogo",
@@ -2129,6 +2138,11 @@ exit 3
             }
         } else {
             Add-SkippedRecord "bash-script-parse" "bash not found; skipped Bash script syntax checks"
+        }
+        if (Test-CommandExists $BashPath) {
+            Invoke-Timed "bash-rust-toolchain-parse" @($BashPath, "-n", "scripts/verify-rust-toolchain.sh")
+        } else {
+            Add-SkippedRecord "bash-rust-toolchain-parse" "bash not found; skipped Rust toolchain verifier syntax check"
         }
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")

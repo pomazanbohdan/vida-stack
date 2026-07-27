@@ -17,6 +17,8 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+bash "$ROOT_DIR/scripts/verify-rust-toolchain.sh" >/dev/null
+
 skip_build_enabled() {
   case "$SKIP_BUILD" in
     1|true|TRUE|yes|YES) return 0 ;;

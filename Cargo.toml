@@ -40,6 +40,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.97.1"
 version = "0.9.7"
 license = "PolyForm-Noncommercial-1.0.0"
 

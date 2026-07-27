@@ -439,6 +439,8 @@ if ($Install) {
     Fail "-Install is not supported by scripts/build-release.ps1. This script only builds release archives. Install the built Windows archive with: pwsh -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 upgrade -Archive .\dist\<archive>.zip -Force"
 }
 
+& (Join-Path $PSScriptRoot "verify-rust-toolchain.ps1") | Out-Null
+
 try {
     . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
     $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"

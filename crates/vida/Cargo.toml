@@ -2,6 +2,7 @@
 name = "vida"
 version = "0.9.7"
 edition = "2021"
+rust-version.workspace = true
 build = "build.rs"
 
 [features]
