@@ -8422,6 +8422,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-09T00:00:00Z".to_string(),
         }
     }

@@ -10097,6 +10097,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
     }
@@ -10735,6 +10736,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-13T00:00:00Z".to_string(),
         };
 
@@ -10995,6 +10997,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T00:00:00Z".to_string(),
         };
         let packet = serde_json::json!({
@@ -11047,6 +11050,7 @@ mod tests {
             activation_agent_type: Some("worker".to_string()),
             activation_runtime_role: Some("implementer".to_string()),
             selected_backend: Some("worker".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T00:00:00Z".to_string(),
         };
         let packet = serde_json::json!({
@@ -11116,6 +11120,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T00:00:00Z".to_string(),
         };
         let packet = serde_json::json!({
@@ -11347,6 +11352,7 @@ agent_system:
             activation_agent_type: Some("pi_cli".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("pi_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-20T14:50:04Z".to_string(),
         };
 
@@ -11411,6 +11417,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -11447,6 +11454,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -11489,6 +11497,7 @@ agent_system:
             activation_agent_type: Some("internal_subagents".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-01T00:00:00Z".to_string(),
         };
 
@@ -11526,6 +11535,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-12T00:00:00Z".to_string(),
         };
 
@@ -11564,6 +11574,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-25T00:00:00Z".to_string(),
         };
 
@@ -11600,6 +11611,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-16T00:00:00Z".to_string(),
         };
 
@@ -11763,6 +11775,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T00:00:00Z".to_string(),
         };
 
@@ -11825,6 +11838,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T00:00:00Z".to_string(),
         };
         store
@@ -11887,6 +11901,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-16T00:00:00Z".to_string(),
         };
         let next_actions = taskflow_consume_resume_receipt::next_actions(
@@ -11940,6 +11955,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-16T00:00:00Z".to_string(),
         };
         let next_actions = taskflow_consume_resume_receipt::next_actions(
@@ -12009,6 +12025,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12074,6 +12091,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -12139,6 +12157,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("review_primary".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -12204,6 +12223,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -12267,6 +12287,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12353,6 +12374,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12442,6 +12464,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12529,6 +12552,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12604,6 +12628,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-21T00:00:00Z".to_string(),
             };
             assert!(retry_backend_for_dispatch_receipt(&role_selection, &receipt).is_none());
@@ -12697,6 +12722,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12797,6 +12823,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -12897,6 +12924,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("vibe_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -13007,6 +13035,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("review_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -13163,6 +13192,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-12T00:00:00Z".to_string(),
         };
 
@@ -13315,6 +13345,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-29T00:00:00Z".to_string(),
         };
         store
@@ -13484,6 +13515,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
         store
@@ -13602,6 +13634,7 @@ agent_system:
             activation_agent_type: Some("pi_cli".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("pi_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-20T13:14:08Z".to_string(),
         };
 
@@ -13703,6 +13736,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("pi_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-20T15:09:18Z".to_string(),
         };
 
@@ -13784,6 +13818,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -13881,6 +13916,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -13989,6 +14025,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -14057,6 +14094,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -14164,6 +14202,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-19T00:00:00Z".to_string(),
             })
             .await
@@ -14256,6 +14295,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -14327,6 +14367,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -14426,6 +14467,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-21T12:14:39Z".to_string(),
         };
 
@@ -14528,6 +14570,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -14632,6 +14675,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-21T12:14:39Z".to_string(),
         };
 
@@ -14755,6 +14799,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -14970,6 +15015,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
                 })
                 .await
@@ -15358,6 +15404,7 @@ agent_system:
                                 activation_agent_type: None,
                                 activation_runtime_role: Some("specification".to_string()),
                                 selected_backend: Some("internal_subagents".to_string()),
+                                policy_bundle_ref: None,
                                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
                             },
                         )
@@ -15681,6 +15728,7 @@ agent_system:
                     activation_agent_type: Some("middle".to_string()),
                     activation_runtime_role: Some("business_analyst".to_string()),
                     selected_backend: Some("middle".to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-04-17T00:00:00Z".to_string(),
                 })
                 .await
@@ -15827,6 +15875,7 @@ agent_system:
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("verifier".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-20T00:00:00Z".to_string(),
             };
 
@@ -16331,6 +16380,7 @@ agent_system:
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-03-18T00:00:00Z".to_string(),
         };
         store
@@ -16411,6 +16461,7 @@ agent_system:
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-03-18T00:00:00Z".to_string(),
         };
         store
@@ -16507,6 +16558,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("review_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-18T00:00:00Z".to_string(),
         };
         store
@@ -16601,6 +16653,7 @@ agent_system:
             activation_agent_type: Some("pi_cli".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("pi_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-20T13:40:47Z".to_string(),
         };
         store
@@ -16677,6 +16730,7 @@ agent_system:
             activation_agent_type: Some("pi_cli".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("pi_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-20T13:40:47Z".to_string(),
         };
         store
@@ -16734,6 +16788,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-06T10:51:18Z".to_string(),
         };
 
@@ -16887,6 +16942,7 @@ agent_system:
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
         store
@@ -17289,6 +17345,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
         store
@@ -17474,6 +17531,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-15T00:00:00Z".to_string(),
         };
         store
@@ -17703,6 +17761,7 @@ agent_system:
                         activation_agent_type: Some("senior".to_string()),
                         activation_runtime_role: Some("verifier".to_string()),
                         selected_backend: Some("internal_subagents".to_string()),
+                        policy_bundle_ref: None,
                         recorded_at: "2026-06-15T00:00:00Z".to_string(),
                     };
                     store
@@ -17866,6 +17925,7 @@ agent_system:
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
         store
@@ -18091,6 +18151,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-14T00:00:00Z".to_string(),
         };
         store
@@ -18273,6 +18334,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("senior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-14T00:00:00Z".to_string(),
         };
         store
@@ -18550,6 +18612,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
             })
             .await
@@ -18618,6 +18681,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
         let non_retry_receipt = crate::state_store::RunGraphDispatchReceipt {
@@ -18714,6 +18778,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
 
@@ -18970,6 +19035,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
         store
@@ -19063,6 +19129,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
 
@@ -19136,6 +19203,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -19255,6 +19323,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
@@ -19410,6 +19479,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
@@ -19568,6 +19638,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
 
@@ -19682,6 +19753,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-21T00:00:00Z".to_string(),
         };
 
@@ -19796,6 +19868,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -19890,6 +19963,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
 
@@ -19955,6 +20029,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
 
@@ -20046,6 +20121,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
@@ -20137,6 +20213,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-22T00:00:00Z".to_string(),
         };
 
@@ -20778,6 +20855,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
         store
@@ -21024,6 +21102,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
         store
@@ -21232,6 +21311,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
         store
@@ -21427,6 +21507,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
         store
@@ -22079,6 +22160,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
         store
@@ -22198,6 +22280,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-21T00:00:00Z".to_string(),
         };
         store
@@ -22671,6 +22754,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-13T00:01:00Z".to_string(),
             })
             .await
@@ -22769,6 +22853,7 @@ agent_system:
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-13T00:02:00Z".to_string(),
             })
             .await
@@ -23037,6 +23122,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
         store
@@ -23276,6 +23362,7 @@ agent_system:
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("taskflow_state_store".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-13T00:00:00Z".to_string(),
             })
             .await
@@ -23366,6 +23453,7 @@ agent_system:
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-15T00:00:00Z".to_string(),
             })
             .await
@@ -23414,6 +23502,7 @@ agent_system:
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("senior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-15T00:00:01Z".to_string(),
             })
             .await
@@ -24414,6 +24503,7 @@ agent_system:
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("taskflow_state_store".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-27T00:00:00Z".to_string(),
             })
             .await
@@ -24613,6 +24703,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-15T00:00:00Z".to_string(),
         };
 
@@ -24702,6 +24793,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -24857,6 +24949,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
@@ -24996,6 +25089,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
@@ -25105,6 +25199,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-15T00:00:00Z".to_string(),
         };
 
@@ -25179,6 +25274,7 @@ agent_system:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("codex_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-15T00:00:00Z".to_string(),
         };
 
@@ -25278,6 +25374,7 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -25344,6 +25441,7 @@ agent_system:
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("senior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
 
@@ -25386,6 +25484,7 @@ agent_system:
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("prover".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-07-22T00:00:00Z".to_string(),
             }
         }
@@ -25582,6 +25681,7 @@ agent_system:
                 activation_agent_type: Some(authority_node.carrier_tier.clone()),
                 activation_runtime_role: Some(authority_node.node.runtime_role.clone()),
                 selected_backend: Some(selected_backend_id),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-15T00:00:00Z".to_string(),
             })
             .await
@@ -25802,6 +25902,7 @@ agent_system:
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("verifier".to_string()),
                 selected_backend: Some("senior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
             })
             .await
