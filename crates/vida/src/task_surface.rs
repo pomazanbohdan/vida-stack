@@ -3800,8 +3800,13 @@ fn task_tree_json_value(
 
     let mut tree_value = serde_json::json!({
         "id": tree.task.id,
-        "status": tree.task.status,
+        "status": "pass",
         "title": tree.task.title,
+        "task": {
+            "id": tree.task.id,
+            "status": tree.task.status,
+            "title": tree.task.title,
+        },
         "root": {
             "id": tree.task.id,
             "status": tree.task.status,

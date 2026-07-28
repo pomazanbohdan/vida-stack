@@ -3733,6 +3733,43 @@ fn taskflow_plan_generate_require_context_passes_with_cli_refs() {
 }
 
 #[test]
+fn task_tree_status_selector_parity_envelope_matrix() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+    run_and_assert_success(&["boot"], &state_dir);
+    run_and_assert_success(
+        &["task", "import-jsonl", &jsonl_path, "--json"],
+        &state_dir,
+    );
+
+    let pass = run_command_json(&["task", "tree", "vida-b", "--json"], &state_dir);
+    assert_eq!(pass["status"], "pass");
+    assert_eq!(pass["shared_fields"]["status"], "pass");
+    assert_eq!(pass["operator_contracts"]["status"], "pass");
+    assert_eq!(pass["task"]["status"], "in_progress");
+
+    let selected = run_command_json(
+        &["task", "tree", "vida-b", "--fields", "task.status", "--json"],
+        &state_dir,
+    );
+    assert_eq!(selected["status"], "pass");
+    assert_eq!(selected["shared_fields"]["status"], "pass");
+    assert_eq!(selected["operator_contracts"]["status"], "pass");
+    assert_eq!(selected["task"]["status"], "in_progress");
+
+    let (blocked, success) =
+        run_command_json_allow_failure(&["task", "tree", "missing-task", "--json"], &state_dir);
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["shared_fields"]["status"], "blocked");
+    assert_eq!(blocked["operator_contracts"]["status"], "blocked");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_command_round_trip_succeeds_via_binary_surface() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
@@ -3862,6 +3899,10 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
         tree_stdout.contains("\"id\": \"vida-b\"") || tree_stdout.contains("\"id\":\"vida-b\"")
     );
     let tree_json: Value = serde_json::from_str(&tree_stdout).expect("task tree json should parse");
+    assert_eq!(tree_json["status"], "pass");
+    assert_eq!(tree_json["shared_fields"]["status"], "pass");
+    assert_eq!(tree_json["operator_contracts"]["status"], "pass");
+    assert_eq!(tree_json["task"]["status"], "in_progress");
     let tree_dependencies = tree_json["dependencies"]
         .as_array()
         .expect("task tree dependencies should be an array");
