@@ -91,8 +91,22 @@ pub(crate) use state_store_run_graph_state::{
     HostBridgeReceiptIdentityStored, ResumabilityCapsuleRow, RoutedRunStateRow,
     RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
     RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
-    RunGraphReplayLineageReceipt,
+    RunGraphPolicyPin, RunGraphReplayLineageReceipt,
 };
+
+pub(crate) fn policy_bundle_ref_from_execution_plan(
+    execution_plan: &serde_json::Value,
+) -> Option<RunGraphPolicyPin> {
+    let runtime_assignment = execution_plan
+        .get("runtime_assignment")
+        .or_else(|| execution_plan.get("carrier_runtime_assignment"));
+    execution_plan
+        .get("policy_bundle_ref")
+        .or_else(|| runtime_assignment.and_then(|value| value.get("policy_bundle_ref")))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .and_then(|pin: RunGraphPolicyPin| pin.normalize().ok())
+}
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
     RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
@@ -4911,6 +4925,7 @@ hierarchy: framework,contracts
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-03-15T00:00:00Z".to_string(),
         }
     }
@@ -5530,6 +5545,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -5620,6 +5636,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -5713,6 +5730,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -5806,6 +5824,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -5899,6 +5918,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -5989,6 +6009,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6085,6 +6106,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6177,6 +6199,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6267,6 +6290,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6360,6 +6384,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6453,6 +6478,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6538,6 +6564,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6628,6 +6655,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6765,6 +6793,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -6809,6 +6838,7 @@ hierarchy: framework,contracts
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-03-18T00:00:00Z".to_string(),
             })
             .await
@@ -9476,6 +9506,7 @@ hierarchy: framework,contracts
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("taskflow_state_store".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-03-18T00:00:00Z".to_string(),
         };
         store
@@ -9603,6 +9634,7 @@ hierarchy: framework,contracts
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-16T00:00:00Z".to_string(),
         };
         store

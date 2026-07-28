@@ -6702,6 +6702,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-05T00:00:00Z".to_string(),
             })
             .await
@@ -6883,6 +6884,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-05T00:00:00Z".to_string(),
             })
             .await
@@ -7285,6 +7287,9 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: crate::state_store::policy_bundle_ref_from_execution_plan(
+                    &execution_plan,
+                ),
                 recorded_at: "2026-04-13T00:00:00Z".to_string(),
             })
             .await
@@ -7764,6 +7769,7 @@ mod tests {
             activation_agent_type: Some("worker".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("test".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-19T00:00:00Z".to_string(),
         };
         let _: Option<crate::state_store::RunGraphDispatchReceiptStored> = store

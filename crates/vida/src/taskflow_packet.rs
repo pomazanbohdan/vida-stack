@@ -1232,6 +1232,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-14T00:00:00Z".to_string(),
         };
         let payload = build_taskflow_packet_render_payload(
@@ -1301,6 +1302,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("opencode_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-14T00:00:00Z".to_string(),
         };
 
@@ -1357,6 +1359,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-14T00:00:00Z".to_string(),
         };
 
@@ -1493,6 +1496,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("opencode_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-04-19T12:00:02Z".to_string(),
         }
     }
@@ -2496,6 +2500,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("opencode_cli".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-16T10:00:00Z".to_string(),
             })
             .await
@@ -2575,6 +2580,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("opencode_cli".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-19T12:00:02Z".to_string(),
             })
             .await

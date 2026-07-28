@@ -3738,6 +3738,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-25T00:00:00Z".to_string(),
         }
     }
@@ -4473,6 +4474,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-22T00:00:00Z".to_string(),
             };
             let warning = best_effort_record_agent_init_dispatch_timeout_receipt(
@@ -4841,6 +4843,7 @@ mod tests {
                     activation_agent_type: Some(selected_carrier_id),
                     activation_runtime_role: Some(activation_runtime_role.clone()),
                     selected_backend: Some(selected_backend.clone()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-04-17T00:00:00Z".to_string(),
                 };
                 let handoff_plan = json!({});
@@ -7047,6 +7050,11 @@ fn resume_inputs_from_downstream_packet_without_store(
             })
             .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_carrier_id"))
     });
+    let policy_bundle_ref = packet
+        .get("role_selection_full")
+        .and_then(|selection| selection.get("execution_plan"))
+        .and_then(crate::state_store::policy_bundle_ref_from_execution_plan)
+        .or_else(|| crate::state_store::policy_bundle_ref_from_execution_plan(&packet));
     let receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -7080,6 +7088,7 @@ fn resume_inputs_from_downstream_packet_without_store(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref,
         recorded_at,
     };
     let run_graph_bootstrap = packet
@@ -7218,6 +7227,10 @@ fn resume_inputs_from_dispatch_packet_without_store(
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
+    let policy_bundle_ref = crate::state_store::policy_bundle_ref_from_execution_plan(
+        &role_selection.execution_plan,
+    )
+    .or_else(|| crate::state_store::policy_bundle_ref_from_execution_plan(&packet));
     let receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -7268,6 +7281,7 @@ fn resume_inputs_from_dispatch_packet_without_store(
         activation_agent_type: string_field(&packet, "activation_agent_type"),
         activation_runtime_role: string_field(&packet, "activation_runtime_role"),
         selected_backend: string_field(&packet, "selected_backend"),
+        policy_bundle_ref,
         recorded_at,
     };
     let run_graph_bootstrap = packet
@@ -11404,6 +11418,7 @@ mod agent_init_surface_tests {
             activation_agent_type: Some("senior".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         };
         let payload = agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
@@ -11634,6 +11649,7 @@ mod agent_init_surface_tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-07-18T00:00:00Z".to_string(),
         };
         let store = crate::state_store::StateStore::open(root.clone())

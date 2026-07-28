@@ -2367,6 +2367,9 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: crate::state_store::policy_bundle_ref_from_execution_plan(
+            &role_selection.execution_plan,
+        ),
         recorded_at,
     })
 }
