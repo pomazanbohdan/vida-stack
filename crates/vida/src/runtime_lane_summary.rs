@@ -27,6 +27,64 @@ pub(crate) struct RuntimeConsumptionLaneSelection {
     pub(crate) reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PolicyPin {
+    pub(crate) policy_id: String,
+    pub(crate) version: u32,
+    pub(crate) content_digest: String,
+}
+
+pub(crate) fn resolve_policy_pin(bundle: &serde_json::Value) -> serde_json::Value {
+    let candidates = [
+        bundle.pointer("/policy_runtime/active"),
+        bundle.pointer("/policy_runtime/active_bundle"),
+        bundle.pointer("/policy_runtime/active_policy"),
+        bundle.pointer("/policy_bundle"),
+        bundle.pointer("/active_policy"),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        let candidate = candidate
+            .get("policy_pin")
+            .or_else(|| candidate.get("pin"))
+            .unwrap_or(candidate);
+        let Some(policy_id) = candidate
+            .get("policy_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(version) = candidate.get("version").and_then(policy_pin_version) else {
+            continue;
+        };
+        let Some(content_digest) = candidate
+            .get("content_digest")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        return serde_json::to_value(PolicyPin {
+            policy_id: policy_id.to_string(),
+            version,
+            content_digest: content_digest.to_string(),
+        })
+        .unwrap_or(serde_json::Value::Null);
+    }
+    serde_json::Value::Null
+}
+
+fn policy_pin_version(value: &serde_json::Value) -> Option<u32> {
+    match value {
+        serde_json::Value::Number(value) => value.as_u64().and_then(|value| value.try_into().ok()),
+        serde_json::Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
 pub(crate) fn build_runtime_execution_plan_from_snapshot(
     compiled_bundle: &serde_json::Value,
     selection: &RuntimeConsumptionLaneSelection,

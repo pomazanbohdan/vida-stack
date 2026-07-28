@@ -1456,8 +1456,13 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
         agent_only_development,
         &dispatch_contract,
     );
-    let runtime_assignment =
+    let policy_bundle_ref = crate::runtime_lane_summary::resolve_policy_pin(compiled_bundle);
+    let mut runtime_assignment =
         crate::build_runtime_assignment(compiled_bundle, selection, requires_design_gate);
+    crate::runtime_assignment_builder::attach_policy_bundle_ref(
+        &mut runtime_assignment,
+        &policy_bundle_ref,
+    );
     let dispatch_ready = dispatch_contract["status"] == "ready";
     let selected_node_id = dispatch_contract["selected_node_id"]
         .as_str()
@@ -1477,6 +1482,7 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
         } else {
             "ready_for_runtime_routing"
         },
+        "policy_bundle_ref": policy_bundle_ref,
         "system_mode": crate::json_string(crate::json_lookup(agent_system, &["mode"])).unwrap_or_default(),
         "state_owner": crate::json_string(crate::json_lookup(agent_system, &["state_owner"])).unwrap_or_default(),
         "max_parallel_agents": crate::json_lookup(agent_system, &["max_parallel_agents"]).cloned().unwrap_or(serde_json::Value::Null),

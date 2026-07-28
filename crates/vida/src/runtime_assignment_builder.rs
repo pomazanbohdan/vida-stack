@@ -2559,6 +2559,18 @@ pub(crate) fn build_runtime_assignment(
     assignment
 }
 
+pub(crate) fn attach_policy_bundle_ref(
+    assignment: &mut serde_json::Value,
+    policy_bundle_ref: &serde_json::Value,
+) {
+    if let Some(assignment) = assignment.as_object_mut() {
+        assignment.insert(
+            "policy_bundle_ref".to_string(),
+            policy_bundle_ref.clone(),
+        );
+    }
+}
+
 fn stage_policy_optional_string(value: &serde_json::Value, fields: &[&str]) -> Option<String> {
     fields.iter().find_map(|field| {
         value[*field]

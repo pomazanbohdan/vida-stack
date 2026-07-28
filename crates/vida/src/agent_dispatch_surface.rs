@@ -5647,11 +5647,20 @@ fn apply_configured_lane_runtime_assignment(
     activation_bundle: &serde_json::Value,
     lane: &AgentDispatchLanePreview,
 ) -> Result<(), String> {
+    let expected_policy_bundle_ref =
+        crate::runtime_assignment_projection_utils::expected_policy_bundle_ref(
+            &role_selection.execution_plan,
+        )?;
+    if crate::runtime_lane_summary::resolve_policy_pin(activation_bundle)
+        != expected_policy_bundle_ref
+    {
+        return Err("policy_bundle_pin_mismatch".to_string());
+    }
     let conversation_role = role_selection.fallback_role.trim();
     if conversation_role.is_empty() {
         return Err("conversation_role_binding_missing".to_string());
     }
-    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+    let mut assignment = crate::build_runtime_assignment_from_resolved_constraints(
         activation_bundle,
         conversation_role,
         &lane.task_class,
@@ -5666,6 +5675,15 @@ fn apply_configured_lane_runtime_assignment(
             lane.role_label, lane.runtime_role, lane.task_class
         ));
     }
+    crate::runtime_assignment_builder::attach_policy_bundle_ref(
+        &mut assignment,
+        &expected_policy_bundle_ref,
+    );
+    crate::runtime_assignment_projection_utils::validate_policy_bundle_ref(
+        &role_selection.execution_plan,
+        activation_bundle,
+        &assignment,
+    )?;
     let carrier_policy_blockers =
         crate::carrier_runtime_projection::carrier_policy_revalidation_blockers(
             activation_bundle,

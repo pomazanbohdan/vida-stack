@@ -35,6 +35,31 @@ pub(crate) fn runtime_assignment_alias_fields(
     fields
 }
 
+pub(crate) fn expected_policy_bundle_ref(
+    execution_plan: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    execution_plan
+        .get("policy_bundle_ref")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| "policy_bundle_pin_missing".to_string())
+}
+
+pub(crate) fn validate_policy_bundle_ref(
+    execution_plan: &serde_json::Value,
+    compiled_bundle: &serde_json::Value,
+    assignment: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let expected = expected_policy_bundle_ref(execution_plan)?;
+    if crate::runtime_lane_summary::resolve_policy_pin(compiled_bundle) != expected {
+        return Err("policy_bundle_pin_mismatch".to_string());
+    }
+    if assignment.get("policy_bundle_ref") != Some(&expected) {
+        return Err("policy_bundle_pin_missing_or_mismatch".to_string());
+    }
+    Ok(expected)
+}
+
 pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
     role_selection: &mut crate::RuntimeConsumptionLaneSelection,
     compiled_bundle: &serde_json::Value,
@@ -47,10 +72,16 @@ pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
     else {
         return Ok(());
     };
+    let expected_policy_bundle_ref = expected_policy_bundle_ref(&role_selection.execution_plan)?;
+    if crate::runtime_lane_summary::resolve_policy_pin(compiled_bundle)
+        != expected_policy_bundle_ref
+    {
+        return Err("policy_bundle_pin_mismatch".to_string());
+    }
     let runtime_role = crate::json_string(latest_status.get("activation_runtime_role"))
         .unwrap_or_else(|| role_selection.selected_role.clone());
     let conversation_role = role_selection.fallback_role.trim();
-    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+    let mut assignment = crate::build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         conversation_role,
         &task_class,
@@ -59,6 +90,15 @@ pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
     if !assignment["enabled"].as_bool().unwrap_or(false) {
         return Ok(());
     }
+    crate::runtime_assignment_builder::attach_policy_bundle_ref(
+        &mut assignment,
+        &expected_policy_bundle_ref,
+    );
+    validate_policy_bundle_ref(
+        &role_selection.execution_plan,
+        compiled_bundle,
+        &assignment,
+    )?;
     let execution_plan = role_selection
         .execution_plan
         .as_object_mut()
@@ -206,6 +246,60 @@ mod tests {
         .expect("assignment helper should update selection");
 
         assert_eq!(selection.execution_plan, serde_json::json!({}));
+    }
+
+    #[test]
+    fn activation_a_to_b_policy_pin_race_fails_closed_without_mutation() {
+        let pin_a = serde_json::json!({
+            "policy_id": "rhai.runtime.authority",
+            "version": 1,
+            "content_digest": "digest-a"
+        });
+        let pin_b = serde_json::json!({
+            "policy_id": "rhai.runtime.authority",
+            "version": 2,
+            "content_digest": "digest-b"
+        });
+        let assignment = serde_json::json!({
+            "enabled": true,
+            "policy_bundle_ref": pin_a
+        });
+        let mut selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "test".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "test".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "policy_bundle_ref": pin_a,
+                "runtime_assignment": assignment,
+            }),
+            reason: "test".to_string(),
+        };
+        let before = selection.execution_plan.clone();
+        let result = super::apply_run_graph_runtime_assignment_to_selection(
+            &mut selection,
+            &serde_json::json!({
+                "policy_runtime": {"active": pin_b}
+            }),
+            &serde_json::json!({
+                "latest_status": {
+                    "task_class": "implementation",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            "execution plan is not an object",
+        );
+        assert_eq!(result, Err("policy_bundle_pin_mismatch".to_string()));
+        assert_eq!(selection.execution_plan, before);
     }
 
     #[test]
