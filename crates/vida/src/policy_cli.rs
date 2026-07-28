@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use operator_output::toon_report;
-use runtime_path_policy::atomic_replace_bounded_with_limit;
+use runtime_path_policy::{atomic_replace_bounded_with_limit, AtomicReplaceLimit};
 use serde_json::{json, Value};
 use vida_policy_rhai::fixture::MAX_FIXTURE_CORPUS_BYTES;
 use vida_policy_rhai::{
@@ -308,8 +308,12 @@ fn load_store(path: &Path, allow_missing: bool) -> Result<PolicyLifecycleStore, 
 fn save_store(path: &Path, store: &PolicyLifecycleStore) -> Result<(), PolicyFailure> {
     let body = serde_json::to_string(&store.snapshot())
         .map_err(|error| PolicyFailure::new("policy_store_serialize_failed", error.to_string()))?;
-    atomic_replace_bounded_with_limit(path, body.as_bytes(), MAX_POLICY_OUTPUT_BYTES)
-        .map_err(|error| PolicyFailure::new("policy_store_write_failed", error.to_string()))
+    atomic_replace_bounded_with_limit(
+        path,
+        body.as_bytes(),
+        AtomicReplaceLimit::new(MAX_POLICY_OUTPUT_BYTES),
+    )
+    .map_err(|error| PolicyFailure::new("policy_store_write_failed", error.to_string()))
 }
 
 fn read_test_receipt(path: &Path) -> Result<PolicyTestReceipt, PolicyFailure> {
@@ -374,9 +378,11 @@ fn lifecycle_result(
         serde_json::to_string(&payload).expect("fallback lifecycle JSON")
     });
     if let Some(output_path) = output_path {
-        if let Err(error) =
-            atomic_replace_bounded_with_limit(output_path, body.as_bytes(), MAX_POLICY_OUTPUT_BYTES)
-        {
+        if let Err(error) = atomic_replace_bounded_with_limit(
+            output_path,
+            body.as_bytes(),
+            AtomicReplaceLimit::new(MAX_POLICY_OUTPUT_BYTES),
+        ) {
             payload = lifecycle_failure(
                 surface,
                 PolicyFailure::new("policy_output_write_failed", error.to_string()),
