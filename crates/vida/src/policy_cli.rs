@@ -5,13 +5,14 @@ use std::process::ExitCode;
 
 use operator_output::toon_report;
 use serde_json::{json, Value};
+use vida_policy_rhai::fixture::MAX_FIXTURE_CORPUS_BYTES;
 use vida_policy_rhai::{
-    build_policy_engine, BundleCacheStatus, Limits, PolicyBundle, PolicyBundleCache,
+    build_policy_engine, run_fixture_jsonl, BundleCacheStatus, FixtureReport, FixtureRunError,
+    Limits, PolicyBundle, PolicyBundleCache,
 };
 
 const MAX_POLICY_BUNDLE_BYTES: u64 = 64 * 1024;
 const POLICY_CLI_SCHEMA_VERSION: &str = "vida-policy-cli-v1";
-const FIXTURE_RUNNER_BLOCKER: &str = "policy_fixture_runner_unavailable";
 
 #[derive(Debug)]
 struct PolicyFailure {
@@ -40,7 +41,7 @@ struct CheckedBundle {
 pub(crate) fn run_policy(args: crate::PolicyArgs) -> ExitCode {
     match args.command {
         crate::PolicyCommand::Check(args) => run_check(&args.bundle, args.json),
-        crate::PolicyCommand::Test(args) => run_test(&args.bundle, args.json),
+        crate::PolicyCommand::Test(args) => run_test(&args.bundle, &args.fixtures, args.json),
     }
 }
 
@@ -57,32 +58,104 @@ fn run_check(path: &Path, as_json: bool) -> ExitCode {
     }
 }
 
-fn run_test(path: &Path, as_json: bool) -> ExitCode {
-    let payload = match check_bundle(path) {
-        Err(error) => blocked_payload("vida policy test", path, error),
-        Ok(bundle) => blocked_payload_with_details(
-            "vida policy test",
-            path,
-            vec!["canonical_gate_blocked".to_string()],
-            vec![
-                "Expose the predecessor fixture runner, then rerun `vida policy test`.".to_string(),
-            ],
-            json!({
-                "check": checked_bundle_value(&bundle),
-                "fixture_execution": {
-                    "status": "blocked",
-                    "blocker_code": FIXTURE_RUNNER_BLOCKER,
-                    "mandatory": true,
-                },
-                "issues": [{
-                    "code": FIXTURE_RUNNER_BLOCKER,
-                    "detail": "The predecessor fixture-runner API is not present in this checkout.",
-                }],
-            }),
-        ),
-    };
+fn run_test(bundle_path: &Path, fixtures_path: &Path, as_json: bool) -> ExitCode {
+    let payload = test_payload(bundle_path, fixtures_path);
     emit("vida policy test", &payload, as_json);
-    ExitCode::from((payload["status"] != "pass") as u8)
+    if payload["status"] == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn test_payload(bundle_path: &Path, fixtures_path: &Path) -> Value {
+    let checked = match check_bundle(bundle_path) {
+        Ok(bundle) => bundle,
+        Err(error) => return blocked_payload("vida policy test", bundle_path, error),
+    };
+    let fixtures = match read_bounded_fixture(fixtures_path) {
+        Ok(fixtures) => fixtures,
+        Err(error) => {
+            return fixture_issue_payload(
+                bundle_path,
+                fixtures_path,
+                &checked,
+                policy_failure_value(&error),
+            )
+        }
+    };
+    let engine = build_policy_engine(Limits::default());
+    match run_fixture_jsonl(&engine, &checked.bundle, &fixtures) {
+        Ok(report) => fixture_report_payload(bundle_path, fixtures_path, &checked, report),
+        Err(error) => fixture_issue_payload(
+            bundle_path,
+            fixtures_path,
+            &checked,
+            fixture_run_error_value(&error),
+        ),
+    }
+}
+
+fn fixture_report_payload(
+    bundle_path: &Path,
+    fixtures_path: &Path,
+    checked: &CheckedBundle,
+    report: FixtureReport,
+) -> Value {
+    let passed = report.is_pass();
+    let blocker_codes = if passed {
+        Vec::new()
+    } else {
+        vec!["canonical_gate_blocked".to_string()]
+    };
+    let next_actions = if passed {
+        Vec::new()
+    } else {
+        vec!["Correct failing policy fixtures and rerun `vida policy test`.".to_string()]
+    };
+    build_payload(
+        "vida policy test",
+        blocker_codes,
+        next_actions,
+        json!({
+            "bundle": bundle_path.display().to_string(),
+            "fixtures": fixtures_path.display().to_string(),
+        }),
+        json!({
+            "schema_version": POLICY_CLI_SCHEMA_VERSION,
+            "check": checked_bundle_value(checked),
+            "fixture_execution": {
+                "status": if passed { "pass" } else { "fail" },
+                "report": report,
+            },
+        }),
+    )
+}
+
+fn fixture_issue_payload(
+    bundle_path: &Path,
+    fixtures_path: &Path,
+    checked: &CheckedBundle,
+    issue: Value,
+) -> Value {
+    build_payload(
+        "vida policy test",
+        vec!["canonical_gate_blocked".to_string()],
+        vec!["Correct the fixture corpus and rerun `vida policy test`.".to_string()],
+        json!({
+            "bundle": bundle_path.display().to_string(),
+            "fixtures": fixtures_path.display().to_string(),
+        }),
+        json!({
+            "schema_version": POLICY_CLI_SCHEMA_VERSION,
+            "check": checked_bundle_value(checked),
+            "fixture_execution": {
+                "status": "fail",
+                "issues": [issue.clone()],
+            },
+            "issues": [issue],
+        }),
+    )
 }
 
 fn check_bundle(path: &Path) -> Result<CheckedBundle, PolicyFailure> {
@@ -134,6 +207,32 @@ fn check_bundle(path: &Path) -> Result<CheckedBundle, PolicyFailure> {
 }
 
 fn read_bounded_bundle(path: &Path) -> Result<String, PolicyFailure> {
+    read_bounded_text(path, MAX_POLICY_BUNDLE_BYTES, "policy_bundle_too_large")
+}
+
+fn read_bounded_fixture(path: &Path) -> Result<String, PolicyFailure> {
+    read_bounded_text(
+        path,
+        MAX_FIXTURE_CORPUS_BYTES as u64,
+        "fixture_corpus_too_large",
+    )
+    .map_err(|error| match error.code {
+        "policy_bundle_read_failed" => {
+            PolicyFailure::new("fixture_corpus_read_failed", error.detail)
+        }
+        "policy_bundle_metadata_failed" => {
+            PolicyFailure::new("fixture_corpus_metadata_failed", error.detail)
+        }
+        "policy_bundle_not_utf8" => PolicyFailure::new("fixture_corpus_not_utf8", error.detail),
+        _ => error,
+    })
+}
+
+fn read_bounded_text(
+    path: &Path,
+    max_bytes: u64,
+    too_large_code: &'static str,
+) -> Result<String, PolicyFailure> {
     let mut file = File::open(path).map_err(|error| {
         PolicyFailure::new(
             "policy_bundle_read_failed",
@@ -149,16 +248,16 @@ fn read_bounded_bundle(path: &Path) -> Result<String, PolicyFailure> {
             )
         })?
         .len();
-    if declared_size > MAX_POLICY_BUNDLE_BYTES {
+    if declared_size > max_bytes {
         return Err(PolicyFailure::new(
-            "policy_bundle_too_large",
-            format!("bundle is {declared_size} bytes; limit is {MAX_POLICY_BUNDLE_BYTES} bytes"),
+            too_large_code,
+            format!("file is {declared_size} bytes; limit is {max_bytes} bytes"),
         ));
     }
 
     let mut bytes = Vec::with_capacity(declared_size as usize);
     file.by_ref()
-        .take(MAX_POLICY_BUNDLE_BYTES + 1)
+        .take(max_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| {
             PolicyFailure::new(
@@ -166,14 +265,39 @@ fn read_bounded_bundle(path: &Path) -> Result<String, PolicyFailure> {
                 format!("{}: {error}", path.display()),
             )
         })?;
-    if bytes.len() as u64 > MAX_POLICY_BUNDLE_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err(PolicyFailure::new(
-            "policy_bundle_too_large",
-            format!("bundle exceeds {MAX_POLICY_BUNDLE_BYTES} bytes"),
+            too_large_code,
+            format!("file exceeds {max_bytes} bytes"),
         ));
     }
     String::from_utf8(bytes)
         .map_err(|error| PolicyFailure::new("policy_bundle_not_utf8", error.to_string()))
+}
+
+fn policy_failure_value(error: &PolicyFailure) -> Value {
+    json!({
+        "kind": "corpus",
+        "code": error.code,
+        "detail": error.detail,
+    })
+}
+
+fn fixture_run_error_value(error: &FixtureRunError) -> Value {
+    match error {
+        FixtureRunError::Corpus(error) => json!({
+            "kind": "corpus",
+            "code": error.code.as_str(),
+            "line": error.line,
+            "fixture_id": error.fixture_id,
+            "detail": error.detail,
+        }),
+        FixtureRunError::Policy { source } => json!({
+            "kind": "policy",
+            "code": source.code().as_str(),
+            "detail": source.to_string(),
+        }),
+    }
 }
 
 fn pass_payload(surface: &str, path: &Path, bundle: &CheckedBundle) -> Value {
@@ -319,6 +443,15 @@ mod tests {
     }
 
     #[test]
+    fn policy_test_help_requires_bounded_fixture_input() {
+        let error = crate::Cli::try_parse_from(["vida", "policy", "test", "--help"])
+            .expect_err("help should be clap display error");
+        let help = error.to_string();
+        assert!(help.contains("--fixtures <PATH>"));
+        assert!(help.contains("bounded JSONL fixture corpus"));
+    }
+
+    #[test]
     fn check_payload_is_release1_pass_with_digest_checks() {
         let (root, path) = bundle_path("1");
         let payload = pass_payload("vida policy check", &path, &check_bundle(&path).unwrap());
@@ -337,21 +470,51 @@ mod tests {
     }
 
     #[test]
-    fn test_reports_missing_predecessor_fixture_runner_without_state_access() {
-        let (root, path) = bundle_path("1");
-        let checked = check_bundle(&path).expect("bundle check");
-        let payload = blocked_payload_with_details(
-            "vida policy test",
-            &path,
-            vec!["canonical_gate_blocked".to_string()],
-            vec!["Expose the predecessor fixture runner, then rerun `vida policy test`.".into()],
-            json!({"check": checked_bundle_value(&checked), "fixture_execution": {"status": "blocked", "blocker_code": FIXTURE_RUNNER_BLOCKER}}),
-        );
+    fn policy_test_runs_fixture_runner_and_returns_pass() {
+        let (root, path) = bundle_path("ctx.value");
+        let fixtures = root.join("fixtures.jsonl");
+        std::fs::write(
+            &fixtures,
+            r#"{"fixture_id":"positive","context":{"value":42},"expected":42}"#,
+        )
+        .expect("fixtures");
+        let payload = test_payload(&path, &fixtures);
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["fixture_execution"]["status"], "pass");
+        assert_eq!(payload["fixture_execution"]["report"]["passed"], 1);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn policy_test_reports_typed_fixture_failure() {
+        let (root, path) = bundle_path("ctx.value");
+        let fixtures = root.join("fixtures.jsonl");
+        std::fs::write(
+            &fixtures,
+            r#"{"fixture_id":"mismatch","context":{"value":41},"expected":42}"#,
+        )
+        .expect("fixtures");
+        let payload = test_payload(&path, &fixtures);
         assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["fixture_execution"]["status"], "fail");
+        assert_eq!(payload["fixture_execution"]["report"]["failed"], 1);
         assert_eq!(
-            payload["fixture_execution"]["blocker_code"],
-            FIXTURE_RUNNER_BLOCKER
+            payload["fixture_execution"]["report"]["results"][0]["failure"]["code"],
+            "output_mismatch"
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn policy_test_reports_typed_fixture_corpus_error() {
+        let (root, path) = bundle_path("1");
+        let fixtures = root.join("fixtures.jsonl");
+        std::fs::write(&fixtures, r#"{"fixture_id":"broken""#).expect("fixtures");
+        let payload = test_payload(&path, &fixtures);
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["fixture_execution"]["status"], "fail");
+        assert_eq!(payload["issues"][0]["code"], "fixture_jsonl_malformed");
+        assert_eq!(payload["issues"][0]["kind"], "corpus");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

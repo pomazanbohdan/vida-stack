@@ -42,7 +42,7 @@ const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive 
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
 
-const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path>\n\nOptions:\n  --bundle <path>    Read one versioned policy bundle without writing runtime state\n  --json             Emit the release-1 machine-readable envelope\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  `check` validates bounded size, schema, ABI, normalized source, syntax, and digest.\n  `test` performs the same checks and runs mandatory fixtures when the fixture runner is available.";
+const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path> --fixtures <path>\n\nOptions:\n  --bundle <path>    Read one versioned policy bundle without writing runtime state\n  --fixtures <path>  Read bounded JSONL fixtures for `test`\n  --json             Emit the release-1 machine-readable envelope\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  `check` validates bounded size, schema, ABI, normalized source, syntax, and digest.\n  `test` performs the same checks and runs the bounded fixture corpus read-only.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -1223,10 +1223,8 @@ pub(crate) struct PolicyArgs {
 pub(crate) enum PolicyCommand {
     #[command(about = "validate one policy bundle without writing runtime state")]
     Check(PolicyBundleArgs),
-    #[command(
-        about = "validate one policy bundle and run mandatory fixtures when available"
-    )]
-    Test(PolicyBundleArgs),
+    #[command(about = "validate one policy bundle and run a bounded JSONL fixture corpus")]
+    Test(PolicyTestArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1237,6 +1235,26 @@ pub(crate) struct PolicyBundleArgs {
         help = "Path to one versioned JSON policy bundle"
     )]
     pub(crate) bundle: PathBuf,
+
+    #[arg(long = "json", help = "Emit the release-1 machine-readable envelope")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyTestArgs {
+    #[arg(
+        long = "bundle",
+        value_name = "PATH",
+        help = "Path to one versioned JSON policy bundle"
+    )]
+    pub(crate) bundle: PathBuf,
+
+    #[arg(
+        long = "fixtures",
+        value_name = "PATH",
+        help = "Path to the bounded JSONL fixture corpus"
+    )]
+    pub(crate) fixtures: PathBuf,
 
     #[arg(long = "json", help = "Emit the release-1 machine-readable envelope")]
     pub(crate) json: bool,
