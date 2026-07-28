@@ -2144,6 +2144,7 @@ mod tests {
             activation_agent_type: Some("internal_subagents".to_string()),
             activation_runtime_role: Some("verifier".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,

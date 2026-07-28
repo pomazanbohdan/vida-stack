@@ -8888,6 +8888,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("vibe_cli".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-25T00:00:00Z".to_string(),
         };
 
@@ -8987,6 +8988,7 @@ mod tests {
                 activation_agent_type: None,
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: format!("{}-receipt", lane.task_id),
             };
 
@@ -9832,6 +9834,7 @@ mod tests {
                     activation_agent_type: Some("middle".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
                     selected_backend: Some("internal_subagents".to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-07-18T00:00:00Z".to_string(),
                 })
                 .await
@@ -9959,6 +9962,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-07-18T00:00:00Z".to_string(),
             })
             .await
@@ -11330,6 +11334,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-23T00:00:00Z".to_string(),
             })
             .await
@@ -11654,6 +11659,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-30T00:00:00Z".to_string(),
             })
             .await
@@ -11976,6 +11982,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-30T00:00:00Z".to_string(),
             })
             .await
@@ -12315,6 +12322,7 @@ mod tests {
                     activation_agent_type: Some(backend_id.to_string()),
                     activation_runtime_role: Some("worker".to_string()),
                     selected_backend: Some(backend_id.to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-06-04T00:00:00Z".to_string(),
                 })
                 .await
@@ -12485,6 +12493,7 @@ mod tests {
                     activation_agent_type: Some("internal_subagents".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
                     selected_backend: Some("internal_subagents".to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-06-23T00:00:00Z".to_string(),
                 })
                 .await
@@ -12727,6 +12736,7 @@ mod tests {
                     activation_agent_type: Some("internal_subagents".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
                     selected_backend: Some("internal_subagents".to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-07-14T00:00:00Z".to_string(),
                 })
                 .await
@@ -13059,6 +13069,7 @@ mod tests {
                     activation_agent_type: Some("internal_subagents".to_string()),
                     activation_runtime_role: Some("worker".to_string()),
                     selected_backend: Some("internal_subagents".to_string()),
+                    policy_bundle_ref: None,
                     recorded_at: "2026-07-01T00:00:00Z".to_string(),
                 })
                 .await
@@ -15578,6 +15589,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-11T00:00:00Z".to_string(),
             })
             .await
@@ -16141,6 +16153,7 @@ mod tests {
                 activation_agent_type: Some("vibe_cli".to_string()),
                 activation_runtime_role: Some("coach".to_string()),
                 selected_backend: Some("vibe_cli".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-25T00:00:00Z".to_string(),
             });
 
@@ -18288,6 +18301,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-07-10T00:00:00Z".to_string(),
         }
     }
@@ -18360,6 +18374,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-07-10T00:00:00Z".to_string(),
         };
 
