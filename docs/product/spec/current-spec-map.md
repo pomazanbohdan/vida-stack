@@ -87,6 +87,8 @@ Companion rule:
 3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/index.md](../../process/agent-extensions/index.md).
 4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
 
+5. Versioned Rhai policy runtime routing uses the canonical [design](versioned-rhai-policy-runtime-design.md), its linked [authority ADR](../decisions/versioned-rhai-policy-runtime-authority-adr.md), and the [authoring runbook](../../process/rhai-policy-authoring-runbook.md); this map and its changelog are generated/documentation projections and do not replace those owners.
+
 ## Current Rule
 
 1. The current canon is the active product/spec state for the repository.

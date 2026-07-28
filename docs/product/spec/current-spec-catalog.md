@@ -347,7 +347,20 @@ Companion rule:
 4. [requirements-control-plane-runtime-implementation-model.md](requirements-control-plane-runtime-implementation-model.md)
    Config families: state-spine runtime implementation, extraction/review/execution/projection/validation layers, TaskFlow and DocFlow integration, wiki projections, and external adapters
 5. [runtime-library-fsm-pilot-decision.md](runtime-library-fsm-pilot-decision.md)
-   Config families: isolated `taskflow-core` consume/resume FSM pilot, bounded `rust-fsm` adoption, and explicit TaskFlow authority boundaries
+    Config families: isolated `taskflow-core` consume/resume FSM pilot, bounded `rust-fsm` adoption, and explicit TaskFlow authority boundaries
+
+### Versioned Rhai Policy Runtime
+
+1. [versioned-rhai-policy-runtime-design.md](versioned-rhai-policy-runtime-design.md)
+   Owner authority: canonical product/spec design for the versioned Rhai policy runtime; Rust enforces the contract, Rhai remains a bounded decision language, YAML is reviewed declaration, and DB owns selected versions, lifecycle pointers, pins, and receipts.
+   Registered path: `docs/product/spec/versioned-rhai-policy-runtime-design.md`
+2. [../decisions/versioned-rhai-policy-runtime-authority-adr.md](../decisions/versioned-rhai-policy-runtime-authority-adr.md)
+   Owner authority: linked decision record for Rust/Rhai/YAML/DB authority boundaries, lifecycle promotion/failover/rollback, and pinned-resume rules.
+   Registered path: `docs/product/decisions/versioned-rhai-policy-runtime-authority-adr.md`
+3. [../../process/rhai-policy-authoring-runbook.md](../../process/rhai-policy-authoring-runbook.md)
+   Owner authority: authoring and rollout process for validation, shadow, promotion, activation, failover, rollback, receipts, incidents, and fail-closed stops.
+   Registered path: `docs/process/rhai-policy-authoring-runbook.md`
+4. Generated registry rule: this catalog, its map companion, and their changelogs are generated/documentation projections; the three registered owner artifacts remain authoritative.
 
 ## Routing Rule
 
