@@ -107,7 +107,7 @@ fn native_policy_baseline_is_deterministic_across_two_corpus_runs() {
     let cargo = tool_version("cargo");
 
     assert_eq!(first.len(), second.len());
-    for ((family, left), right) in corpus.families.iter().zip(first.iter().zip(second.iter())) {
+    for (family, (left, right)) in corpus.families.iter().zip(first.iter().zip(second.iter())) {
         assert_eq!(
             left.output, family.expected,
             "{} output drift",
