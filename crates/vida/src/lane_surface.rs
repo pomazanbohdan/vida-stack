@@ -2699,6 +2699,7 @@ fn synthetic_missing_task_stale_run_receipt(
         activation_agent_type: None,
         activation_runtime_role: None,
         selected_backend: Some(status.selected_backend.clone()),
+        policy_bundle_ref: None,
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .expect("rfc3339 timestamp should render"),

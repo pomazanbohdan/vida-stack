@@ -3719,6 +3719,7 @@ pub(crate) fn build_downstream_dispatch_receipt(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at,
     })
 }

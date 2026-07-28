@@ -3497,6 +3497,7 @@ fn dispatch_receipt_from_state_surface(
         activation_agent_type: receipt.activation_agent_type.clone(),
         activation_runtime_role: receipt.activation_runtime_role.clone(),
         selected_backend: receipt.selected_backend.clone(),
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at: receipt.recorded_at.clone(),
     }
 }

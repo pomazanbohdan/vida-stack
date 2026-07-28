@@ -1,5 +1,6 @@
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
+use super::state_store_run_graph_state::RunGraphPolicyPin;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
 };
@@ -6091,7 +6092,7 @@ fn parse_policy_bundle_ref(
     missing_code: &'static str,
 ) -> Result<RunGraphPolicyPin, StateStoreError> {
     let value = value.ok_or_else(|| invalid_policy_bundle_ref(missing_code))?;
-    serde_json::from_value(value.clone())
+    serde_json::from_value::<RunGraphPolicyPin>(value.clone())
         .map_err(|_| invalid_policy_bundle_ref("policy_pinned_bundle_corrupt"))?
         .normalize()
         .map_err(invalid_policy_bundle_ref)
@@ -6998,6 +6999,7 @@ mod tests {
             activation_agent_type: Some(carrier_id),
             activation_runtime_role: Some(runtime_role),
             selected_backend: Some(backend_id),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
     }

@@ -2102,6 +2102,7 @@ fn closure_packet_ready_resume_from_root_receipt(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 timestamp should render"),
@@ -2191,6 +2192,7 @@ fn terminal_closure_complete_resume_from_root_receipt(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 timestamp should render"),
@@ -5857,6 +5859,7 @@ async fn resume_inputs_from_downstream_packet(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: root_receipt.policy_bundle_ref.clone(),
         recorded_at,
     };
     Ok(build_resume_inputs(
@@ -6466,6 +6469,7 @@ async fn maybe_resume_inputs_from_active_downstream_result(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 timestamp should render"),
@@ -6582,6 +6586,7 @@ async fn maybe_resume_inputs_from_rework_result(
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
+        policy_bundle_ref: receipt.policy_bundle_ref.clone(),
         recorded_at,
     };
     let taskflow_handoff_plan = source_packet
