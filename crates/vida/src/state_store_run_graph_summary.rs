@@ -1653,6 +1653,7 @@ pub struct RunGraphDispatchReceiptSummary {
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
     pub selected_backend: Option<String>,
+    pub policy_bundle_ref: Option<RunGraphPolicyPin>,
     pub effective_execution_posture: serde_json::Value,
     pub route_policy: serde_json::Value,
     pub activation_evidence: serde_json::Value,
@@ -1723,6 +1724,7 @@ impl RunGraphDispatchReceiptSummary {
             activation_agent_type: receipt.activation_agent_type,
             activation_runtime_role: receipt.activation_runtime_role,
             selected_backend: receipt.selected_backend,
+            policy_bundle_ref: receipt.policy_bundle_ref,
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
@@ -4307,6 +4309,11 @@ impl StateStore {
             .get("run_graph_bootstrap")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
+        Self::validate_policy_bundle_ref_for_bootstrap(
+            &role_selection.execution_plan,
+            &run_graph_bootstrap,
+            receipt,
+        )?;
         Ok(Some((role_selection, run_graph_bootstrap)))
     }
 
@@ -5394,6 +5401,9 @@ impl StateStore {
             .await?
             .map(|context| context.role_selection())
             .transpose()?;
+        if let Some(selection) = role_selection.as_ref() {
+            Self::validate_policy_bundle_ref_for_summary(&selection.execution_plan, &receipt)?;
+        }
         let canonical_selected_backend = role_selection
             .as_ref()
             .and_then(|selection| {
@@ -6028,6 +6038,42 @@ impl StateStore {
         Ok(())
     }
 
+    pub(crate) fn validate_policy_bundle_ref_for_summary(
+        execution_plan: &serde_json::Value,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<RunGraphPolicyPin, StateStoreError> {
+        let expected = parse_policy_bundle_ref(
+            execution_plan.get("policy_bundle_ref"),
+            "policy_pinned_bundle_missing",
+        )?;
+        let actual = receipt
+            .policy_bundle_ref
+            .clone()
+            .ok_or_else(|| invalid_policy_bundle_ref("policy_pinned_bundle_missing"))?
+            .normalize()
+            .map_err(invalid_policy_bundle_ref)?;
+        if actual != expected {
+            return Err(invalid_policy_bundle_ref("policy_pinned_bundle_mismatch"));
+        }
+        Ok(expected)
+    }
+
+    pub(crate) fn validate_policy_bundle_ref_for_bootstrap(
+        execution_plan: &serde_json::Value,
+        run_graph_bootstrap: &serde_json::Value,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<RunGraphPolicyPin, StateStoreError> {
+        let expected = Self::validate_policy_bundle_ref_for_summary(execution_plan, receipt)?;
+        let bootstrap_ref = run_graph_bootstrap
+            .get("policy_bundle_ref")
+            .or_else(|| run_graph_bootstrap.pointer("/execution_plan/policy_bundle_ref"));
+        let bootstrap = parse_policy_bundle_ref(bootstrap_ref, "policy_pinned_bundle_missing")?;
+        if bootstrap != expected {
+            return Err(invalid_policy_bundle_ref("policy_pinned_bundle_mismatch"));
+        }
+        Ok(expected)
+    }
+
     pub(crate) fn validate_run_graph_dispatch_receipt_contract(
         receipt: RunGraphDispatchReceiptStored,
     ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
@@ -6037,6 +6083,23 @@ impl StateStore {
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         Ok(receipt)
+    }
+}
+
+fn parse_policy_bundle_ref(
+    value: Option<&serde_json::Value>,
+    missing_code: &'static str,
+) -> Result<RunGraphPolicyPin, StateStoreError> {
+    let value = value.ok_or_else(|| invalid_policy_bundle_ref(missing_code))?;
+    serde_json::from_value(value.clone())
+        .map_err(|_| invalid_policy_bundle_ref("policy_pinned_bundle_corrupt"))?
+        .normalize()
+        .map_err(invalid_policy_bundle_ref)
+}
+
+fn invalid_policy_bundle_ref(code: &'static str) -> StateStoreError {
+    StateStoreError::InvalidTaskRecord {
+        reason: code.to_string(),
     }
 }
 
@@ -6937,6 +7000,60 @@ mod tests {
             selected_backend: Some(backend_id),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn policy_pin_plan_receipt_mismatch_fails_closed() {
+        let mut receipt = sample_dispatch_receipt("run-policy-pin-mismatch");
+        receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
+            policy_id: "rhai.runtime.authority".to_string(),
+            version: 2,
+            content_digest: "digest-b".to_string(),
+        });
+        let error = StateStore::validate_policy_bundle_ref_for_summary(
+            &serde_json::json!({
+                "policy_bundle_ref": {
+                    "policy_id": "rhai.runtime.authority",
+                    "version": 1,
+                    "content_digest": "digest-a"
+                }
+            }),
+            &receipt,
+        )
+        .expect_err("mismatched receipt pin must fail closed");
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidTaskRecord { reason }
+                if reason == "policy_pinned_bundle_mismatch"
+        ));
+    }
+
+    #[test]
+    fn policy_pin_bootstrap_mismatch_fails_closed() {
+        let pin_a = serde_json::json!({
+            "policy_id": "rhai.runtime.authority",
+            "version": 1,
+            "content_digest": "digest-a"
+        });
+        let mut receipt = sample_dispatch_receipt("run-policy-pin-bootstrap-mismatch");
+        receipt.policy_bundle_ref = Some(serde_json::from_value(pin_a.clone()).unwrap());
+        let error = StateStore::validate_policy_bundle_ref_for_bootstrap(
+            &serde_json::json!({"policy_bundle_ref": pin_a}),
+            &serde_json::json!({
+                "policy_bundle_ref": {
+                    "policy_id": "rhai.runtime.authority",
+                    "version": 2,
+                    "content_digest": "digest-b"
+                }
+            }),
+            &receipt,
+        )
+        .expect_err("mismatched bootstrap pin must fail closed");
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidTaskRecord { reason }
+                if reason == "policy_pinned_bundle_mismatch"
+        ));
     }
 
     #[tokio::test]

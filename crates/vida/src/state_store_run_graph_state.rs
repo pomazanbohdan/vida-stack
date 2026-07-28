@@ -83,6 +83,32 @@ pub(crate) struct ResumabilityCapsuleRow {
     pub(crate) updated_at: String,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, SurrealValue,
+)]
+#[serde(deny_unknown_fields)]
+pub struct RunGraphPolicyPin {
+    pub policy_id: String,
+    pub version: u32,
+    pub content_digest: String,
+}
+
+impl RunGraphPolicyPin {
+    pub(crate) fn normalize(self) -> Result<Self, &'static str> {
+        if self.policy_id.trim().is_empty()
+            || self.version == 0
+            || self.content_digest.trim().is_empty()
+        {
+            return Err("policy_pinned_bundle_missing");
+        }
+        Ok(Self {
+            policy_id: self.policy_id.trim().to_string(),
+            version: self.version,
+            content_digest: self.content_digest.trim().to_string(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub struct RunGraphDispatchReceipt {
     pub run_id: String,
@@ -116,6 +142,8 @@ pub struct RunGraphDispatchReceipt {
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
     pub selected_backend: Option<String>,
+    #[serde(default)]
+    pub policy_bundle_ref: Option<RunGraphPolicyPin>,
     pub recorded_at: String,
 }
 
@@ -425,6 +453,8 @@ pub(crate) struct RunGraphDispatchReceiptStored {
     pub(crate) activation_agent_type: Option<String>,
     pub(crate) activation_runtime_role: Option<String>,
     pub(crate) selected_backend: Option<String>,
+    #[serde(default)]
+    pub(crate) policy_bundle_ref: Option<RunGraphPolicyPin>,
     pub(crate) recorded_at: String,
 }
 
@@ -530,6 +560,7 @@ impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
             activation_agent_type: stored.activation_agent_type,
             activation_runtime_role: stored.activation_runtime_role,
             selected_backend: stored.selected_backend,
+            policy_bundle_ref: stored.policy_bundle_ref,
             recorded_at: stored.recorded_at,
         }
     }
@@ -570,6 +601,7 @@ impl From<RunGraphDispatchReceipt> for RunGraphDispatchReceiptStored {
             activation_agent_type: receipt.activation_agent_type,
             activation_runtime_role: receipt.activation_runtime_role,
             selected_backend: receipt.selected_backend,
+            policy_bundle_ref: receipt.policy_bundle_ref,
             recorded_at: receipt.recorded_at,
         }
     }
@@ -946,6 +978,32 @@ fn non_empty_string(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_pin_normalize_rejects_missing_and_normalizes_fields() {
+        assert_eq!(
+            RunGraphPolicyPin {
+                policy_id: " ".to_string(),
+                version: 1,
+                content_digest: "digest".to_string(),
+            }
+            .normalize(),
+            Err("policy_pinned_bundle_missing")
+        );
+        assert_eq!(
+            RunGraphPolicyPin {
+                policy_id: "  rhai.runtime.authority ".to_string(),
+                version: 7,
+                content_digest: "  digest-a  ".to_string(),
+            }
+            .normalize(),
+            Ok(RunGraphPolicyPin {
+                policy_id: "rhai.runtime.authority".to_string(),
+                version: 7,
+                content_digest: "digest-a".to_string(),
+            })
+        );
+    }
 
     fn status_with_memory_gate() -> RunGraphStatus {
         RunGraphStatus {
