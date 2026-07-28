@@ -1,5 +1,4 @@
 use super::*;
-use crate::RuntimeConsumptionLaneSelection;
 use crate::release1_contracts::lane_status_has_required_evidence;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
@@ -8,15 +7,15 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_done,
 };
+use crate::RuntimeConsumptionLaneSelection;
 use taskflow_authority::run_graph_evidence::{
-    RunGraphBlockedSourceLane, RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence,
-    RunGraphReworkEvidence, blocked_source_lane_from_packet_evidence,
-    downstream_handoff_ready_from_completion_evidence, normalize_run_graph_node,
-    rework_route_from_completion_evidence,
+    blocked_source_lane_from_packet_evidence, downstream_handoff_ready_from_completion_evidence,
+    normalize_run_graph_node, rework_route_from_completion_evidence, RunGraphBlockedSourceLane,
+    RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
 };
 use taskflow_authority::run_graph_transition::{
-    ReadyRunGraphTransitionInput, RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
-    admit_run_graph_transition, ready_run_graph_transition,
+    admit_run_graph_transition, ready_run_graph_transition, ReadyRunGraphTransitionInput,
+    RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
 };
 use taskflow_core::run_graph::model::{
     DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
@@ -25,6 +24,7 @@ use taskflow_core::run_graph::model::{
 };
 
 const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 4 * 1024 * 1024;
+const HOST_BRIDGE_COMPACT_ONLY_REQUEST_ID: &str = "host-bridge-compact-only";
 
 fn run_graph_dispatch_lane_receipt_id(
     run_id: &str,
@@ -2256,12 +2256,12 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let current_stable_fallback =
-            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         let mut scope = CurrentSessionRunGraphClaimScope {
             run_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -2404,12 +2404,12 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "test run-graph claim requires current session id".to_string(),
             })?;
-        let claim_session_id =
-            current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(current_session_id);
+        let claim_session_id = current_session
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current_session_id);
         let worktree_environment_id = current_session["worktree_environment_id"]
             .as_str()
             .unwrap_or_else(|| self.root().to_str().unwrap_or_default())
@@ -2541,11 +2541,11 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "run-graph mutation requires an active current session id".to_string(),
             })?;
-        let current_stable_fallback =
-            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         let active_claims = self.active_orchestrator_claims().await?;
         let run_task_id = self
@@ -2652,11 +2652,11 @@ impl StateStore {
         else {
             return Ok(false);
         };
-        let current_stable_fallback =
-            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         Ok(self
             .active_orchestrator_claims()
             .await?
@@ -2909,6 +2909,10 @@ impl StateStore {
         }
         self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_receipt")
             .await?;
+        let precursor =
+            Self::host_bridge_precursor_fingerprint(HOST_BRIDGE_COMPACT_ONLY_REQUEST_ID, receipt)?;
+        let precursor_row =
+            Self::host_bridge_precursor_fingerprint_row(&receipt.run_id, &precursor, false)?;
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
         let receipt = normalize_legacy_downstream_preview_drift(receipt);
         let (receipt, _) = normalize_repairable_in_flight_receipt_lane_status_drift(receipt);
@@ -2919,8 +2923,98 @@ impl StateStore {
             .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
             .content(receipt)
             .await?;
+        let existing_precursor: Option<HostBridgePrecursorFingerprintStored> = self
+            .db
+            .select((
+                "host_bridge_precursor_fingerprint",
+                precursor_row.run_id.as_str(),
+            ))
+            .await?;
+        if let Some(existing_precursor) = existing_precursor {
+            Self::validated_host_bridge_precursor_row(&existing_precursor)?;
+        } else {
+            let _: Option<HostBridgePrecursorFingerprintStored> = self
+                .db
+                .create((
+                    "host_bridge_precursor_fingerprint",
+                    precursor_row.run_id.as_str(),
+                ))
+                .content(precursor_row)
+                .await?;
+        }
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
+    }
+
+    fn host_bridge_precursor_fingerprint(
+        request_id: &str,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<taskflow_host_bridge::HostBridgePrecursorFingerprintV1, StateStoreError> {
+        let value =
+            serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
+                reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
+            })?;
+        taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+            request_id, &value,
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
+    }
+
+    fn host_bridge_precursor_fingerprint_row(
+        run_id: &str,
+        precursor: &taskflow_host_bridge::HostBridgePrecursorFingerprintV1,
+        bind_request_id: bool,
+    ) -> Result<HostBridgePrecursorFingerprintStored, StateStoreError> {
+        let canonical_value = serde_json::to_value(precursor).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
+            }
+        })?;
+        let canonical = taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_value(Some(
+            &canonical_value,
+        ))
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        Ok(HostBridgePrecursorFingerprintStored {
+            schema_version: taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION
+                .to_string(),
+            run_id: run_id.to_string(),
+            precursor_fingerprint: Some(canonical_value),
+            exact_binding_key: bind_request_id.then(|| canonical.exact_binding_key()),
+            compact_binding_key: Some(canonical.compact_binding_key()),
+            recorded_at: canonical
+                .receipt
+                .get("recorded_at")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
+    fn validated_host_bridge_precursor_row(
+        row: &HostBridgePrecursorFingerprintStored,
+    ) -> Result<taskflow_host_bridge::HostBridgePrecursorFingerprintV1, StateStoreError> {
+        let canonical = taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_value(
+            row.precursor_fingerprint.as_ref(),
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let compact_key = row.compact_binding_key.as_deref().ok_or_else(|| {
+            StateStoreError::InvalidTaskRecord {
+                reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string(),
+            }
+        })?;
+        if row.schema_version
+            != taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION
+            || compact_key != canonical.compact_binding_key()
+            || row
+                .exact_binding_key
+                .as_deref()
+                .is_some_and(|key| key != canonical.exact_binding_key())
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string(),
+            });
+        }
+        Ok(canonical)
     }
 
     pub async fn record_host_bridge_receipt_identity(
@@ -2928,12 +3022,30 @@ impl StateStore {
         identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
     ) -> Result<(), StateStoreError> {
         let row = Self::host_bridge_receipt_identity_row(identity)?;
+        let identity_key = identity
+            .identity_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let compact_key = identity
+            .compact_binding_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let existing = self
+            .host_bridge_receipt_identities_for_run(&identity.run_id)
+            .await?;
+        if existing.iter().any(|candidate| {
+            candidate
+                .compact_binding_key()
+                .is_ok_and(|candidate_key| candidate_key == compact_key)
+                && candidate
+                    .identity_key()
+                    .is_ok_and(|candidate_key| candidate_key != identity_key)
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "host_bridge_receipt_identity_ambiguous_compact_binding".to_string(),
+            });
+        }
         let _: Option<HostBridgeReceiptIdentityStored> = self
             .db
-            .upsert((
-                "host_bridge_receipt_identity",
-                identity.identity_key().as_str(),
-            ))
+            .upsert(("host_bridge_receipt_identity", identity_key.as_str()))
             .content(row)
             .await?;
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
@@ -2945,6 +3057,22 @@ impl StateStore {
     ) -> Result<HostBridgeReceiptIdentityStored, StateStoreError> {
         identity
             .validate()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let precursor = identity.precursor_fingerprint.as_ref().ok_or_else(|| {
+            StateStoreError::InvalidTaskRecord {
+                reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string(),
+            }
+        })?;
+        let precursor_fingerprint = serde_json::to_value(precursor).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
+            }
+        })?;
+        let precursor_exact_binding_key = identity
+            .identity_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let precursor_compact_binding_key = identity
+            .compact_binding_key()
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         Ok(HostBridgeReceiptIdentityStored {
             schema_version: identity.schema_version.clone(),
@@ -2969,7 +3097,9 @@ impl StateStore {
             request_path: identity.request_path.clone(),
             result_path: identity.result_path.clone(),
             receipt_path: identity.receipt_path.clone(),
-            precursor_fingerprint: identity.precursor_fingerprint.clone(),
+            precursor_fingerprint: Some(precursor_fingerprint),
+            precursor_exact_binding_key: Some(precursor_exact_binding_key),
+            precursor_compact_binding_key: Some(precursor_compact_binding_key),
             recorded_at: identity.recorded_at.clone(),
         })
     }
@@ -3006,72 +3136,106 @@ impl StateStore {
                 reason: "host_bridge_receipt_binding_identity_mismatch:run_or_target".to_string(),
             });
         }
-        let mut compact_value =
+        let receipt_value =
             serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
-                reason: format!("host_bridge_receipt_binding_compact_serialize_failed:{error}"),
+                reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
             })?;
-        let precursor_fingerprint =
-            taskflow_host_bridge::host_bridge_precursor_fingerprint(&compact_value).map_err(
-                |reason| StateStoreError::InvalidTaskRecord { reason },
-            )?;
-        compact_value["precursor_fingerprint"] =
-            serde_json::Value::String(precursor_fingerprint);
-        let blockers = identity.compact_receipt_blockers(&compact_value);
-        if !blockers.is_empty() {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: blockers.join(","),
-            });
-        }
+        identity
+            .validate_precursor_receipt(&receipt_value)
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
         let compact = normalize_legacy_downstream_preview_drift(compact);
         let (compact, _) = normalize_repairable_in_flight_receipt_lane_status_drift(compact);
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&compact)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&compact)?;
 
-        let identity_key = identity.identity_key();
+        let identity_key = identity
+            .identity_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let compact_key = identity
+            .compact_binding_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let precursor = identity.precursor_fingerprint.as_ref().ok_or_else(|| {
+            StateStoreError::InvalidTaskRecord {
+                reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string(),
+            }
+        })?;
+        let precursor_row =
+            Self::host_bridge_precursor_fingerprint_row(&compact.run_id, precursor, true)?;
+        let existing_receipt: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .select(("run_graph_dispatch_receipt", compact.run_id.as_str()))
+            .await?;
+        let existing_precursor: Option<HostBridgePrecursorFingerprintStored> = self
+            .db
+            .select(("host_bridge_precursor_fingerprint", compact.run_id.as_str()))
+            .await?;
+        if existing_receipt.is_some() {
+            let existing_precursor =
+                existing_precursor
+                    .as_ref()
+                    .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                        reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+                            .to_string(),
+                    })?;
+            let existing = Self::validated_host_bridge_precursor_row(existing_precursor)?;
+            if existing.compact_binding_key() != compact_key {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "host_bridge_receipt_binding_conflict:receipt_key={}",
+                        compact.run_id
+                    ),
+                });
+            }
+            if existing_precursor
+                .exact_binding_key
+                .as_deref()
+                .is_some_and(|key| key != identity_key)
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: "host_bridge_receipt_identity_ambiguous_compact_binding".to_string(),
+                });
+            }
+        }
         let owner_record = self
             .prepare_run_graph_owner_evidence(&compact.run_id, "dispatch_receipt")
             .await?;
         let owner_record_id = owner_record.artifact_id.clone();
-        let compact_run_id = compact.run_id.clone();
         let response = self
             .db
             .query(
                 "BEGIN TRANSACTION; \
-                 LET $existing_identity = SELECT VALUE { schema_version: schema_version, request_id: request_id, run_id: run_id, task_id: task_id, attempt_id: attempt_id, packet_id: packet_id, dispatch_target: dispatch_target, packet_path: packet_path, backend_id: backend_id, carrier_id: carrier_id, adapter_kind: adapter_kind, adapter_capability_id: adapter_capability_id, invocation_mode: invocation_mode, dispatch_transport: dispatch_transport, receipt_mode: receipt_mode, adapter_contract_source: adapter_contract_source, adapter_contract_snapshot: adapter_contract_snapshot, adapter_contract_hash: adapter_contract_hash, adapter_operations: adapter_operations, request_path: request_path, result_path: result_path, receipt_path: receipt_path, precursor_fingerprint: precursor_fingerprint, recorded_at: recorded_at } FROM type::record('host_bridge_receipt_identity', $identity_key); \
+                 LET $existing_identity = SELECT VALUE { schema_version: schema_version, request_id: request_id, run_id: run_id, task_id: task_id, attempt_id: attempt_id, packet_id: packet_id, dispatch_target: dispatch_target, packet_path: packet_path, backend_id: backend_id, carrier_id: carrier_id, adapter_kind: adapter_kind, adapter_capability_id: adapter_capability_id, invocation_mode: invocation_mode, dispatch_transport: dispatch_transport, receipt_mode: receipt_mode, adapter_contract_source: adapter_contract_source, adapter_contract_snapshot: adapter_contract_snapshot, adapter_contract_hash: adapter_contract_hash, adapter_operations: adapter_operations, request_path: request_path, result_path: result_path, receipt_path: receipt_path, precursor_fingerprint: precursor_fingerprint, precursor_exact_binding_key: precursor_exact_binding_key, precursor_compact_binding_key: precursor_compact_binding_key, recorded_at: recorded_at } FROM type::record('host_bridge_receipt_identity', $identity_key); \
                  IF array::len($existing_identity) > 0 AND $existing_identity[0] != $identity { \
-                   THROW 'host_bridge_receipt_binding_conflict:identity_key=' + $identity_key; \
+                    THROW 'host_bridge_receipt_binding_conflict:identity_key=' + $identity_key; \
                  }; \
-                 LET $existing_receipt = SELECT VALUE { run_id: run_id, dispatch_target: dispatch_target, dispatch_status: dispatch_status, lane_status: lane_status, supersedes_receipt_id: supersedes_receipt_id, exception_path_receipt_id: exception_path_receipt_id, dispatch_kind: dispatch_kind, dispatch_surface: dispatch_surface, dispatch_command: dispatch_command, dispatch_packet_path: dispatch_packet_path, dispatch_result_path: dispatch_result_path, blocker_code: blocker_code, downstream_dispatch_target: downstream_dispatch_target, downstream_dispatch_command: downstream_dispatch_command, downstream_dispatch_note: downstream_dispatch_note, downstream_dispatch_ready: downstream_dispatch_ready, downstream_dispatch_blockers: downstream_dispatch_blockers, downstream_dispatch_packet_path: downstream_dispatch_packet_path, downstream_dispatch_status: downstream_dispatch_status, downstream_dispatch_result_path: downstream_dispatch_result_path, downstream_dispatch_trace_path: downstream_dispatch_trace_path, downstream_dispatch_executed_count: downstream_dispatch_executed_count, downstream_dispatch_active_target: downstream_dispatch_active_target, downstream_dispatch_last_target: downstream_dispatch_last_target, activation_agent_type: activation_agent_type, activation_runtime_role: activation_runtime_role, selected_backend: selected_backend, recorded_at: recorded_at } FROM type::record('run_graph_dispatch_receipt', $run_id); \
-                 LET $matching_in_flight_receipt = array::len($existing_receipt) > 0 \
-                   AND $existing_receipt[0].run_id = $receipt.run_id \
-                   AND $existing_receipt[0].dispatch_target = $receipt.dispatch_target \
-                   AND $existing_receipt[0].dispatch_status = 'executing' \
-                   AND $existing_receipt[0].lane_status = 'lane_running' \
-                   AND $existing_receipt[0].supersedes_receipt_id = $receipt.supersedes_receipt_id \
-                   AND $existing_receipt[0].exception_path_receipt_id = $receipt.exception_path_receipt_id \
-                   AND $existing_receipt[0].dispatch_kind = $receipt.dispatch_kind \
-                   AND $existing_receipt[0].dispatch_surface = $receipt.dispatch_surface \
-                   AND $existing_receipt[0].dispatch_command = $receipt.dispatch_command \
-                   AND $existing_receipt[0].dispatch_packet_path = $receipt.dispatch_packet_path \
-                   AND $existing_receipt[0].activation_agent_type = $receipt.activation_agent_type \
-                   AND $existing_receipt[0].activation_runtime_role = $receipt.activation_runtime_role \
-                   AND $existing_receipt[0].selected_backend = $receipt.selected_backend; \
-                 IF array::len($existing_receipt) > 0 AND array::len($existing_identity) = 0 AND $matching_in_flight_receipt = false { \
-                   THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
+                 LET $compact_collision = SELECT VALUE precursor_exact_binding_key FROM host_bridge_receipt_identity WHERE precursor_compact_binding_key = $compact_key AND precursor_exact_binding_key != $identity_key; \
+                 IF array::len($compact_collision) > 0 { \
+                    THROW 'host_bridge_receipt_identity_ambiguous_compact_binding'; \
+                 }; \
+                 LET $existing_receipt = SELECT VALUE run_id FROM type::record('run_graph_dispatch_receipt', $run_id); \
+                 LET $existing_precursor = SELECT VALUE compact_binding_key FROM type::record('host_bridge_precursor_fingerprint', $run_id); \
+                 IF array::len($existing_receipt) > 0 AND array::len($existing_precursor) = 0 { \
+                    THROW 'host_bridge_precursor_fingerprint_missing'; \
+                 }; \
+                 IF array::len($existing_precursor) > 0 AND $existing_precursor[0] != $compact_key { \
+                    THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
                  }; \
                  UPSERT type::record('host_bridge_receipt_identity', $identity_key) CONTENT $identity; \
                  UPSERT type::record('run_graph_dispatch_receipt', $run_id) CONTENT $receipt; \
+                 UPSERT type::record('host_bridge_precursor_fingerprint', $run_id) CONTENT $precursor; \
                  UPSERT type::record('run_graph_owner_evidence', $owner_record_id) CONTENT $owner_record; \
                  IF $force_failure_after_binding_write { \
                    THROW 'host_bridge_receipt_binding_test_atomic_rollback'; \
                  }; \
                  COMMIT TRANSACTION;",
-            )
+             )
             .bind(("identity_key", identity_key.clone()))
+            .bind(("compact_key", compact_key))
             .bind(("identity", identity_row))
             .bind(("run_id", compact.run_id.clone()))
             .bind(("receipt", compact.clone()))
+            .bind(("precursor", precursor_row))
             .bind(("owner_record_id", owner_record_id))
             .bind(("owner_record", owner_record))
             .bind((
@@ -3080,69 +3244,10 @@ impl StateStore {
             ))
             .await?;
         if let Err(error) = response.check() {
-            if let Some(existing) = self
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await?
-            {
-                if existing != *identity {
-                    return Err(StateStoreError::InvalidTaskRecord {
-                        reason: format!(
-                            "host_bridge_receipt_binding_conflict:identity_key={identity_key}"
-                        ),
-                    });
-                }
-            }
-            let existing_receipt: Option<RunGraphDispatchReceiptStored> = self
-                .db
-                .select(("run_graph_dispatch_receipt", compact_run_id.as_str()))
-                .await?;
-            if existing_receipt.as_ref().is_some_and(|existing| {
-                !Self::host_bridge_binding_matches_in_flight_receipt(existing, &compact)
-            }) && self
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await?
-                .is_none()
-            {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "host_bridge_receipt_binding_conflict:receipt_key={}",
-                        compact_run_id
-                    ),
-                });
-            }
             return Err(error.into());
         }
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
-    }
-
-    fn host_bridge_binding_matches_in_flight_receipt(
-        existing: &RunGraphDispatchReceiptStored,
-        pending: &RunGraphDispatchReceiptStored,
-    ) -> bool {
-        existing.run_id == pending.run_id
-            && existing.dispatch_target == pending.dispatch_target
-            && existing.dispatch_status == "executing"
-            && existing.lane_status.as_deref() == Some("lane_running")
-            && existing.supersedes_receipt_id == pending.supersedes_receipt_id
-            && existing.exception_path_receipt_id == pending.exception_path_receipt_id
-            && existing.dispatch_kind == pending.dispatch_kind
-            && existing.dispatch_surface == pending.dispatch_surface
-            && existing.dispatch_command == pending.dispatch_command
-            && existing.dispatch_packet_path == pending.dispatch_packet_path
-            && existing.activation_agent_type == pending.activation_agent_type
-            && existing.activation_runtime_role == pending.activation_runtime_role
-            && existing.selected_backend == pending.selected_backend
     }
 
     pub async fn host_bridge_receipt_identity(
@@ -3152,19 +3257,31 @@ impl StateStore {
         packet_path: &str,
         request_id: &str,
     ) -> Result<Option<taskflow_host_bridge::HostBridgeReceiptIdentityV1>, StateStoreError> {
-        let key = taskflow_host_bridge::host_bridge_receipt_identity_key(
-            run_id,
-            dispatch_target,
-            packet_path,
-            request_id,
-        );
-        let row: Option<HostBridgeReceiptIdentityStored> = self
-            .db
-            .select(("host_bridge_receipt_identity", key.as_str()))
-            .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
+        let matches = self
+            .host_bridge_receipt_identities_for_run(run_id)
+            .await?
+            .into_iter()
+            .filter(|identity| {
+                identity.request_id == request_id
+                    && identity.dispatch_target == dispatch_target
+                    && taskflow_host_bridge::host_bridge_packet_paths_equivalent(
+                        &identity.packet_path,
+                        packet_path,
+                    )
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [identity] => Ok(Some(identity.clone())),
+            _ => Err(StateStoreError::InvalidTaskRecord {
+                reason: "host_bridge_receipt_identity_ambiguous_exact_binding".to_string(),
+            }),
+        }
+    }
+
+    fn host_bridge_receipt_identity_from_row(
+        row: HostBridgeReceiptIdentityStored,
+    ) -> Result<taskflow_host_bridge::HostBridgeReceiptIdentityV1, StateStoreError> {
         let adapter_operations =
             serde_json::from_value(row.adapter_operations).map_err(|error| {
                 StateStoreError::InvalidTaskRecord {
@@ -3173,6 +3290,19 @@ impl StateStore {
                     ),
                 }
             })?;
+        let precursor = taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_value(
+            row.precursor_fingerprint.as_ref(),
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        let exact_binding_key = precursor.exact_binding_key();
+        let compact_binding_key = precursor.compact_binding_key();
+        if row.precursor_exact_binding_key.as_deref() != Some(exact_binding_key.as_str())
+            || row.precursor_compact_binding_key.as_deref() != Some(compact_binding_key.as_str())
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string(),
+            });
+        }
         let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: row.schema_version,
             request_id: row.request_id,
@@ -3196,13 +3326,19 @@ impl StateStore {
             request_path: row.request_path,
             result_path: row.result_path,
             receipt_path: row.receipt_path,
-            precursor_fingerprint: row.precursor_fingerprint,
+            precursor_fingerprint: Some(precursor),
             recorded_at: row.recorded_at,
         };
         identity
             .validate()
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
-        Ok(Some(identity))
+        crate::runtime_dispatch_execution::register_host_bridge_precursor_fingerprint(
+            identity
+                .precursor_fingerprint
+                .clone()
+                .expect("validated identity has precursor fingerprint"),
+        );
+        Ok(identity)
     }
 
     pub async fn host_bridge_receipt_identities_for_run(
@@ -3218,46 +3354,7 @@ impl StateStore {
             .await?;
         let rows: Vec<HostBridgeReceiptIdentityStored> = query.take(0)?;
         rows.into_iter()
-            .map(|row| {
-                let adapter_operations =
-                    serde_json::from_value(row.adapter_operations).map_err(|error| {
-                        StateStoreError::InvalidTaskRecord {
-                            reason: format!(
-                                "host bridge receipt identity adapter_operations invalid: {error}"
-                            ),
-                        }
-                    })?;
-                let identity = taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
-                    schema_version: row.schema_version,
-                    request_id: row.request_id,
-                    run_id: row.run_id,
-                    task_id: row.task_id,
-                    attempt_id: row.attempt_id,
-                    packet_id: row.packet_id,
-                    dispatch_target: row.dispatch_target,
-                    packet_path: row.packet_path,
-                    backend_id: row.backend_id,
-                    carrier_id: row.carrier_id,
-                    adapter_kind: row.adapter_kind,
-                    adapter_capability_id: row.adapter_capability_id,
-                    invocation_mode: row.invocation_mode,
-                    dispatch_transport: row.dispatch_transport,
-                    receipt_mode: row.receipt_mode,
-                    adapter_contract_source: row.adapter_contract_source,
-                    adapter_contract_snapshot: row.adapter_contract_snapshot,
-                    adapter_contract_hash: row.adapter_contract_hash,
-                    adapter_operations,
-                    request_path: row.request_path,
-                    result_path: row.result_path,
-                    receipt_path: row.receipt_path,
-                    precursor_fingerprint: row.precursor_fingerprint,
-                    recorded_at: row.recorded_at,
-                };
-                identity
-                    .validate()
-                    .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
-                Ok(identity)
-            })
+            .map(Self::host_bridge_receipt_identity_from_row)
             .collect()
     }
 
@@ -3295,7 +3392,9 @@ impl StateStore {
         identity
             .validate()
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
-        let key = identity.identity_key();
+        let key = identity
+            .identity_key()
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let _: Option<HostBridgeReceiptIdentityStored> = self
             .db
             .delete(("host_bridge_receipt_identity", key.as_str()))
@@ -3346,6 +3445,10 @@ impl StateStore {
         let _: Option<RunGraphDispatchReceiptStored> = self
             .db
             .delete(("run_graph_dispatch_receipt", run_id))
+            .await?;
+        let _: Option<HostBridgePrecursorFingerprintStored> = self
+            .db
+            .delete(("host_bridge_precursor_fingerprint", run_id))
             .await?;
         let _ = self
             .db
@@ -6448,14 +6551,12 @@ mod tests {
         );
 
         let rows = vec![test_task_record("alias-task", "merged")];
-        assert!(
-            store
-                .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
-                    &status, &rows,
-                )
-                .await
-                .expect("task row lookup should succeed")
-        );
+        assert!(store
+            .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                &status, &rows,
+            )
+            .await
+            .expect("task row lookup should succeed"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6478,12 +6579,10 @@ mod tests {
         status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
 
-        assert!(
-            store
-                .run_graph_status_is_stale_for_task_continuation_binding(&status)
-                .await
-                .expect("terminal closure classifier should succeed")
-        );
+        assert!(store
+            .run_graph_status_is_stale_for_task_continuation_binding(&status)
+            .await
+            .expect("terminal closure classifier should succeed"));
 
         let mut malicious_status = status.clone();
         malicious_status.run_id = "malicious-retired-run".to_string();
@@ -6494,22 +6593,18 @@ mod tests {
         malicious_status.checkpoint_kind = "execution_cursor".to_string();
         malicious_status.recovery_ready = true;
 
-        assert!(
-            !store
-                .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
-                .await
-                .expect("contradictory retired closure classifier should fail closed")
-        );
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+            .await
+            .expect("contradictory retired closure classifier should fail closed"));
 
         let mut open_status = sample_run_graph_status();
         open_status.run_id = "active-run".to_string();
         open_status.task_id = "active-runtime-task".to_string();
-        assert!(
-            !store
-                .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
-                .await
-                .expect("active status classifier should succeed")
-        );
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+            .await
+            .expect("active status classifier should succeed"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6904,15 +6999,17 @@ mod tests {
         )
         .to_hex()
         .to_string();
+        let request_id = format!("request-{run_id}");
         let precursor_fingerprint =
-            taskflow_host_bridge::host_bridge_precursor_fingerprint(
-                &serde_json::to_value(receipt).expect("dispatch receipt should serialize"),
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                &request_id,
+                &serde_json::to_value(receipt).expect("test dispatch receipt should serialize"),
             )
-            .expect("dispatch fixture should fingerprint");
+            .expect("test precursor fingerprint should build");
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION
                 .to_string(),
-            request_id: format!("request-{run_id}"),
+            request_id,
             run_id: run_id.to_string(),
             task_id: format!("task-{run_id}"),
             attempt_id: format!("attempt-{run_id}"),
@@ -6942,8 +7039,8 @@ mod tests {
             request_path: format!("host-tool-bridge/requests/{run_id}.json"),
             result_path: format!("host-tool-bridge/results/{run_id}.json"),
             receipt_path: format!("host-tool-bridge/receipts/{run_id}.json"),
-            recorded_at: "2026-07-18T00:00:00Z".to_string(),
             precursor_fingerprint: Some(precursor_fingerprint),
+            recorded_at: "2026-07-18T00:00:00Z".to_string(),
         }
     }
 
@@ -6975,32 +7072,35 @@ mod tests {
 
         let mut competing_identity = identity.clone();
         competing_identity.request_id = format!("{}-competing", identity.request_id);
-        competing_identity.backend_id = format!("{}-competing", identity.backend_id);
-        let mut conflicting = progressed.clone();
-        conflicting.selected_backend = Some(competing_identity.backend_id.clone());
+        competing_identity.precursor_fingerprint = Some(
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                &competing_identity.request_id,
+                &serde_json::to_value(&receipt)
+                    .expect("competing dispatch receipt should serialize"),
+            )
+            .expect("competing precursor fingerprint should build"),
+        );
         let error = store
-            .record_host_bridge_receipt_binding(&competing_identity, &conflicting)
+            .record_host_bridge_receipt_binding(&competing_identity, &progressed)
             .await
             .expect_err("conflicting compact receipt must fail closed");
         assert!(
-            error.to_string().contains(
-                "host_bridge_receipt_binding_conflict:receipt_key=run-host-bridge-binding"
-            ),
+            error
+                .to_string()
+                .contains("host_bridge_receipt_identity_ambiguous_compact_binding"),
             "error={error:?}"
         );
 
-        assert!(
-            store
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await
-                .expect("identity lookup should succeed")
-                .is_some()
-        );
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_some());
         let stored = store
             .run_graph_dispatch_receipt(run_id)
             .await
@@ -7035,18 +7135,16 @@ mod tests {
             .await
             .expect("matching in-flight receipt should advance to host bridge pending");
 
-        assert!(
-            store
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await
-                .expect("identity lookup should succeed")
-                .is_some()
-        );
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_some());
         let stored = store
             .run_graph_dispatch_receipt(run_id)
             .await
@@ -7084,7 +7182,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("host_bridge_receipt_binding_conflict:receipt_key="),
+                .contains("host_bridge_precursor_fingerprint_conflict"),
             "error={error:?}"
         );
 
@@ -7105,32 +7203,32 @@ mod tests {
             .record_host_bridge_receipt_binding_with_forced_rollback(&identity, &receipt)
             .await
             .expect_err("forced in-transaction fault should roll back every binding row");
-        assert!(
-            store
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await
-                .expect("identity lookup should succeed")
-                .is_none()
-        );
-        assert!(
-            store
-                .run_graph_dispatch_receipt(run_id)
-                .await
-                .expect("receipt lookup should succeed")
-                .is_none()
-        );
-        assert!(
-            store
-                .run_graph_owner_evidence_record(run_id, "dispatch_receipt")
-                .await
-                .expect("owner evidence lookup should succeed")
-                .is_none()
-        );
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
+        assert!(store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .is_none());
+        assert!(store
+            .run_graph_owner_evidence_record(run_id, "dispatch_receipt")
+            .await
+            .expect("owner evidence lookup should succeed")
+            .is_none());
+        let precursor: Option<HostBridgePrecursorFingerprintStored> = store
+            .db
+            .select(("host_bridge_precursor_fingerprint", run_id))
+            .await
+            .expect("precursor lookup should succeed");
+        assert!(precursor.is_none());
 
         close_store_and_remove_root(store, root).await;
     }
@@ -7155,6 +7253,14 @@ mod tests {
                 sample_host_bridge_receipt_identity(&run_id, &packet_path, &receipt);
             let mut second_identity = first_identity.clone();
             second_identity.request_id = format!("{}-second", second_identity.request_id);
+            second_identity.precursor_fingerprint = Some(
+                taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                    &second_identity.request_id,
+                    &serde_json::to_value(&receipt)
+                        .expect("concurrent dispatch receipt should serialize"),
+                )
+                .expect("concurrent precursor fingerprint should build"),
+            );
 
             let (first_result, second_result) = tokio::join!(
                 store.record_host_bridge_receipt_binding(&first_identity, &receipt),
@@ -7177,20 +7283,16 @@ mod tests {
                 &second_identity.request_id
             };
             assert_eq!(&identities[0].request_id, winner_request_id);
-            assert!(
-                store
-                    .run_graph_dispatch_receipt(&run_id)
-                    .await
-                    .expect("receipt lookup should succeed")
-                    .is_some()
-            );
-            assert!(
-                store
-                    .run_graph_owner_evidence_record(&run_id, "dispatch_receipt")
-                    .await
-                    .expect("owner evidence lookup should succeed")
-                    .is_some()
-            );
+            assert!(store
+                .run_graph_dispatch_receipt(&run_id)
+                .await
+                .expect("receipt lookup should succeed")
+                .is_some());
+            assert!(store
+                .run_graph_owner_evidence_record(&run_id, "dispatch_receipt")
+                .await
+                .expect("owner evidence lookup should succeed")
+                .is_some());
 
             drop(second_store);
             close_store_and_remove_root(store, root).await;
@@ -7203,7 +7305,8 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let identity_run_id = "run-host-bridge-identity";
         let identity_packet_path = "/tmp/host-bridge-identity.json";
-        let identity_receipt = sample_dispatch_receipt(identity_run_id);
+        let mut identity_receipt = sample_dispatch_receipt(identity_run_id);
+        identity_receipt.dispatch_packet_path = Some(identity_packet_path.to_string());
         let identity = sample_host_bridge_receipt_identity(
             identity_run_id,
             identity_packet_path,
@@ -7214,13 +7317,77 @@ mod tests {
             .record_host_bridge_receipt_binding(&identity, &receipt)
             .await
             .expect_err("run mismatch must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("host_bridge_receipt_binding_identity_mismatch:run_or_target")
-        );
-        assert!(
-            store
+        assert!(error
+            .to_string()
+            .contains("host_bridge_receipt_binding_identity_mismatch:run_or_target"));
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_rejects_legacy_missing_or_malformed_precursor() {
+        for malformed in [false, true] {
+            let root = temp_run_graph_root(if malformed {
+                "vida-host-bridge-malformed-precursor"
+            } else {
+                "vida-host-bridge-missing-precursor"
+            });
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let run_id = if malformed {
+                "run-host-bridge-malformed-precursor"
+            } else {
+                "run-host-bridge-missing-precursor"
+            };
+            let packet_path = format!("/tmp/{run_id}.json");
+            let mut receipt = sample_dispatch_receipt(run_id);
+            receipt.dispatch_packet_path = Some(packet_path.clone());
+            let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
+            let _: Option<RunGraphDispatchReceiptStored> = store
+                .db
+                .upsert(("run_graph_dispatch_receipt", run_id))
+                .content(compact)
+                .await
+                .expect("legacy receipt should persist");
+            if malformed {
+                let row = HostBridgePrecursorFingerprintStored {
+                    schema_version:
+                        taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION
+                            .to_string(),
+                    run_id: run_id.to_string(),
+                    precursor_fingerprint: Some(serde_json::json!({"malformed": true})),
+                    exact_binding_key: None,
+                    compact_binding_key: Some("malformed".to_string()),
+                    recorded_at: receipt.recorded_at.clone(),
+                };
+                let _: Option<HostBridgePrecursorFingerprintStored> = store
+                    .db
+                    .upsert(("host_bridge_precursor_fingerprint", run_id))
+                    .content(row)
+                    .await
+                    .expect("malformed precursor should persist");
+            }
+            let identity = sample_host_bridge_receipt_identity(run_id, &packet_path, &receipt);
+            let error = store
+                .record_host_bridge_receipt_binding(&identity, &receipt)
+                .await
+                .expect_err("legacy precursor state must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains(taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING),
+                "error={error:?}"
+            );
+            assert!(store
                 .host_bridge_receipt_identity(
                     &identity.run_id,
                     &identity.dispatch_target,
@@ -7229,10 +7396,9 @@ mod tests {
                 )
                 .await
                 .expect("identity lookup should succeed")
-                .is_none()
-        );
-
-        close_store_and_remove_root(store, root).await;
+                .is_none());
+            close_store_and_remove_root(store, root).await;
+        }
     }
 
     #[test]
@@ -8766,13 +8932,11 @@ mod tests {
             .await
             .expect("read run graph status");
         assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
-        assert!(
-            store
-                .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
-                .await
-                .expect("read owner evidence")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+            .await
+            .expect("read owner evidence")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
@@ -8797,23 +8961,19 @@ mod tests {
             .record_run_graph_status(&ownerless)
             .await
             .expect("persist ownerless run graph status");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-ownerless-run")
-                .await
-                .expect("classify ownerless run")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("classify ownerless run"));
 
         store
             .record_run_graph_owner_evidence("legacy-ownerless-run", "dispatch_context")
             .await
             .expect("record owner evidence");
-        assert!(
-            !store
-                .run_graph_legacy_ownerless("legacy-ownerless-run")
-                .await
-                .expect("owner evidence should make run non-ownerless")
-        );
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("owner evidence should make run non-ownerless"));
 
         let mut claimed = sample_run_graph_status();
         claimed.run_id = "legacy-claimed-run".to_string();
@@ -8822,12 +8982,10 @@ mod tests {
             .record_run_graph_status(&claimed)
             .await
             .expect("persist claim-backed run graph status");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("classify pre-claim run")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("classify pre-claim run"));
         let claim = store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "legacy-claimed-run-write".to_string(),
@@ -8847,22 +9005,18 @@ mod tests {
             })
             .await
             .expect("acquire claim");
-        assert!(
-            !store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("claim should make run non-ownerless")
-        );
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("claim should make run non-ownerless"));
         store
             .release_orchestrator_claim(&claim.claim_id, claim.resource_revision, "test release")
             .await
             .expect("release claim");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("released claim should not block ownerless classification")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("released claim should not block ownerless classification"));
 
         let mut expired = sample_run_graph_status();
         expired.run_id = "legacy-expired-claim-run".to_string();
@@ -8897,12 +9051,10 @@ mod tests {
                 .expect("expire stale claims"),
             1
         );
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-expired-claim-run")
-                .await
-                .expect("expired claim should not block ownerless classification")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-expired-claim-run")
+            .await
+            .expect("expired claim should not block ownerless classification"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -9414,13 +9566,11 @@ mod tests {
                 .run_id,
             "run-foreign"
         );
-        assert!(
-            store
-                .latest_run_graph_status_for_current_session()
-                .await
-                .expect("read scoped latest")
-                .is_none()
-        );
+        assert!(store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read scoped latest")
+            .is_none());
 
         let mut current_status = sample_run_graph_status();
         current_status.run_id = "run-current".to_string();
@@ -10122,8 +10272,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim()
-     {
+    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim(
+    ) {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -10141,13 +10291,11 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(
-            store
-                .active_orchestrator_claims()
-                .await
-                .expect("read claims")
-                .is_empty()
-        );
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
         assert_eq!(
             store
                 .latest_explicit_run_graph_continuation_binding_for_current_session()
@@ -10207,13 +10355,11 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(
-            store
-                .active_orchestrator_claims()
-                .await
-                .expect("read claims")
-                .is_empty()
-        );
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
         assert_eq!(
             store
                 .latest_run_graph_status_for_current_session()
@@ -10303,8 +10449,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_run_graph_selector_preserves_open_closed_task_run_without_mutating_raw_status()
-     {
+    async fn operator_run_graph_selector_preserves_open_closed_task_run_without_mutating_raw_status(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10376,8 +10522,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_run_graph_selector_archives_latest_receiptless_open_handoff_without_mutating_raw_status()
-     {
+    async fn operator_run_graph_selector_archives_latest_receiptless_open_handoff_without_mutating_raw_status(
+    ) {
         let root = temp_run_graph_root("vida-operator-receiptless-archive");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let task_id = "task-receiptless-archive";
@@ -10598,8 +10744,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11896,8 +12042,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
-     {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -13029,20 +13175,18 @@ mod tests {
             .await
             .expect("record completed explicit binding");
 
-        assert!(
-            store
-                .latest_explicit_run_graph_continuation_binding()
-                .await
-                .expect("read latest explicit binding")
-                .is_none()
-        );
+        assert!(store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
-    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources()
-     {
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -13365,8 +13509,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
-     {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -13889,8 +14033,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
-     {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

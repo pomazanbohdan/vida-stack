@@ -9,7 +9,6 @@ pub mod errors;
 #[cfg(test)]
 mod legacy_normalization;
 pub mod provenance;
-pub mod precursor_fingerprint;
 pub mod receipt_binding;
 pub mod request;
 
@@ -65,16 +64,11 @@ pub use provenance::{
     HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
     host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
 };
-pub use precursor_fingerprint::{
-    host_bridge_precursor_fingerprint, HostBridgePrecursorFingerprintV1,
-    HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION,
-    HOST_BRIDGE_PRECURSOR_FINGERPRINT_MISSING,
-};
 pub use receipt_binding::{
     BLOCKER_PRECURSOR_FINGERPRINT_MISSING, DispatchReceiptBindingDecision,
-    DispatchReceiptBindingInput, HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS,
-    HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION, HostBridgeReceiptIdentityV1,
-    host_bridge_receipt_identity_compact_key, host_bridge_receipt_identity_key,
+    DispatchReceiptBindingInput, HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION,
+    HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS, HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION,
+    HostBridgePrecursorFingerprintV1, HostBridgeReceiptIdentityV1,
     validate_dispatch_receipt_binding,
 };
 pub use request::{

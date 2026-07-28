@@ -454,7 +454,25 @@ pub(crate) struct HostBridgeReceiptIdentityStored {
     pub(crate) result_path: String,
     pub(crate) receipt_path: String,
     #[serde(default)]
-    pub(crate) precursor_fingerprint: Option<String>,
+    pub(crate) precursor_fingerprint: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) precursor_exact_binding_key: Option<String>,
+    #[serde(default)]
+    pub(crate) precursor_compact_binding_key: Option<String>,
+    pub(crate) recorded_at: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct HostBridgePrecursorFingerprintStored {
+    pub(crate) schema_version: String,
+    pub(crate) run_id: String,
+    #[serde(default)]
+    pub(crate) precursor_fingerprint: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) exact_binding_key: Option<String>,
+    #[serde(default)]
+    pub(crate) compact_binding_key: Option<String>,
     pub(crate) recorded_at: String,
 }
 

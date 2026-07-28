@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -12,18 +13,54 @@ use std::os::windows::process::ExitStatusExt;
 use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
-use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
+use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
-    DispatchReceiptBindingInput, HostBridgeAdapterOperations, HostBridgeReceiptIdentityV1,
-    HostBridgeRequest, HostBridgeRequestPath, default_host_bridge_required_result_fields,
+    default_host_bridge_required_result_fields,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
     host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
-    read_host_bridge_request, validate_dispatch_receipt_binding,
+    read_host_bridge_request, validate_dispatch_receipt_binding, DispatchReceiptBindingInput,
+    HostBridgeAdapterOperations, HostBridgePrecursorFingerprintV1, HostBridgeReceiptIdentityV1,
+    HostBridgeRequest, HostBridgeRequestPath,
 };
+
+const HOST_BRIDGE_PRECURSOR_CACHE_LIMIT: usize = 256;
+
+fn host_bridge_precursor_cache(
+) -> &'static Mutex<std::collections::BTreeMap<String, HostBridgePrecursorFingerprintV1>> {
+    static CACHE: OnceLock<
+        Mutex<std::collections::BTreeMap<String, HostBridgePrecursorFingerprintV1>>,
+    > = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+pub(crate) fn register_host_bridge_precursor_fingerprint(
+    fingerprint: HostBridgePrecursorFingerprintV1,
+) {
+    let mut cache = host_bridge_precursor_cache()
+        .lock()
+        .expect("host bridge precursor cache lock");
+    cache
+        .entry(fingerprint.request_id.clone())
+        .or_insert(fingerprint);
+    while cache.len() > HOST_BRIDGE_PRECURSOR_CACHE_LIMIT {
+        let Some(oldest_key) = cache.keys().next().cloned() else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
+}
+
+fn host_bridge_precursor_fingerprint(request_id: &str) -> Option<HostBridgePrecursorFingerprintV1> {
+    host_bridge_precursor_cache()
+        .lock()
+        .expect("host bridge precursor cache lock")
+        .get(request_id)
+        .cloned()
+}
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
     crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
@@ -3365,6 +3402,11 @@ fn materialize_host_tool_bridge_request(
     let adapter_contract = HostBridgeAdapterOperations::from_registry_value(&entry_value)
         .map_err(|error| format!("host_bridge_adapter_contract_invalid:{error}"))?;
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
+    let precursor_receipt = serde_json::to_value(receipt)
+        .map_err(|error| format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"))?;
+    let precursor_fingerprint =
+        HostBridgePrecursorFingerprintV1::from_dispatch_receipt(&request_id, &precursor_receipt)?;
+    register_host_bridge_precursor_fingerprint(precursor_fingerprint);
     let paths = host_tool_bridge_artifact_paths(
         project_root,
         state_root,
@@ -3767,15 +3809,9 @@ fn host_bridge_receipt_binding_value(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     backend_id: &str,
 ) -> serde_json::Value {
-    let precursor_fingerprint =
-        taskflow_host_bridge::host_bridge_precursor_fingerprint(
-            &serde_json::to_value(receipt).expect("dispatch receipt should serialize"),
-        )
-        .expect("dispatch receipt should fingerprint");
     serde_json::json!({
         "receipt_backed": true,
         "dispatch_status": receipt.dispatch_status,
-        "precursor_fingerprint": precursor_fingerprint,
         "request_id": request.get("request_id"),
         "run_id": receipt.run_id,
         "task_id": request.get("task_id"),
@@ -3886,27 +3922,33 @@ pub(crate) fn validated_host_bridge_receipt_identity(
     let contract_source = crate::config_file_path_for_root(project_root)
         .display()
         .to_string();
-    let mut receipt_value = serde_json::to_value(receipt).map_err(|error| {
-        format!("host_bridge_receipt_identity_receipt_invalid:{error}")
-    })?;
     let precursor_fingerprint =
-        taskflow_host_bridge::host_bridge_precursor_fingerprint(&receipt_value)?;
-    receipt_value["precursor_fingerprint"] =
-        serde_json::Value::String(precursor_fingerprint.clone());
-    let identity = HostBridgeReceiptIdentityV1::from_request_with_precursor_fingerprint(
+        if let Some(fingerprint) = host_bridge_precursor_fingerprint(&request.request_id) {
+            fingerprint
+        } else {
+            let receipt_value = serde_json::to_value(receipt).map_err(|error| {
+                format!("host_bridge_precursor_fingerprint_serialize_failed:{error}")
+            })?;
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                &request.request_id,
+                &receipt_value,
+            )?
+        };
+    let recorded_at = precursor_fingerprint
+        .receipt
+        .get("recorded_at")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| taskflow_host_bridge::BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?
+        .to_string();
+    let identity = HostBridgeReceiptIdentityV1::from_request(
         &request,
         &registry,
         &contract_source,
-        time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|error| format!("host_bridge_receipt_identity_recorded_at_invalid:{error}"))?,
-        Some(precursor_fingerprint),
+        recorded_at,
+        precursor_fingerprint,
     )?;
     identity.validate_paths(state_root)?;
-    let blockers = identity.compact_receipt_blockers(&receipt_value);
-    if !blockers.is_empty() {
-        return Err(blockers.join(","));
-    }
     Ok(Some(identity))
 }
 
@@ -6048,8 +6090,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        CommandTimeoutWrapper, InternalHostDispatchRouteMode, agent_lane_dispatch_result,
-        configured_external_dispatch_output_mode,
+        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
         configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
@@ -6061,24 +6102,72 @@ mod tests {
         execute_external_agent_lane_dispatch, execute_internal_agent_lane_dispatch,
         existing_host_bridge_request_needs_pending_contract_refresh,
         external_provider_output_confirms_execution,
-        external_provider_output_confirms_execution_for_mode,
-        host_bridge_registry_missing_for_internal_backend, host_tool_bridge_artifact_paths,
-        host_tool_bridge_request_id, internal_codex_output_confirms_execution,
-        internal_host_activation_only_blocker_code, internal_host_app_bridge_requires_fail_closed,
+        external_provider_output_confirms_execution_for_mode, host_bridge_precursor_cache,
+        host_bridge_precursor_fingerprint, host_bridge_registry_missing_for_internal_backend,
+        host_tool_bridge_artifact_paths, host_tool_bridge_request_id,
+        internal_codex_output_confirms_execution, internal_host_activation_only_blocker_code,
+        internal_host_app_bridge_requires_fail_closed,
         internal_host_windows_sandbox_preflight_blocker,
         internal_host_windows_sandbox_recovery_actions, mark_dispatch_result_execution_evidence,
         materialize_host_tool_bridge_request, parse_external_provider_output,
         parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
+        register_host_bridge_precursor_fingerprint,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
+        CommandTimeoutWrapper, InternalHostDispatchRouteMode,
     };
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::yaml_lookup;
+    use crate::RuntimeConsumptionLaneSelection;
     use std::path::{Path, PathBuf};
     #[cfg(any(unix, windows))]
     use std::process::Stdio;
     #[cfg(any(unix, windows))]
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn runtime_host_bridge_precursor_cache_preserves_materialized_canonical_value() {
+        let request_id = "request-runtime-precursor-cache-contract";
+        host_bridge_precursor_cache()
+            .lock()
+            .expect("precursor cache lock")
+            .remove(request_id);
+        let receipt = external_test_receipt("internal_subagents");
+        let receipt_value =
+            serde_json::to_value(&receipt).expect("dispatch receipt should serialize");
+        let original =
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                request_id,
+                &receipt_value,
+            )
+            .expect("precursor fingerprint should build");
+        register_host_bridge_precursor_fingerprint(original.clone());
+
+        let mut advanced = receipt;
+        advanced.dispatch_status = "bridge_request_pending".to_string();
+        advanced.lane_status = "lane_running".to_string();
+        advanced.dispatch_result_path = Some(r"runtime\result.json".to_string());
+        original
+            .validate_candidate_receipt(
+                &serde_json::to_value(&advanced).expect("advanced receipt should serialize"),
+            )
+            .expect("only normalized precursor fields may advance");
+        let advanced_fingerprint =
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                request_id,
+                &serde_json::to_value(&advanced).expect("advanced receipt should serialize"),
+            )
+            .expect("advanced fingerprint should build");
+        register_host_bridge_precursor_fingerprint(advanced_fingerprint);
+
+        assert_eq!(
+            host_bridge_precursor_fingerprint(request_id),
+            Some(original)
+        );
+        host_bridge_precursor_cache()
+            .lock()
+            .expect("precursor cache lock")
+            .remove(request_id);
+    }
 
     fn capability_from_backend_profile(
         backend_entry: &serde_yaml::Value,
@@ -6193,8 +6282,8 @@ dispatch:
     }
 
     #[test]
-    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text()
-     {
+    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text(
+    ) {
         let parsed = parse_external_provider_output(
             r#"{"type":"result","subtype":"success","is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"packet text mentions authentication failed and invalid api key as configuration examples"}"#,
         )
@@ -6421,11 +6510,9 @@ dispatch:
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"Under-development features enabled: memories. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in config.toml."}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(
-            parsed_with_unstable_feature_warning
-                .error_messages
-                .is_empty()
-        );
+        assert!(parsed_with_unstable_feature_warning
+            .error_messages
+            .is_empty());
         assert!(internal_codex_output_confirms_execution(
             &parsed_with_unstable_feature_warning,
             "",
@@ -6475,13 +6562,11 @@ dispatch:
             super::internal_host_provider_failure_blocker_code(stderr, &[]),
             Some("internal_codex_windows_sandbox_unavailable")
         );
-        assert!(
-            super::internal_host_provider_failure_blocker_reason(
-                "internal_codex_windows_sandbox_unavailable",
-                stderr.to_string()
-            )
-            .contains("configured backend/runtime profile whose sandbox is supported")
-        );
+        assert!(super::internal_host_provider_failure_blocker_reason(
+            "internal_codex_windows_sandbox_unavailable",
+            stderr.to_string()
+        )
+        .contains("configured backend/runtime profile whose sandbox is supported"));
     }
 
     #[test]
@@ -6912,9 +6997,7 @@ agent_system:
             effective_internal_host_dispatch_route(None, None, &backend_id, &serde_json::json!({}))
                 .expect_err("missing route evidence must fail closed");
         assert!(error.starts_with("internal_host_dispatch_route_config_invalid:"));
-        assert!(
-            error.contains("missing_fields=execution_boundary,dispatch_transport,receipt_mode")
-        );
+        assert!(error.contains("missing_fields=execution_boundary,dispatch_transport,receipt_mode"));
         assert!(error.contains("sources=selected_system,selected_backend,selected_carrier"));
     }
 
@@ -7004,8 +7087,8 @@ agent_system:
     }
 
     #[test]
-    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport()
-     {
+    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport(
+    ) {
         let system_entry = serde_yaml::from_str(
             r#"
 execution_class: internal
@@ -7170,11 +7253,9 @@ host_environment:
         let error = super::configured_host_carrier_id(&carrier)
             .expect_err("missing configured carrier role must fail closed");
         assert!(error.starts_with("internal_codex_carrier_unavailable:"));
-        assert!(
-            !project_root
-                .join(".vida/data/state/host-tool-bridge")
-                .exists()
-        );
+        assert!(!project_root
+            .join(".vida/data/state/host-tool-bridge")
+            .exists());
         assert!(!project_root.join("host-tool-bridge").exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -7261,11 +7342,9 @@ dispatch:
         .expect_err("missing selected CLI entry must block before materialization");
 
         assert!(error.starts_with("host_bridge_adapter_registry_missing:"));
-        assert!(
-            !project_root
-                .join(".vida/data/state/host-tool-bridge")
-                .exists()
-        );
+        assert!(!project_root
+            .join(".vida/data/state/host-tool-bridge")
+            .exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -7927,18 +8006,14 @@ host_tool_bridge:
             first_request["request_path"],
             second_request["request_path"]
         );
-        assert!(
-            first_request["request_id"]
-                .as_str()
-                .expect("first request id should render")
-                .contains("dispatch-a")
-        );
-        assert!(
-            second_request["request_id"]
-                .as_str()
-                .expect("second request id should render")
-                .contains("dispatch-b")
-        );
+        assert!(first_request["request_id"]
+            .as_str()
+            .expect("first request id should render")
+            .contains("dispatch-a"));
+        assert!(second_request["request_id"]
+            .as_str()
+            .expect("second request id should render")
+            .contains("dispatch-b"));
         assert!(
             result_path.exists(),
             "first result path should remain owned by first packet"
@@ -10687,12 +10762,11 @@ host_tool_bridge:
         let command = yaml_lookup(&system, &["host_tool_bridge", "adapter_command"])
             .expect("canonical adapter command should remain in config");
         assert!(yaml_lookup(command, &["executable"]).is_some());
-        assert!(
-            argv.as_array()
-                .expect("adapter argv should be an array")
-                .iter()
-                .any(|value| value.as_str() == Some(request_path))
-        );
+        assert!(argv
+            .as_array()
+            .expect("adapter argv should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some(request_path)));
     }
 
     fn internal_codex_fallback_receipt(
@@ -11844,7 +11918,8 @@ host_tool_bridge:
         assert_eq!(request["proof_artifact_paths"], normalized_proof_paths);
         assert_eq!(request["proof_artifact_scope"], normalized_proof_paths);
         assert_eq!(
-            request["implementation_isolation"]["scope_policy"]["changed_files_must_be_subset_of_owned_or_proof_paths"],
+            request["implementation_isolation"]["scope_policy"]
+                ["changed_files_must_be_subset_of_owned_or_proof_paths"],
             true
         );
 
@@ -12217,20 +12292,16 @@ host_tool_bridge:
             refreshed_request["implementation_isolation"]["canonical_worktree_writes_allowed"],
             false
         );
-        assert!(
-            refreshed_request["owned_paths"]
-                .as_array()
-                .expect("request owned paths")
-                .iter()
-                .any(|path| path == "test")
-        );
-        assert!(
-            refreshed_request["implementation_isolation"]["owned_paths"]
-                .as_array()
-                .expect("isolation owned paths")
-                .iter()
-                .any(|path| path == "test")
-        );
+        assert!(refreshed_request["owned_paths"]
+            .as_array()
+            .expect("request owned paths")
+            .iter()
+            .any(|path| path == "test"));
+        assert!(refreshed_request["implementation_isolation"]["owned_paths"]
+            .as_array()
+            .expect("isolation owned paths")
+            .iter()
+            .any(|path| path == "test"));
 
         let _ = std::fs::remove_dir_all(project_root);
     }
@@ -12615,8 +12686,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
-     {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
+    ) {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -12687,8 +12758,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing()
-     {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
+    ) {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -13161,12 +13232,10 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(
-            !result["blocker_reason"]
-                .as_str()
-                .expect("blocker reason should render")
-                .contains("SHOULD_NOT_LAUNCH")
-        );
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -13386,18 +13455,14 @@ agent_system:
             result["external_backend_readiness"]["status"],
             "external_backend_dispatch_blocked"
         );
-        assert!(
-            result["blocker_reason"]
-                .as_str()
-                .expect("blocker reason should render")
-                .contains("disabled")
-        );
-        assert!(
-            !result["blocker_reason"]
-                .as_str()
-                .expect("blocker reason should render")
-                .contains("SHOULD_NOT_LAUNCH")
-        );
+        assert!(result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("disabled"));
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

@@ -10,6 +10,8 @@ pub const HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION: &str = "host-bridge-recei
 pub const HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION: &str =
     "host-bridge-precursor-fingerprint-v1";
 pub const BLOCKER_PRECURSOR_FINGERPRINT_MISSING: &str = "host_bridge_precursor_fingerprint_missing";
+const HOST_BRIDGE_PRECURSOR_NORMALIZED_FIELDS: &[&str] =
+    &["dispatch_status", "lane_status", "dispatch_result_path"];
 
 pub const HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS: &[&str] = &[
     "run_id",
@@ -110,6 +112,24 @@ impl HostBridgePrecursorFingerprintV1 {
             .to_hex()
         )
     }
+
+    fn candidate_with_precursor_normalization(&self, receipt: &Value) -> Result<Self, String> {
+        let mut candidate = Self::from_dispatch_receipt(&self.request_id, receipt)?;
+        for field in HOST_BRIDGE_PRECURSOR_NORMALIZED_FIELDS {
+            candidate.receipt[*field] = self.receipt[*field].clone();
+        }
+        Ok(candidate)
+    }
+
+    pub fn validate_candidate_receipt(&self, receipt: &Value) -> Result<(), String> {
+        let candidate = self.candidate_with_precursor_normalization(receipt)?;
+        if candidate.exact_binding_key() != self.exact_binding_key()
+            || candidate.compact_binding_key() != self.compact_binding_key()
+        {
+            return Err("host_bridge_precursor_fingerprint_conflict".to_string());
+        }
+        Ok(())
+    }
 }
 
 fn canonical_precursor_receipt(receipt: &Value) -> Result<Value, String> {
@@ -193,9 +213,9 @@ pub struct HostBridgeReceiptIdentityV1 {
     pub request_path: String,
     pub result_path: String,
     pub receipt_path: String,
-    pub recorded_at: String,
     #[serde(default)]
-    pub precursor_fingerprint: Option<String>,
+    pub precursor_fingerprint: Option<HostBridgePrecursorFingerprintV1>,
+    pub recorded_at: String,
 }
 
 impl HostBridgeReceiptIdentityV1 {
@@ -229,13 +249,6 @@ impl HostBridgeReceiptIdentityV1 {
                 return Err(format!("host_bridge_receipt_identity_missing:{field}"));
             }
         }
-        if self
-            .precursor_fingerprint
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err("host_bridge_precursor_fingerprint_missing".to_string());
-        }
         if self.adapter_contract_snapshot != self.adapter_operations.to_value() {
             return Err("host_bridge_receipt_identity_adapter_snapshot_mismatch".to_string());
         }
@@ -248,26 +261,70 @@ impl HostBridgeReceiptIdentityV1 {
         if self.adapter_contract_hash != expected_hash {
             return Err("host_bridge_receipt_identity_adapter_hash_mismatch".to_string());
         }
+        let precursor = self
+            .precursor_fingerprint
+            .as_ref()
+            .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        let precursor_value = serde_json::to_value(precursor)
+            .map_err(|_| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        let canonical = HostBridgePrecursorFingerprintV1::from_value(Some(&precursor_value))?;
+        if canonical != *precursor || precursor.request_id != self.request_id {
+            return Err(BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string());
+        }
+        for (field, expected) in [
+            ("run_id", self.run_id.as_str()),
+            ("dispatch_target", self.dispatch_target.as_str()),
+        ] {
+            if precursor.receipt.get(field).and_then(Value::as_str) != Some(expected) {
+                return Err(format!(
+                    "host_bridge_receipt_identity_core_mismatch:{field}"
+                ));
+            }
+        }
+        if precursor
+            .receipt
+            .get("selected_backend")
+            .and_then(Value::as_str)
+            != Some(self.backend_id.as_str())
+        {
+            return Err("host_bridge_receipt_identity_core_mismatch:backend_id".to_string());
+        }
+        if let Some(packet_path) = precursor
+            .receipt
+            .get("dispatch_packet_path")
+            .and_then(Value::as_str)
+        {
+            if !crate::host_bridge_packet_paths_equivalent(&self.packet_path, packet_path) {
+                return Err("host_bridge_receipt_identity_core_mismatch:packet_path".to_string());
+            }
+        }
         Ok(())
     }
 
-    #[must_use]
-    pub fn identity_key(&self) -> String {
-        host_bridge_receipt_identity_key(
-            &self.run_id,
-            &self.dispatch_target,
-            &self.packet_path,
-            &self.request_id,
-        )
+    pub fn identity_key(&self) -> Result<String, String> {
+        self.validate()?;
+        Ok(self
+            .precursor_fingerprint
+            .as_ref()
+            .expect("validated identity has precursor fingerprint")
+            .exact_binding_key())
     }
 
-    #[must_use]
-    pub fn compact_identity_key(&self) -> String {
-        host_bridge_receipt_identity_compact_key(
-            &self.run_id,
-            &self.dispatch_target,
-            &self.packet_path,
-        )
+    pub fn compact_binding_key(&self) -> Result<String, String> {
+        self.validate()?;
+        Ok(self
+            .precursor_fingerprint
+            .as_ref()
+            .expect("validated identity has precursor fingerprint")
+            .compact_binding_key())
+    }
+
+    pub fn validate_precursor_receipt(&self, receipt: &Value) -> Result<(), String> {
+        self.validate()?;
+        self.precursor_fingerprint
+            .as_ref()
+            .expect("validated identity has precursor fingerprint")
+            .validate_candidate_receipt(receipt)
     }
 
     #[must_use]
@@ -280,22 +337,7 @@ impl HostBridgeReceiptIdentityV1 {
         registry: &Value,
         contract_source: &str,
         recorded_at: String,
-    ) -> Result<Self, String> {
-        Self::from_request_with_precursor_fingerprint(
-            request,
-            registry,
-            contract_source,
-            recorded_at,
-            None,
-        )
-    }
-
-    pub fn from_request_with_precursor_fingerprint(
-        request: &HostBridgeRequest,
-        registry: &Value,
-        contract_source: &str,
-        recorded_at: String,
-        precursor_fingerprint: Option<String>,
+        precursor_fingerprint: HostBridgePrecursorFingerprintV1,
     ) -> Result<Self, String> {
         let configured = crate::HostBridgeAdapterOperations::from_registry_value(registry)
             .map_err(|error| format!("host_bridge_receipt_identity_registry_invalid:{error}"))?;
@@ -335,8 +377,8 @@ impl HostBridgeReceiptIdentityV1 {
             request_path: request.request_path.display().to_string(),
             result_path: request.result_path.display().to_string(),
             receipt_path: request.receipt_path.display().to_string(),
+            precursor_fingerprint: Some(precursor_fingerprint),
             recorded_at,
-            precursor_fingerprint,
         };
         identity.validate()?;
         Ok(identity)
@@ -348,81 +390,19 @@ impl HostBridgeReceiptIdentityV1 {
         registry: &Value,
         contract_source: &str,
     ) -> Result<(), String> {
-        let current =
-            Self::from_request_with_precursor_fingerprint(
-                request,
-                registry,
-                contract_source,
-                self.recorded_at.clone(),
-                self.precursor_fingerprint.clone(),
-            )?;
+        let current = Self::from_request(
+            request,
+            registry,
+            contract_source,
+            self.recorded_at.clone(),
+            self.precursor_fingerprint
+                .clone()
+                .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?,
+        )?;
         if current.as_value() != self.as_value() {
             return Err("host_bridge_receipt_identity_registry_or_request_drift".to_string());
         }
         Ok(())
-    }
-
-    pub fn compact_receipt_blockers(&self, compact: &Value) -> Vec<String> {
-        let mut blockers = Vec::new();
-        for (field, expected, actual) in [
-            (
-                "run_id",
-                self.run_id.as_str(),
-                compact.get("run_id").and_then(Value::as_str),
-            ),
-            (
-                "dispatch_target",
-                self.dispatch_target.as_str(),
-                compact.get("dispatch_target").and_then(Value::as_str),
-            ),
-            (
-                "backend_id",
-                self.backend_id.as_str(),
-                compact
-                    .get("selected_backend")
-                    .or_else(|| compact.get("backend_id"))
-                    .and_then(Value::as_str),
-            ),
-        ] {
-            if actual != Some(expected) {
-                blockers.push(format!(
-                    "host_bridge_receipt_identity_core_mismatch:{field}"
-                ));
-            }
-        }
-        if let Some(packet_path) = compact
-            .get("dispatch_packet_path")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                compact
-                    .get("source_dispatch_packet_path")
-                    .and_then(Value::as_str)
-            })
-        {
-            if !crate::host_bridge_packet_paths_equivalent(&self.packet_path, packet_path) {
-                blockers.push("host_bridge_receipt_identity_core_mismatch:packet_path".to_string());
-            }
-        }
-        if let Some(result_path) = compact
-            .get("dispatch_result_path")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            if !crate::host_bridge_packet_paths_equivalent(&self.result_path, result_path) {
-                blockers.push("host_bridge_receipt_identity_core_mismatch:result_path".to_string());
-            }
-        }
-        match (
-            self.precursor_fingerprint.as_deref(),
-            compact.get("precursor_fingerprint").and_then(Value::as_str),
-        ) {
-            (Some(expected), Some(actual)) if !actual.trim().is_empty() && actual == expected => {}
-            (None, _) | (_, None) => {
-                blockers.push("host_bridge_precursor_fingerprint_missing".to_string())
-            }
-            _ => blockers.push("host_bridge_precursor_fingerprint_mismatch".to_string()),
-        }
-        blockers
     }
 
     pub fn validate_paths(&self, state_root: &Path) -> Result<(), String> {
@@ -473,27 +453,6 @@ impl HostBridgeReceiptIdentityV1 {
         }
         Ok(())
     }
-}
-
-#[must_use]
-pub fn host_bridge_receipt_identity_key(
-    run_id: &str,
-    dispatch_target: &str,
-    packet_path: &str,
-    request_id: &str,
-) -> String {
-    let material = [run_id, dispatch_target, packet_path, request_id].join("\u{1f}");
-    format!("hbrid-{}", blake3::hash(material.as_bytes()).to_hex())
-}
-
-#[must_use]
-pub fn host_bridge_receipt_identity_compact_key(
-    run_id: &str,
-    dispatch_target: &str,
-    packet_path: &str,
-) -> String {
-    let material = [run_id, dispatch_target, packet_path].join("\u{1f}");
-    format!("hbrid-{}", blake3::hash(material.as_bytes()).to_hex())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -590,11 +549,6 @@ pub fn validate_dispatch_receipt_binding(
     let Some(receipt) = input.receipt.as_ref() else {
         return rejected(vec!["missing_dispatch_receipt".to_string()]);
     };
-    if string_field(receipt, "precursor_fingerprint")
-        .is_none_or(|fingerprint| fingerprint.trim().is_empty())
-    {
-        return rejected(vec!["host_bridge_precursor_fingerprint_missing".to_string()]);
-    }
 
     let mut blockers = Vec::new();
     if receipt.get("receipt_backed").is_some()
@@ -731,6 +685,19 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
         "rework_target": input.rework_target,
         "allowed_next_node": allowed_next_node,
         "summary": summary,
+        "carrier_id": input.request.carrier_id,
+        "adapter_kind": input.request.adapter_kind,
+        "adapter_capability_id": input.request.adapter_capability_id,
+        "invocation_mode": input.request.invocation_mode,
+        "dispatch_transport": input.request.dispatch_transport,
+        "receipt_mode": input.request.receipt_mode,
+        "adapter_contract_source": input.request.adapter_contract_source,
+        "adapter_contract_snapshot": input.request.adapter_contract_snapshot,
+        "adapter_contract_hash": input.request.adapter_contract_hash,
+        "adapter_operations": input.request.adapter_operations.as_ref().map(|ops| ops.to_value()),
+        "request_path": input.request.request_path,
+        "result_path": input.request.result_path,
+        "receipt_path": input.request.receipt_path,
         "execution_evidence": {
             "receipt_backed": true,
             "source": "vida_agent_host_bridge_scaffold",
@@ -985,7 +952,6 @@ mod tests {
         });
         receipt["dispatch_status"] = Value::String("bridge_request_pending".to_string());
         receipt["dispatch_target"] = Value::String("coach".to_string());
-        receipt["precursor_fingerprint"] = Value::String("test".to_string());
         let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
             request,
             receipt: Some(receipt),
@@ -1046,12 +1012,20 @@ mod tests {
 
     fn valid_receipt_identity() -> HostBridgeReceiptIdentityV1 {
         let request = minimal_request();
-        HostBridgeReceiptIdentityV1::from_request_with_precursor_fingerprint(
+        let mut precursor_receipt = precursor_receipt();
+        precursor_receipt["dispatch_packet_path"] =
+            Value::String(request.packet_path.display().to_string());
+        let precursor = HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+            &request.request_id,
+            &precursor_receipt,
+        )
+        .expect("precursor fingerprint");
+        HostBridgeReceiptIdentityV1::from_request(
             &request,
             &request.adapter_contract_snapshot,
             "request",
             "2026-07-18T00:00:00Z".to_string(),
-            Some("precursor-digest".to_string()),
+            precursor,
         )
         .expect("minimal request should produce a valid receipt identity")
     }
@@ -1061,13 +1035,12 @@ mod tests {
         let identity = valid_receipt_identity();
         identity.validate().expect("identity should validate");
         assert_eq!(
-            identity.identity_key(),
-            host_bridge_receipt_identity_key(
-                &identity.run_id,
-                &identity.dispatch_target,
-                &identity.packet_path,
-                &identity.request_id,
-            )
+            identity.identity_key().expect("identity key"),
+            identity
+                .precursor_fingerprint
+                .as_ref()
+                .expect("precursor fingerprint")
+                .exact_binding_key()
         );
 
         let mut missing_attempt = identity.clone();
@@ -1120,36 +1093,5 @@ mod tests {
             .validate_against_registry(&request, &registry, "request")
             .expect_err("registry drift must block identity reuse");
         assert!(error.contains("registry_drift") || error.contains("registry_or_request_drift"));
-    }
-
-    #[test]
-    fn missing_and_legacy_precursor_fingerprint_fail_closed() {
-        let identity = valid_receipt_identity();
-        let mut legacy_value = identity.as_value();
-        legacy_value
-            .as_object_mut()
-            .expect("identity should be an object")
-            .remove("precursor_fingerprint");
-        let legacy: HostBridgeReceiptIdentityV1 =
-            serde_json::from_value(legacy_value).expect("legacy identity should deserialize");
-        assert_eq!(
-            legacy
-                .validate()
-                .expect_err("legacy identity must be rejected"),
-            "host_bridge_precursor_fingerprint_missing"
-        );
-
-        let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
-            request: minimal_request(),
-            receipt: Some(serde_json::json!({
-                "request_id": "req-1",
-                "run_id": "run-1"
-            })),
-            allow_active_packet_target_override: false,
-        });
-        assert_eq!(
-            decision.blocker_codes,
-            vec!["host_bridge_precursor_fingerprint_missing"]
-        );
     }
 }

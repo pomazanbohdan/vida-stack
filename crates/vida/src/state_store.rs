@@ -87,10 +87,11 @@ use state_store_patching::{
 pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSummary};
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
-    ExecutionPlanStateRow, GovernanceStateRow, HostBridgeReceiptIdentityStored,
-    ResumabilityCapsuleRow, RoutedRunStateRow, RunGraphDispatchReceiptStored,
-    RunGraphLatestReceiptRow, RunGraphLatestRow, RunGraphLatestStateRow,
-    RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord, RunGraphReplayLineageReceipt,
+    ExecutionPlanStateRow, GovernanceStateRow, HostBridgePrecursorFingerprintStored,
+    HostBridgeReceiptIdentityStored, ResumabilityCapsuleRow, RoutedRunStateRow,
+    RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
+    RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
+    RunGraphReplayLineageReceipt,
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
@@ -203,6 +204,7 @@ DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_lane_receipt SCHEMALESS;
 DEFINE TABLE host_bridge_receipt_identity SCHEMALESS;
+DEFINE TABLE host_bridge_precursor_fingerprint SCHEMALESS;
 DEFINE TABLE orchestrator_claim SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
 DEFINE TABLE task_stage SCHEMALESS;
@@ -1121,6 +1123,20 @@ mod tests {
         )
         .to_hex()
         .to_string();
+        let mut receipt = sample_dispatch_receipt_with_status("bridge_request_pending");
+        receipt.run_id = "run-state-store".to_string();
+        receipt.dispatch_target = "developer".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.dispatch_packet_path =
+            Some("runtime-consumption/dispatch-packets/state-store.json".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+        receipt.recorded_at = "2026-07-18T00:00:00Z".to_string();
+        let precursor_fingerprint =
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                "request-state-store",
+                &serde_json::to_value(receipt).expect("test dispatch receipt should serialize"),
+            )
+            .expect("test precursor fingerprint should build");
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION
                 .to_string(),
@@ -1145,8 +1161,8 @@ mod tests {
             request_path: "host-tool-bridge/requests/state-store.json".to_string(),
             result_path: "host-tool-bridge/results/state-store.json".to_string(),
             receipt_path: "host-tool-bridge/receipts/state-store.json".to_string(),
+            precursor_fingerprint: Some(precursor_fingerprint),
             recorded_at: "2026-07-18T00:00:00Z".to_string(),
-            precursor_fingerprint: Some("state-store-precursor-digest".to_string()),
         }
     }
 
@@ -1165,6 +1181,10 @@ mod tests {
             .record_host_bridge_receipt_identity(&identity)
             .await
             .expect("identity should persist");
+        store.close().await;
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("state store should reopen");
 
         let loaded = store
             .host_bridge_receipt_identity(
@@ -1196,18 +1216,21 @@ mod tests {
 
         let mut duplicate = identity.clone();
         duplicate.request_id = "request-state-store-duplicate".to_string();
-        store
+        duplicate.precursor_fingerprint = Some(
+            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
+                &duplicate.request_id,
+                &identity
+                    .precursor_fingerprint
+                    .as_ref()
+                    .expect("identity should contain precursor fingerprint")
+                    .receipt,
+            )
+            .expect("duplicate precursor fingerprint should build"),
+        );
+        let ambiguous = store
             .record_host_bridge_receipt_identity(&duplicate)
             .await
-            .expect("duplicate compact identity should persist for ambiguity proof");
-        let ambiguous = store
-            .host_bridge_receipt_identity_for_compact(
-                &identity.run_id,
-                &identity.dispatch_target,
-                &identity.packet_path,
-            )
-            .await
-            .expect_err("multiple compact identities must block deterministically");
+            .expect_err("duplicate compact identity must block deterministically");
         assert!(ambiguous
             .to_string()
             .contains("host_bridge_receipt_identity_ambiguous_compact_binding"));
@@ -1226,19 +1249,6 @@ mod tests {
             .await
             .expect("cleared identity lookup should succeed")
             .is_none());
-        assert!(store
-            .host_bridge_receipt_identity_for_compact(
-                &identity.run_id,
-                &identity.dispatch_target,
-                &identity.packet_path,
-            )
-            .await
-            .expect("remaining compact identity lookup should succeed")
-            .is_some());
-        store
-            .clear_host_bridge_receipt_identity(&duplicate)
-            .await
-            .expect("duplicate identity clear should succeed");
         assert!(store
             .host_bridge_receipt_identity_for_compact(
                 &identity.run_id,
