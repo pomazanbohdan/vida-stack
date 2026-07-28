@@ -1,0 +1,65 @@
+{
+  "schema": "vida-native-policy-baseline-v1",
+  "families": [
+    {
+      "family": "routing",
+      "schema": 1,
+      "policy_id": "native.routing",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "if ctx.operation == \"read\" { \"readonly\" } else { \"workspace\" }",
+      "context": { "operation": "read" },
+      "expected": "readonly"
+    },
+    {
+      "family": "capability",
+      "schema": 1,
+      "policy_id": "native.capability",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "ctx.allowed && ctx.scope == \"workspace\"",
+      "context": { "allowed": true, "scope": "workspace" },
+      "expected": true
+    },
+    {
+      "family": "approval",
+      "schema": 1,
+      "policy_id": "native.approval",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "ctx.risk >= 3",
+      "context": { "risk": 3 },
+      "expected": true
+    },
+    {
+      "family": "proof",
+      "schema": 1,
+      "policy_id": "native.proof",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "ctx.evidence_count >= 2",
+      "context": { "evidence_count": 2 },
+      "expected": true
+    },
+    {
+      "family": "lifecycle",
+      "schema": 1,
+      "policy_id": "native.lifecycle",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "if ctx.status == \"active\" { \"active\" } else { \"candidate\" }",
+      "context": { "status": "active" },
+      "expected": "active"
+    },
+    {
+      "family": "model_backend",
+      "schema": 1,
+      "policy_id": "native.model_backend",
+      "version": 1,
+      "engine_abi": "rhai-policy-engine-v1",
+      "source": "if ctx.quality >= 80 { \"premium\" } else { \"standard\" }",
+      "context": { "quality": 80 },
+      "expected": "premium"
+    }
+  ]
+}
