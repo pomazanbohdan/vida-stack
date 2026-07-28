@@ -19868,9 +19868,27 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "close-reason-epic",
+                "Close reason test epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
             for (task_id, _) in reasons {
-                create_task_for_test(&store, task_id, task_id, "task", "in_progress", 1, None)
-                    .await;
+                create_task_for_test(
+                    &store,
+                    task_id,
+                    task_id,
+                    "task",
+                    "in_progress",
+                    2,
+                    Some("close-reason-epic"),
+                )
+                .await;
             }
         });
 
