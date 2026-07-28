@@ -581,6 +581,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: None,
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::json!({}),
             route_policy: serde_json::json!({}),
             activation_evidence: serde_json::json!({}),
@@ -617,6 +618,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: None,
+            policy_bundle_ref: None,
             recorded_at: "2026-06-05T00:00:00Z".to_string(),
         }
     }

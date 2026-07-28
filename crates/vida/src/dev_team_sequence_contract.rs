@@ -798,6 +798,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: None,
+            policy_bundle_ref: None,
             recorded_at: "2026-07-10T00:00:00Z".to_string(),
         }
     }

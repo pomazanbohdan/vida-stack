@@ -3425,6 +3425,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: recorded_at.to_string(),
         }
     }
@@ -4128,6 +4129,7 @@ mod tests {
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
@@ -4244,6 +4246,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("vibe_cli".to_string()),
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
@@ -6198,6 +6201,7 @@ host_environment:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
