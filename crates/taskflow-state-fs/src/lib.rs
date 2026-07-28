@@ -80,8 +80,12 @@ impl FileOperationalJournal {
                     ))
                 })?;
                 let journal = decode_journal_payload(&backup_payload, "recovery backup")?;
-                runtime_path_policy::atomic_replace_bounded(&path, &backup_payload)
-                    .map_err(storage_error)?;
+                runtime_path_policy::atomic_replace_bounded_from_file(
+                    &path,
+                    &backup_path,
+                    runtime_path_policy::AtomicReplaceLimit::default(),
+                )
+                .map_err(storage_error)?;
                 journal
             }
         };
@@ -145,9 +149,12 @@ impl FileOperationalJournal {
         let backup_path = self.backup_path();
         reject_symlink(&backup_path)?;
         if self.path.exists() {
-            let current_payload = fs::read(&self.path).map_err(storage_error)?;
-            runtime_path_policy::atomic_replace_bounded(&backup_path, &current_payload)
-                .map_err(storage_error)?;
+            runtime_path_policy::atomic_replace_bounded_from_file(
+                &backup_path,
+                &self.path,
+                runtime_path_policy::AtomicReplaceLimit::default(),
+            )
+            .map_err(storage_error)?;
         }
         #[cfg(test)]
         if take_partial_write_injection() {
@@ -726,6 +733,39 @@ mod tests {
                 replay_hash: "hash".to_string(),
             });
         });
+    }
+
+    #[test]
+    fn filesystem_backup_stream_rejects_oversize_without_mutation() {
+        let path = temp_snapshot_path().with_extension("journal.json");
+        let backup_path = path.with_extension("bak");
+        let source = fs::File::create(&path).expect("source should be created");
+        source
+            .set_len(runtime_path_policy::HARD_ATOMIC_REPLACE_MAX_BYTES + 1)
+            .expect("sparse oversize source should be created");
+        drop(source);
+        fs::write(&backup_path, b"unchanged backup").expect("backup should be writable");
+        let journal = FileOperationalJournal {
+            path: path.clone(),
+            journal: Default::default(),
+            persistence_error: None,
+        };
+
+        let error = journal
+            .persist()
+            .expect_err("oversize source must fail closed");
+
+        assert!(error.to_string().contains("exceeds 67108864 bytes"));
+        assert_eq!(
+            fs::read(&backup_path).expect("backup should remain readable"),
+            b"unchanged backup"
+        );
+        assert_eq!(
+            fs::metadata(&path).expect("source should remain").len(),
+            runtime_path_policy::HARD_ATOMIC_REPLACE_MAX_BYTES + 1
+        );
+        fs::remove_file(path).expect("source should be removed");
+        fs::remove_file(backup_path).expect("backup should be removed");
     }
 
     #[cfg(unix)]

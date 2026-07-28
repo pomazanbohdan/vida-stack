@@ -6,7 +6,9 @@ pub mod state_root;
 pub mod symlink_policy;
 
 pub use atomic_write::{
-    atomic_replace_bounded, atomic_replace_bounded_with_limit, DEFAULT_ATOMIC_REPLACE_MAX_BYTES,
+    AtomicReplaceLimit, DEFAULT_ATOMIC_REPLACE_MAX_BYTES, HARD_ATOMIC_REPLACE_MAX_BYTES,
+    atomic_replace_bounded, atomic_replace_bounded_from_file, atomic_replace_bounded_from_reader,
+    atomic_replace_bounded_with_limit,
 };
 
 pub use safe_path::{

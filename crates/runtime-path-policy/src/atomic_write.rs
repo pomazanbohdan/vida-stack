@@ -1,10 +1,12 @@
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
+#[cfg(all(test, windows))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use atomic_write_file::AtomicWriteFile;
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, Metadata, OpenOptions};
+use cap_std::fs::{Dir, Metadata, OpenOptions, Permissions};
 use serde::Serialize;
 
 use crate::safe_path::{NewStateOutputPath, PathPolicyError};
@@ -14,6 +16,8 @@ pub const DEFAULT_ATOMIC_REPLACE_MAX_BYTES: u64 = HARD_ATOMIC_REPLACE_MAX_BYTES;
 const MAX_TEMP_FILE_ATTEMPTS: usize = 128;
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(test, windows))]
+static INJECT_WINDOWS_MOVE_FAILURE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AtomicReplaceLimit(u64);
@@ -94,6 +98,49 @@ pub fn atomic_replace_bounded_from_reader(
     )
 }
 
+pub fn atomic_replace_bounded_from_file(
+    destination: impl AsRef<Path>,
+    source: impl AsRef<Path>,
+    limit: AtomicReplaceLimit,
+) -> Result<(), PathPolicyError> {
+    let source = source.as_ref();
+    let kind = crate::safe_path::ArtifactPathKind::GenericJson;
+    let parent = source
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = source.file_name().ok_or_else(|| PathPolicyError::Read {
+        kind,
+        path: source.to_path_buf(),
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "atomic replacement source has no file name",
+        ),
+    })?;
+    let parent_dir = Dir::open_ambient_dir(parent, ambient_authority()).map_err(|error| {
+        PathPolicyError::Metadata {
+            kind,
+            path: source.to_path_buf(),
+            source: error,
+        }
+    })?;
+    let source_leaf = Path::new(file_name);
+    validate_single_component(source_leaf, kind, source)?;
+    validate_atomic_replace_source(&parent_dir, source_leaf, kind, source, limit)?;
+
+    let options = bounded_source_open_options();
+    let source_file = parent_dir
+        .open_with(source_leaf, &options)
+        .map_err(|error| PathPolicyError::Read {
+            kind,
+            path: source.to_path_buf(),
+            source: error,
+        })?;
+    validate_opened_atomic_replace_source(&source_file, kind, source, limit)?;
+
+    atomic_replace_bounded_from_reader(destination, source_file, limit)
+}
+
 fn commit_destination(
     parent: &Path,
     destination: &Path,
@@ -116,23 +163,6 @@ fn commit_destination(
         let _ = (parent, kind);
         Ok(destination.to_path_buf())
     }
-}
-
-pub fn atomic_replace_bounded_from_reader_at(
-    parent_dir: &Dir,
-    destination: impl AsRef<Path>,
-    reader: impl Read,
-    limit: AtomicReplaceLimit,
-) -> Result<(), PathPolicyError> {
-    let destination = destination.as_ref();
-    atomic_replace_bounded_from_reader_at_impl(
-        parent_dir,
-        destination,
-        destination,
-        destination,
-        reader,
-        limit,
-    )
 }
 
 fn atomic_replace_bounded_from_reader_at_impl(
@@ -181,9 +211,9 @@ fn atomic_replace_bounded_from_reader_at_impl(
                 })?;
             written = next_written;
         }
-        if let Some(permissions) = existing_permissions {
+        if let Some(permissions) = existing_permissions.as_ref() {
             temp.file()
-                .set_permissions(permissions)
+                .set_permissions(permissions.clone())
                 .map_err(|source| PathPolicyError::Write {
                     kind,
                     path: error_path.to_path_buf(),
@@ -217,6 +247,7 @@ fn atomic_replace_bounded_from_reader_at_impl(
         destination,
         absolute_destination,
         destination_exists,
+        existing_permissions.as_ref(),
     ) {
         Ok(()) => sync_atomic_replace_parent(parent_dir, kind, error_path),
         Err(failure) => {
@@ -281,6 +312,93 @@ fn validate_atomic_replace_destination(
     }
 }
 
+fn validate_atomic_replace_source(
+    parent_dir: &Dir,
+    source: &Path,
+    kind: crate::safe_path::ArtifactPathKind,
+    error_path: &Path,
+    limit: AtomicReplaceLimit,
+) -> Result<(), PathPolicyError> {
+    let metadata =
+        parent_dir
+            .symlink_metadata(source)
+            .map_err(|source| PathPolicyError::Metadata {
+                kind,
+                path: error_path.to_path_buf(),
+                source,
+            })?;
+    validate_atomic_replace_source_metadata(&metadata, kind, error_path, limit)
+}
+
+fn validate_opened_atomic_replace_source(
+    source: &cap_std::fs::File,
+    kind: crate::safe_path::ArtifactPathKind,
+    error_path: &Path,
+    limit: AtomicReplaceLimit,
+) -> Result<(), PathPolicyError> {
+    let metadata = source
+        .metadata()
+        .map_err(|source| PathPolicyError::Metadata {
+            kind,
+            path: error_path.to_path_buf(),
+            source,
+        })?;
+    validate_atomic_replace_source_metadata(&metadata, kind, error_path, limit)
+}
+
+fn validate_atomic_replace_source_metadata(
+    metadata: &Metadata,
+    kind: crate::safe_path::ArtifactPathKind,
+    error_path: &Path,
+    limit: AtomicReplaceLimit,
+) -> Result<(), PathPolicyError> {
+    if metadata_is_link_like(metadata) {
+        return Err(PathPolicyError::Symlink {
+            kind,
+            path: error_path.to_path_buf(),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(PathPolicyError::NotRegularFile {
+            kind,
+            path: error_path.to_path_buf(),
+        });
+    }
+    if metadata.len() > limit.max_bytes() {
+        return Err(PathPolicyError::TooLarge {
+            kind,
+            path: error_path.to_path_buf(),
+            max_bytes: limit.max_bytes(),
+        });
+    }
+    Ok(())
+}
+
+fn bounded_source_open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_bounded_source_open_options(&mut options);
+    options
+}
+
+#[cfg(unix)]
+fn apply_bounded_source_open_options(options: &mut OpenOptions) {
+    use cap_std::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+#[cfg(windows)]
+fn apply_bounded_source_open_options(options: &mut OpenOptions) {
+    use cap_std::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_bounded_source_open_options(_options: &mut OpenOptions) {}
+
 struct OwnedTempFile {
     name: PathBuf,
     file: Option<cap_std::fs::File>,
@@ -310,13 +428,27 @@ impl OwnedTempFile {
         destination: &Path,
         absolute_destination: &Path,
         destination_exists: bool,
+        original_permissions: Option<&Permissions>,
     ) -> Result<(), AtomicRenameFailure> {
-        #[cfg(windows)]
-        let _ = (parent_dir, destination, destination_exists);
         #[cfg(not(windows))]
-        let _ = (absolute_destination, destination_exists);
+        let _ = (
+            absolute_destination,
+            destination_exists,
+            original_permissions,
+        );
         #[cfg(windows)]
         {
+            let restore_readonly =
+                destination_exists && original_permissions.is_some_and(Permissions::readonly);
+            if restore_readonly {
+                let mut writable = original_permissions
+                    .expect("readonly destination has original permissions")
+                    .clone();
+                writable.set_readonly(false);
+                if let Err(source) = parent_dir.set_permissions(destination, writable) {
+                    return Err(AtomicRenameFailure { source, temp: self });
+                }
+            }
             let temp_path = absolute_destination
                 .parent()
                 .and_then(|parent| parent.canonicalize().ok())
@@ -324,7 +456,14 @@ impl OwnedTempFile {
             let result = match temp_path {
                 Some(temp_path) => {
                     debug_assert!(self.file.is_some());
-                    replace_file_windows(&temp_path, absolute_destination)
+                    if take_windows_move_failure_injection() {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "injected Windows atomic move failure",
+                        ))
+                    } else {
+                        replace_file_windows(&temp_path, absolute_destination)
+                    }
                 }
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -333,7 +472,25 @@ impl OwnedTempFile {
             };
             return match result {
                 Ok(()) => Ok(()),
-                Err(source) => Err(AtomicRenameFailure { source, temp: self }),
+                Err(mut source) => {
+                    if restore_readonly {
+                        if let Err(restore_error) = restore_windows_destination_permissions(
+                            parent_dir,
+                            destination,
+                            original_permissions
+                                .expect("readonly destination has original permissions")
+                                .clone(),
+                        ) {
+                            source = io::Error::new(
+                                restore_error.kind(),
+                                format!(
+                                    "Windows atomic move failed: {source}; permission restoration failed: {restore_error}"
+                                ),
+                            );
+                        }
+                    }
+                    Err(AtomicRenameFailure { source, temp: self })
+                }
             };
         }
 
@@ -349,6 +506,35 @@ impl OwnedTempFile {
     fn cleanup(self, parent_dir: &Dir) {
         drop(self.file);
         let _ = parent_dir.remove_file(&self.name);
+    }
+}
+
+#[cfg(all(test, windows))]
+fn take_windows_move_failure_injection() -> bool {
+    INJECT_WINDOWS_MOVE_FAILURE.swap(false, Ordering::SeqCst)
+}
+
+#[cfg(all(not(test), windows))]
+fn take_windows_move_failure_injection() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn restore_windows_destination_permissions(
+    parent_dir: &Dir,
+    destination: &Path,
+    permissions: Permissions,
+) -> io::Result<()> {
+    match parent_dir.symlink_metadata(destination) {
+        Ok(metadata) if !metadata_is_link_like(&metadata) && metadata.is_file() => {
+            parent_dir.set_permissions(destination, permissions)
+        }
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "refusing to restore permissions through a replaced destination",
+        )),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source),
     }
 }
 
@@ -418,7 +604,7 @@ fn sync_atomic_replace_parent(
     #[cfg(windows)]
     {
         // Windows durability is completed by the successful
-        // ReplaceFileW/MoveFileExW WRITE_THROUGH rename immediately before this call.
+        // MoveFileExW WRITE_THROUGH rename immediately before this call.
         let _ = (parent_dir, kind, destination);
         Ok(())
     }
@@ -692,26 +878,116 @@ mod tests {
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn atomic_replace_cap_dir_skips_colliding_temp_name() {
         let root = temp_root("collision");
-        let parent_dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        let destination = root.join("result.bin");
         let next_sequence = TEMP_FILE_SEQUENCE.load(Ordering::Relaxed);
         let collision = format!(".result.bin.{}.{}.tmp", std::process::id(), next_sequence);
-        parent_dir.write(&collision, b"owned collision").unwrap();
+        std::fs::write(root.join(&collision), b"owned collision").unwrap();
 
-        atomic_replace_bounded_from_reader_at(
-            &parent_dir,
-            "result.bin",
+        atomic_replace_bounded_from_reader(
+            &destination,
             Cursor::new(b"replacement"),
             AtomicReplaceLimit::default(),
         )
         .unwrap();
 
-        assert_eq!(parent_dir.read("result.bin").unwrap(), b"replacement");
-        assert_eq!(parent_dir.read(&collision).unwrap(), b"owned collision");
-        assert_eq!(parent_dir.entries().unwrap().count(), 2);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
+        assert_eq!(
+            std::fs::read(root.join(&collision)).unwrap(),
+            b"owned collision"
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn atomic_replace_from_file_rejects_oversize_without_mutation_or_temp() {
+        let root = temp_root("source-oversize");
+        let source = root.join("source.bin");
+        let destination = root.join("result.bin");
+        std::fs::write(&source, b"streamed payload").unwrap();
+        std::fs::write(&destination, b"unchanged").unwrap();
+
+        let error =
+            atomic_replace_bounded_from_file(&destination, &source, AtomicReplaceLimit::new(8))
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            PathPolicyError::TooLarge { max_bytes: 8, .. }
+        ));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"unchanged");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replace_from_file_rejects_symlink_source_without_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("source-symlink");
+        let source_target = root.join("source-target.bin");
+        let source_link = root.join("source-link.bin");
+        let destination = root.join("result.bin");
+        std::fs::write(&source_target, b"source contents").unwrap();
+        symlink(&source_target, &source_link).unwrap();
+        std::fs::write(&destination, b"unchanged").unwrap();
+
+        let error = atomic_replace_bounded_from_file(
+            &destination,
+            &source_link,
+            AtomicReplaceLimit::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { .. }));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"unchanged");
+        assert!(
+            std::fs::symlink_metadata(&source_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_replace_from_file_rejects_reparse_source_without_mutation() {
+        use std::os::windows::fs::symlink_file;
+
+        let root = temp_root("source-reparse");
+        let source_target = root.join("source-target.bin");
+        let source_link = root.join("source-link.bin");
+        let destination = root.join("result.bin");
+        std::fs::write(&source_target, b"source contents").unwrap();
+        match symlink_file(&source_target, &source_link) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                return;
+            }
+            Err(error) => panic!("source reparse point should be created: {error}"),
+        }
+        std::fs::write(&destination, b"unchanged").unwrap();
+
+        let error = atomic_replace_bounded_from_file(
+            &destination,
+            &source_link,
+            AtomicReplaceLimit::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { .. }));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"unchanged");
+        assert!(metadata_is_link_like(
+            &Dir::open_ambient_dir(&root, ambient_authority())
+                .unwrap()
+                .symlink_metadata("source-link.bin")
+                .unwrap()
+        ));
     }
 
     #[cfg(not(windows))]
@@ -731,7 +1007,7 @@ mod tests {
         let occupied = root.join("occupied");
 
         let failure = temp
-            .rename_into(&parent_dir, Path::new("occupied"), &occupied, true)
+            .rename_into(&parent_dir, Path::new("occupied"), &occupied, true, None)
             .expect_err("renaming a file over a directory must fail");
 
         assert!(failure.temp.file.is_some());
@@ -763,7 +1039,7 @@ mod tests {
         let occupied = root.join("occupied");
 
         let failure = temp
-            .rename_into(&parent_dir, Path::new("occupied"), &occupied, true)
+            .rename_into(&parent_dir, Path::new("occupied"), &occupied, true, None)
             .expect_err("replacing a directory must fail");
         failure.temp.cleanup(&parent_dir);
 
@@ -803,6 +1079,58 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
         let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
         assert!(permissions.readonly());
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&destination, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_replace_windows_restores_readonly_after_move_failure() {
+        let root = temp_root("windows-readonly-restore");
+        let destination = root.join("result.bin");
+        std::fs::write(&destination, b"old").unwrap();
+        let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&destination, permissions).unwrap();
+        let parent_dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        let original_permissions = parent_dir
+            .symlink_metadata("result.bin")
+            .unwrap()
+            .permissions();
+        let mut temp = create_temp_file(
+            &parent_dir,
+            Path::new("result.bin"),
+            ArtifactPathKind::GenericJson,
+            Path::new("result.bin"),
+        )
+        .unwrap();
+        temp.file_mut().write_all(b"replacement").unwrap();
+        temp.file()
+            .set_permissions(original_permissions.clone())
+            .unwrap();
+        temp.file().sync_all().unwrap();
+        INJECT_WINDOWS_MOVE_FAILURE.store(true, Ordering::SeqCst);
+
+        let failure = temp
+            .rename_into(
+                &parent_dir,
+                Path::new("result.bin"),
+                &destination,
+                true,
+                Some(&original_permissions),
+            )
+            .expect_err("injected move failure must be returned");
+
+        assert!(
+            failure
+                .source
+                .to_string()
+                .contains("injected Windows atomic move failure")
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"old");
+        let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
+        assert!(permissions.readonly());
+        failure.temp.cleanup(&parent_dir);
         permissions.set_readonly(false);
         std::fs::set_permissions(&destination, permissions).unwrap();
     }
