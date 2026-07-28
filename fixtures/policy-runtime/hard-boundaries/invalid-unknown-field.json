@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "policy_id": "hard-boundary-invalid-field",
+  "version": 1,
+  "engine_abi": "rhai-policy-engine-v1",
+  "source": "true",
+  "effective_decision": "allow"
+}

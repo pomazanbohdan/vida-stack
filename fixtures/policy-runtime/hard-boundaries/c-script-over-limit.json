@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "policy_id": "hard-boundary-c-script-over-limit",
+  "version": 1,
+  "engine_abi": "rhai-policy-engine-v1",
+  "source": "                                                                 true"
+}
