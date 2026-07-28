@@ -563,6 +563,19 @@ fn read_bounded_text(
     max_bytes: u64,
     too_large_code: &'static str,
 ) -> Result<String, PolicyFailure> {
+    let path_metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        PolicyFailure::new(
+            "policy_bundle_metadata_failed",
+            format!("{}: {error}", path.display()),
+        )
+    })?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(PolicyFailure::new(
+            "policy_bundle_read_failed",
+            format!("{}: input must be a regular file", path.display()),
+        ));
+    }
+
     let mut file = File::open(path).map_err(|error| {
         PolicyFailure::new(
             "policy_bundle_read_failed",
@@ -811,6 +824,32 @@ mod tests {
         let (root, path) = bundle_path(&"x".repeat(Limits::default().max_script_size + 1));
         let error = check_bundle(&path).expect_err("source must be bounded");
         assert_eq!(error.code, "policy_source_too_large");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let (root, path) = bundle_path("1");
+        let link = root.join("bundle-link.json");
+        symlink(&path, &link).expect("symlink");
+
+        let error = read_bounded_bundle(&link).expect_err("symlink must be rejected");
+        assert_eq!(error.code, "policy_bundle_read_failed");
+        assert!(error.detail.contains("input must be a regular file"));
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_non_regular_files() {
+        let (root, _) = bundle_path("1");
+
+        let error = read_bounded_bundle(&root).expect_err("directory must be rejected");
+        assert_eq!(error.code, "policy_bundle_read_failed");
+        assert!(error.detail.contains("input must be a regular file"));
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
