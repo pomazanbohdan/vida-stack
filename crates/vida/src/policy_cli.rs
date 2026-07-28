@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use operator_output::toon_report;
+use runtime_path_policy::atomic_replace_bounded_with_limit;
 use serde_json::{json, Value};
 use vida_policy_rhai::fixture::MAX_FIXTURE_CORPUS_BYTES;
 use vida_policy_rhai::{
@@ -11,7 +12,14 @@ use vida_policy_rhai::{
     Limits, PolicyBundle, PolicyBundleCache,
 };
 
+use crate::state_store::policy::{
+    PolicyBundleRecord, PolicyLifecycleStore, PolicyLifecycleStoreError,
+    PolicyLifecycleStoreSnapshot, PolicyTestReceipt,
+};
+
 const MAX_POLICY_BUNDLE_BYTES: u64 = 64 * 1024;
+const MAX_POLICY_STORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_POLICY_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const POLICY_CLI_SCHEMA_VERSION: &str = "vida-policy-cli-v1";
 
 #[derive(Debug)]
@@ -42,6 +50,34 @@ pub(crate) fn run_policy(args: crate::PolicyArgs) -> ExitCode {
     match args.command {
         crate::PolicyCommand::Check(args) => run_check(&args.bundle, args.json),
         crate::PolicyCommand::Test(args) => run_test(&args.bundle, &args.fixtures, args.json),
+        crate::PolicyCommand::Import(args) => {
+            run_import(&args.bundle, &args.store, args.output.as_deref(), args.json)
+        }
+        crate::PolicyCommand::Activate(args) => run_activate(
+            &args.store,
+            &args.bundle_id,
+            &args.test_receipt,
+            args.output.as_deref(),
+            args.json,
+        ),
+        crate::PolicyCommand::Status(args) => {
+            run_status(&args.store, args.output.as_deref(), args.json)
+        }
+        crate::PolicyCommand::Explain(args) => run_explain(
+            &args.store,
+            args.bundle_id.as_deref(),
+            args.output.as_deref(),
+            args.json,
+        ),
+        crate::PolicyCommand::Rollback(args) => run_rollback(
+            &args.store,
+            &args.bundle_id,
+            args.output.as_deref(),
+            args.json,
+        ),
+        crate::PolicyCommand::Export(args) => {
+            run_export(&args.store, args.output.as_deref(), args.json)
+        }
     }
 }
 
@@ -61,6 +97,294 @@ fn run_check(path: &Path, as_json: bool) -> ExitCode {
 fn run_test(bundle_path: &Path, fixtures_path: &Path, as_json: bool) -> ExitCode {
     let payload = test_payload(bundle_path, fixtures_path);
     emit("vida policy test", &payload, as_json);
+    if payload["status"] == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn run_import(
+    bundle_path: &Path,
+    store_path: &Path,
+    output_path: Option<&Path>,
+    as_json: bool,
+) -> ExitCode {
+    lifecycle_result(
+        "vida policy import",
+        import_payload(bundle_path, store_path),
+        output_path,
+        as_json,
+    )
+}
+
+fn run_activate(
+    store_path: &Path,
+    bundle_id: &str,
+    receipt_path: &Path,
+    output_path: Option<&Path>,
+    as_json: bool,
+) -> ExitCode {
+    lifecycle_result(
+        "vida policy activate",
+        activate_payload(store_path, bundle_id, receipt_path),
+        output_path,
+        as_json,
+    )
+}
+
+fn run_status(store_path: &Path, output_path: Option<&Path>, as_json: bool) -> ExitCode {
+    lifecycle_result(
+        "vida policy status",
+        status_payload(store_path),
+        output_path,
+        as_json,
+    )
+}
+
+fn run_explain(
+    store_path: &Path,
+    bundle_id: Option<&str>,
+    output_path: Option<&Path>,
+    as_json: bool,
+) -> ExitCode {
+    lifecycle_result(
+        "vida policy explain",
+        explain_payload(store_path, bundle_id),
+        output_path,
+        as_json,
+    )
+}
+
+fn run_rollback(
+    store_path: &Path,
+    bundle_id: &str,
+    output_path: Option<&Path>,
+    as_json: bool,
+) -> ExitCode {
+    lifecycle_result(
+        "vida policy rollback",
+        rollback_payload(store_path, bundle_id),
+        output_path,
+        as_json,
+    )
+}
+
+fn run_export(store_path: &Path, output_path: Option<&Path>, as_json: bool) -> ExitCode {
+    lifecycle_result(
+        "vida policy export",
+        export_payload(store_path),
+        output_path,
+        as_json,
+    )
+}
+
+fn import_payload(bundle_path: &Path, store_path: &Path) -> Result<Value, PolicyFailure> {
+    let checked = check_bundle(bundle_path)?;
+    let mut store = load_store(store_path, true)?;
+    let record = PolicyBundleRecord::from_bundle(&checked.bundle, checked.digest.clone());
+    let bundle_id = record.bundle_id.clone();
+    store.import_bundle(record).map_err(store_failure)?;
+    save_store(store_path, &store)?;
+    Ok(lifecycle_success(
+        "vida policy import",
+        json!({
+            "bundle": {
+                "bundle_id": bundle_id,
+                "policy_id": checked.bundle.policy_id,
+                "version": checked.bundle.version,
+                "engine_abi": checked.bundle.engine_abi,
+                "content_digest": checked.digest,
+                "lifecycle": "candidate",
+            },
+            "store": store_path.display().to_string(),
+        }),
+    ))
+}
+
+fn activate_payload(
+    store_path: &Path,
+    bundle_id: &str,
+    receipt_path: &Path,
+) -> Result<Value, PolicyFailure> {
+    let mut store = load_store(store_path, false)?;
+    let receipt = read_test_receipt(receipt_path)?;
+    let test_id = receipt.test_id.clone();
+    store.record_test_receipt(receipt).map_err(store_failure)?;
+    store.activate(bundle_id).map_err(store_failure)?;
+    save_store(store_path, &store)?;
+    Ok(lifecycle_success(
+        "vida policy activate",
+        json!({
+            "bundle_id": bundle_id,
+            "test_id": test_id,
+            "active_pointer": store.active_pointer(),
+            "last_known_good": store.last_known_good(),
+            "store": store_path.display().to_string(),
+        }),
+    ))
+}
+
+fn status_payload(store_path: &Path) -> Result<Value, PolicyFailure> {
+    let store = load_store(store_path, false)?;
+    let snapshot = store.snapshot();
+    Ok(lifecycle_success(
+        "vida policy status",
+        json!({
+            "active_pointer": snapshot.active_pointer,
+            "last_known_good": snapshot.last_known_good,
+            "bundles": snapshot.bundles.iter().map(bundle_metadata).collect::<Vec<_>>(),
+            "test_receipts": snapshot.test_receipts,
+            "store": store_path.display().to_string(),
+        }),
+    ))
+}
+
+fn explain_payload(store_path: &Path, bundle_id: Option<&str>) -> Result<Value, PolicyFailure> {
+    let store = load_store(store_path, false)?;
+    let snapshot = store.snapshot();
+    let bundle = match bundle_id {
+        Some(bundle_id) => snapshot
+            .bundles
+            .iter()
+            .find(|bundle| bundle.bundle_id == bundle_id)
+            .map(bundle_metadata)
+            .ok_or_else(|| {
+                PolicyFailure::new(
+                    "policy_bundle_not_found",
+                    format!("policy bundle {bundle_id} not found"),
+                )
+            })?,
+        None => json!({
+            "active_pointer": snapshot.active_pointer,
+            "last_known_good": snapshot.last_known_good,
+            "bundle_count": snapshot.bundles.len(),
+        }),
+    };
+    Ok(lifecycle_success(
+        "vida policy explain",
+        json!({
+            "bundle": bundle,
+            "raw_source_exposed": false,
+            "store": store_path.display().to_string(),
+        }),
+    ))
+}
+
+fn rollback_payload(store_path: &Path, bundle_id: &str) -> Result<Value, PolicyFailure> {
+    let mut store = load_store(store_path, false)?;
+    store.rollback(bundle_id).map_err(store_failure)?;
+    save_store(store_path, &store)?;
+    Ok(lifecycle_success(
+        "vida policy rollback",
+        json!({
+            "quarantined_bundle_id": bundle_id,
+            "active_pointer": store.active_pointer(),
+            "last_known_good": store.last_known_good(),
+            "store": store_path.display().to_string(),
+        }),
+    ))
+}
+
+fn export_payload(store_path: &Path) -> Result<Value, PolicyFailure> {
+    let store = load_store(store_path, false)?;
+    Ok(lifecycle_success(
+        "vida policy export",
+        json!({"snapshot": store.snapshot()}),
+    ))
+}
+
+fn load_store(path: &Path, allow_missing: bool) -> Result<PolicyLifecycleStore, PolicyFailure> {
+    if allow_missing && !path.exists() {
+        return Ok(PolicyLifecycleStore::default());
+    }
+    let raw = read_bounded_text(path, MAX_POLICY_STORE_BYTES, "policy_store_too_large")
+        .map_err(|error| PolicyFailure::new("policy_store_read_failed", error.detail))?;
+    let snapshot: PolicyLifecycleStoreSnapshot = serde_json::from_str(&raw)
+        .map_err(|error| PolicyFailure::new("policy_store_json_invalid", error.to_string()))?;
+    PolicyLifecycleStore::from_snapshot(snapshot).map_err(store_failure)
+}
+
+fn save_store(path: &Path, store: &PolicyLifecycleStore) -> Result<(), PolicyFailure> {
+    let body = serde_json::to_string(&store.snapshot())
+        .map_err(|error| PolicyFailure::new("policy_store_serialize_failed", error.to_string()))?;
+    atomic_replace_bounded_with_limit(path, body.as_bytes(), MAX_POLICY_OUTPUT_BYTES)
+        .map_err(|error| PolicyFailure::new("policy_store_write_failed", error.to_string()))
+}
+
+fn read_test_receipt(path: &Path) -> Result<PolicyTestReceipt, PolicyFailure> {
+    let raw = read_bounded_text(
+        path,
+        MAX_POLICY_BUNDLE_BYTES,
+        "policy_test_receipt_too_large",
+    )
+    .map_err(|error| PolicyFailure::new("policy_test_receipt_read_failed", error.detail))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| PolicyFailure::new("policy_test_receipt_json_invalid", error.to_string()))
+}
+
+fn bundle_metadata(bundle: &PolicyBundleRecord) -> Value {
+    json!({
+        "bundle_id": bundle.bundle_id,
+        "policy_id": bundle.policy_id,
+        "version": bundle.version,
+        "engine_abi": bundle.engine_abi,
+        "content_digest": bundle.content_digest,
+        "lifecycle": bundle.lifecycle,
+    })
+}
+
+fn store_failure(error: PolicyLifecycleStoreError) -> PolicyFailure {
+    PolicyFailure::new(error.code(), error.to_string())
+}
+
+fn lifecycle_success(surface: &str, fields: Value) -> Value {
+    let mut object = fields.as_object().cloned().unwrap_or_default();
+    object.insert(
+        "schema_version".to_string(),
+        json!(POLICY_CLI_SCHEMA_VERSION),
+    );
+    object.insert("surface".to_string(), json!(surface));
+    object.insert("status".to_string(), json!("pass"));
+    Value::Object(object)
+}
+
+fn lifecycle_failure(surface: &str, error: PolicyFailure) -> Value {
+    json!({
+        "schema_version": POLICY_CLI_SCHEMA_VERSION,
+        "surface": surface,
+        "status": "blocked",
+        "blocker_codes": ["canonical_gate_blocked"],
+        "issues": [{"code": error.code, "detail": error.detail}],
+    })
+}
+
+fn lifecycle_result(
+    surface: &str,
+    result: Result<Value, PolicyFailure>,
+    output_path: Option<&Path>,
+    _as_json: bool,
+) -> ExitCode {
+    let mut payload = result.unwrap_or_else(|error| lifecycle_failure(surface, error));
+    let mut body = serde_json::to_string(&payload).unwrap_or_else(|error| {
+        payload = lifecycle_failure(
+            surface,
+            PolicyFailure::new("policy_output_serialize_failed", error.to_string()),
+        );
+        serde_json::to_string(&payload).expect("fallback lifecycle JSON")
+    });
+    if let Some(output_path) = output_path {
+        if let Err(error) =
+            atomic_replace_bounded_with_limit(output_path, body.as_bytes(), MAX_POLICY_OUTPUT_BYTES)
+        {
+            payload = lifecycle_failure(
+                surface,
+                PolicyFailure::new("policy_output_write_failed", error.to_string()),
+            );
+            body = serde_json::to_string(&payload).expect("lifecycle JSON");
+        }
+    }
+    println!("{body}");
     if payload["status"] == "pass" {
         ExitCode::SUCCESS
     } else {
@@ -452,6 +776,21 @@ mod tests {
     }
 
     #[test]
+    fn policy_help_exposes_all_lifecycle_surfaces() {
+        let error = crate::Cli::try_parse_from(["vida", "policy", "--help"])
+            .expect_err("help should be clap display error");
+        let help = error.to_string();
+        for surface in [
+            "import", "activate", "status", "explain", "rollback", "export",
+        ] {
+            assert!(
+                help.contains(surface),
+                "missing lifecycle surface {surface}"
+            );
+        }
+    }
+
+    #[test]
     fn check_payload_is_release1_pass_with_digest_checks() {
         let (root, path) = bundle_path("1");
         let payload = pass_payload("vida policy check", &path, &check_bundle(&path).unwrap());
@@ -515,6 +854,44 @@ mod tests {
         assert_eq!(payload["fixture_execution"]["status"], "fail");
         assert_eq!(payload["issues"][0]["code"], "fixture_jsonl_malformed");
         assert_eq!(payload["issues"][0]["kind"], "corpus");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn lifecycle_cli_persists_receipt_and_redacts_explain_source() {
+        let (root, bundle_path) = bundle_path("ctx.value");
+        let store_path = root.join("policy-store.json");
+        let receipt_path = root.join("test-receipt.json");
+        let checked = check_bundle(&bundle_path).expect("bundle check");
+        let bundle_id = "rhai.runtime.authority@1";
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string(&PolicyTestReceipt {
+                bundle_id: bundle_id.to_string(),
+                test_id: "fixture-test".to_string(),
+                content_digest: checked.digest,
+                passed: true,
+            })
+            .expect("receipt JSON"),
+        )
+        .expect("receipt");
+
+        assert_eq!(
+            import_payload(&bundle_path, &store_path).unwrap()["status"],
+            "pass"
+        );
+        assert_eq!(
+            activate_payload(&store_path, bundle_id, &receipt_path).unwrap()["active_pointer"],
+            bundle_id
+        );
+        let explained = explain_payload(&store_path, Some(bundle_id)).unwrap();
+        let explained_json = serde_json::to_string(&explained).expect("explain JSON");
+        assert!(!explained_json.contains("ctx.value"));
+        assert_eq!(explained["raw_source_exposed"], false);
+        assert_eq!(
+            export_payload(&store_path).unwrap()["snapshot"]["bundles"][0]["source"],
+            "ctx.value"
+        );
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

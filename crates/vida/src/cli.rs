@@ -42,7 +42,7 @@ const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive 
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
 
-const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path> --fixtures <path>\n\nOptions:\n  --bundle <path>    Read one versioned policy bundle without writing runtime state\n  --fixtures <path>  Read bounded JSONL fixtures for `test`\n  --json             Emit the release-1 machine-readable envelope\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  `check` validates bounded size, schema, ABI, normalized source, syntax, and digest.\n  `test` performs the same checks and runs the bounded fixture corpus read-only.";
+const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path> --fixtures <path>\n  vida policy import --bundle <path> --store <path>\n  vida policy activate --store <path> --bundle-id <id> --test-receipt <path>\n  vida policy status --store <path>\n  vida policy explain --store <path> [--bundle-id <id>]\n  vida policy rollback --store <path> --bundle-id <id>\n  vida policy export --store <path>\n\nLifecycle options:\n  --store <path>       Policy lifecycle snapshot; only this policy file is written\n  --output <path>      Atomically write the canonical JSON response\n  --test-receipt <path>  Passing JSON test receipt required for activation\n  --json               Emit the canonical JSON response\n\n`check` and `test` retain their bounded read-only compiler/fixture behavior. Lifecycle responses never expose raw policy source in `status` or `explain`.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -1225,6 +1225,18 @@ pub(crate) enum PolicyCommand {
     Check(PolicyBundleArgs),
     #[command(about = "validate one policy bundle and run a bounded JSONL fixture corpus")]
     Test(PolicyTestArgs),
+    #[command(about = "import one checked policy bundle into the lifecycle snapshot")]
+    Import(PolicyImportArgs),
+    #[command(about = "activate a bundle using a matching passing test receipt")]
+    Activate(PolicyActivateArgs),
+    #[command(about = "show lifecycle pointers and bundle metadata")]
+    Status(PolicyStoreArgs),
+    #[command(about = "explain lifecycle state without exposing policy source")]
+    Explain(PolicyExplainArgs),
+    #[command(about = "quarantine the active bundle and restore last-known-good")]
+    Rollback(PolicyRollbackArgs),
+    #[command(about = "export the canonical lifecycle snapshot")]
+    Export(PolicyStoreArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1257,6 +1269,126 @@ pub(crate) struct PolicyTestArgs {
     pub(crate) fixtures: PathBuf,
 
     #[arg(long = "json", help = "Emit the release-1 machine-readable envelope")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyImportArgs {
+    #[arg(
+        long = "bundle",
+        value_name = "PATH",
+        help = "Path to one versioned JSON policy bundle"
+    )]
+    pub(crate) bundle: PathBuf,
+    #[arg(
+        long = "store",
+        value_name = "PATH",
+        help = "Policy lifecycle snapshot path"
+    )]
+    pub(crate) store: PathBuf,
+    #[arg(
+        long = "output",
+        value_name = "PATH",
+        help = "Atomically write the canonical JSON response"
+    )]
+    pub(crate) output: Option<PathBuf>,
+    #[arg(long = "json", help = "Emit the canonical JSON response")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyActivateArgs {
+    #[arg(
+        long = "store",
+        value_name = "PATH",
+        help = "Policy lifecycle snapshot path"
+    )]
+    pub(crate) store: PathBuf,
+    #[arg(
+        long = "bundle-id",
+        value_name = "ID",
+        help = "Imported bundle identity to activate"
+    )]
+    pub(crate) bundle_id: String,
+    #[arg(
+        long = "test-receipt",
+        value_name = "PATH",
+        help = "Passing JSON test receipt matching the bundle digest"
+    )]
+    pub(crate) test_receipt: PathBuf,
+    #[arg(
+        long = "output",
+        value_name = "PATH",
+        help = "Atomically write the canonical JSON response"
+    )]
+    pub(crate) output: Option<PathBuf>,
+    #[arg(long = "json", help = "Emit the canonical JSON response")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyStoreArgs {
+    #[arg(
+        long = "store",
+        value_name = "PATH",
+        help = "Policy lifecycle snapshot path"
+    )]
+    pub(crate) store: PathBuf,
+    #[arg(
+        long = "output",
+        value_name = "PATH",
+        help = "Atomically write the canonical JSON response"
+    )]
+    pub(crate) output: Option<PathBuf>,
+    #[arg(long = "json", help = "Emit the canonical JSON response")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyExplainArgs {
+    #[arg(
+        long = "store",
+        value_name = "PATH",
+        help = "Policy lifecycle snapshot path"
+    )]
+    pub(crate) store: PathBuf,
+    #[arg(
+        long = "bundle-id",
+        value_name = "ID",
+        help = "Optional bundle identity to explain"
+    )]
+    pub(crate) bundle_id: Option<String>,
+    #[arg(
+        long = "output",
+        value_name = "PATH",
+        help = "Atomically write the canonical JSON response"
+    )]
+    pub(crate) output: Option<PathBuf>,
+    #[arg(long = "json", help = "Emit the canonical JSON response")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyRollbackArgs {
+    #[arg(
+        long = "store",
+        value_name = "PATH",
+        help = "Policy lifecycle snapshot path"
+    )]
+    pub(crate) store: PathBuf,
+    #[arg(
+        long = "bundle-id",
+        value_name = "ID",
+        help = "Active failed bundle to quarantine"
+    )]
+    pub(crate) bundle_id: String,
+    #[arg(
+        long = "output",
+        value_name = "PATH",
+        help = "Atomically write the canonical JSON response"
+    )]
+    pub(crate) output: Option<PathBuf>,
+    #[arg(long = "json", help = "Emit the canonical JSON response")]
     pub(crate) json: bool,
 }
 
