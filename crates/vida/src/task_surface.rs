@@ -28,9 +28,9 @@ use taskflow_core::task::progress::{
 use taskflow_core::task::verify::{
     all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
     append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
-    normalized_task_verify_evidence, structured_task_proof_evidence_match,
-    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
-    TaskBrowserProofArtifact,
+    canonical_task_proof_target_projection, normalized_task_verify_evidence,
+    structured_task_proof_evidence_status, task_browser_proof_target,
+    task_reports_runtime_proof_blocker, task_verify_labels, TaskBrowserProofArtifact,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1051,43 +1051,6 @@ struct TaskProofTargetStatus {
     next_action: String,
 }
 
-
-fn canonical_task_proof_target_projection(
-    configured: &[String],
-) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let mut targets = BTreeSet::new();
-    let mut duplicate_targets = BTreeSet::new();
-    let mut stale_targets = BTreeSet::new();
-
-    for stored_target in configured {
-        let stored_target = stored_target.trim();
-        if stored_target.is_empty() {
-            continue;
-        }
-        let normalized_targets = normalize_proof_target_commands(vec![stored_target.to_string()]);
-        if normalized_targets.len() != 1
-            || normalized_targets.first().map(String::as_str) != Some(stored_target)
-        {
-            stale_targets.insert(stored_target.to_string());
-        }
-        for target in normalized_targets {
-            let target = target.trim();
-            if target.is_empty() {
-                continue;
-            }
-            if !targets.insert(target.to_string()) {
-                duplicate_targets.insert(target.to_string());
-            }
-        }
-    }
-
-    (
-        targets.into_iter().collect(),
-        duplicate_targets.into_iter().collect(),
-        stale_targets.into_iter().collect(),
-    )
-}
-
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskProofAttachBrowserReceipt {
     surface: &'static str,
@@ -1380,46 +1343,17 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
     task_proof_target_status_with_inheritance(task, target, None)
 }
 
-fn task_direct_children_for_proof_inheritance<'a>(
-    tasks: &'a [state_store::TaskRecord],
-    parent_id: &str,
-) -> Vec<&'a state_store::TaskRecord> {
-    tasks
-        .iter()
-        .filter(|task| {
-            task.dependencies.iter().any(|dependency| {
-                dependency.edge_type == "parent-child" && dependency.depends_on_id == parent_id
-            })
-        })
-        .collect()
-}
-
 fn inherited_child_proof_evidence_status(
     task: &state_store::TaskRecord,
     target: &str,
     tasks: &[state_store::TaskRecord],
 ) -> Option<TaskProofTargetStatus> {
-    let children = task_direct_children_for_proof_inheritance(tasks, &task.id);
-    if children.is_empty() {
-        return None;
-    }
-    let open_children = children
-        .iter()
-        .filter(|child| !state_store::StateStore::task_status_is_closed_like(&child.status))
-        .count();
-    if open_children > 0 || children.len() != 1 {
-        return None;
-    }
-    let child = children[0];
-    let proof_match = structured_task_proof_evidence_match(child.notes.as_deref(), target)?;
+    let proof_match = StateStore::task_structured_proof_target_match(task, target, tasks)?;
     Some(TaskProofTargetStatus {
         target: target.trim().to_string(),
         status: "satisfied".to_string(),
-        evidence_source: "inherited_child_task_proof_evidence".to_string(),
-        evidence_detail: format!(
-            "single closed child `{}` has matching structured proof evidence: {}",
-            child.id, proof_match.evidence_detail
-        ),
+        evidence_source: proof_match.evidence_source,
+        evidence_detail: proof_match.evidence_detail,
         artifact_status: proof_match.artifact_status,
         legacy_close_reason_match: proof_target_has_close_reason_evidence(task, target),
         next_action: "No action for this proof target.".to_string(),
@@ -1432,20 +1366,36 @@ fn task_proof_target_status_with_inheritance(
     inheritance_rows: Option<&[state_store::TaskRecord]>,
 ) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
-    let runtime_blocked =
-        task_reports_runtime_proof_blocker(&task.labels, task.close_reason.as_deref());
+    let runtime_blocked = task_reports_runtime_proof_blocker(&task.labels);
     let legacy_close_reason_match = proof_target_has_close_reason_evidence(task, &target);
-    if let Some(proof_match) = structured_task_proof_evidence_match(task.notes.as_deref(), &target)
+    if let Some(proof_status) =
+        structured_task_proof_evidence_status(task.notes.as_deref(), &target)
     {
-        return TaskProofTargetStatus {
-            target,
-            status: "satisfied".to_string(),
-            evidence_source: proof_match.evidence_source,
-            evidence_detail: proof_match.evidence_detail,
-            artifact_status: proof_match.artifact_status,
-            legacy_close_reason_match,
-            next_action: "No action for this proof target.".to_string(),
-        };
+        if proof_status.result == "pass" {
+            return TaskProofTargetStatus {
+                target,
+                status: "satisfied".to_string(),
+                evidence_source: proof_status.evidence_source,
+                evidence_detail: proof_status.evidence_detail,
+                artifact_status: proof_status.artifact_status,
+                legacy_close_reason_match,
+                next_action: "No action for this proof target.".to_string(),
+            };
+        }
+        if proof_status.result == "blocked" {
+            return TaskProofTargetStatus {
+                target: target.clone(),
+                status: "blocked_by_runtime".to_string(),
+                evidence_source: proof_status.evidence_source,
+                evidence_detail: proof_status.evidence_detail,
+                artifact_status: proof_status.artifact_status,
+                legacy_close_reason_match,
+                next_action: format!(
+                    "Resolve runtime proof blocker, then record evidence for proof target `{}`.",
+                    target
+                ),
+            };
+        }
     }
     if let Some(rows) = inheritance_rows {
         if let Some(inherited) = inherited_child_proof_evidence_status(task, &target, rows) {
@@ -1456,8 +1406,8 @@ fn task_proof_target_status_with_inheritance(
         return TaskProofTargetStatus {
             target: target.clone(),
             status: "blocked_by_runtime".to_string(),
-            evidence_source: "close_reason".to_string(),
-            evidence_detail: "task close_reason reports runtime proof blocker context".to_string(),
+            evidence_source: "task_verify_label".to_string(),
+            evidence_detail: "task labels report runtime proof blocker context".to_string(),
             artifact_status: "not_recorded".to_string(),
             legacy_close_reason_match,
             next_action: format!(
@@ -16717,10 +16667,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 return code;
                             }
                             let proof_blocked_by_runtime = command.proof_blocked
-                                && task_reports_runtime_proof_blocker(
-                                    &task.labels,
-                                    task.close_reason.as_deref(),
-                                );
+                                && task_reports_runtime_proof_blocker(&task.labels);
                             let receipt = TaskVerifyReceipt {
                                 surface: "vida task verify",
                                 status: task_json_success_status(),
@@ -18739,6 +18686,116 @@ mod tests {
     }
 
     #[test]
+    fn close_gate_epic_reconciliation_requires_structured_proof() {
+        run_on_runtime_stack_for_test(|| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            runtime.block_on(async {
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let store = crate::StateStore::open(harness.path().to_path_buf())
+                    .await
+                    .expect("state store should open");
+                let target = "cargo test -p vida close_gate_epic_reconciliation";
+
+                create_task_for_test(
+                    &store,
+                    "proof-gated-epic",
+                    "Proof gated epic",
+                    "epic",
+                    "open",
+                    1,
+                    None,
+                )
+                .await;
+                create_task_for_test(
+                    &store,
+                    "proof-gated-child",
+                    "Proof gated child",
+                    "task",
+                    "open",
+                    1,
+                    Some("proof-gated-epic"),
+                )
+                .await;
+
+                let mut epic = store
+                    .show_task("proof-gated-epic")
+                    .await
+                    .expect("epic should load");
+                epic.planner_metadata.proof_targets = vec![target.to_string()];
+                store
+                    .persist_task_record(epic)
+                    .await
+                    .expect("proof targets should persist");
+                let mut child = store
+                    .show_task("proof-gated-child")
+                    .await
+                    .expect("child should load");
+                child.status = "closed".to_string();
+                child.closed_at = Some("2026-07-28T00:00:00Z".to_string());
+                child.close_reason = Some("fixture closure".to_string());
+                store
+                    .persist_task_record(child)
+                    .await
+                    .expect("closed child fixture should persist");
+
+                let blocked = reconcile_epics_from_descendant_progress(&store, true, false)
+                    .await
+                    .expect("reconcile should return a typed blocked row");
+                let blocked_epic = blocked
+                    .blocked_epics
+                    .iter()
+                    .find(|row| row.epic_id == "proof-gated-epic")
+                    .expect("missing proof must block epic reconciliation");
+                assert!(blocked_epic.reason.contains("configured proof targets"));
+                assert_eq!(
+                    store
+                        .show_task("proof-gated-epic")
+                        .await
+                        .expect("epic should remain readable")
+                        .status,
+                    "open"
+                );
+
+                let mut epic = store
+                    .show_task("proof-gated-epic")
+                    .await
+                    .expect("epic should reload");
+                epic.notes = Some(super::append_task_proof_evidence_note(
+                    None,
+                    target,
+                    Some(target),
+                    "pass",
+                    "command",
+                    Some("artifacts/epic-close-gate.json"),
+                    &["epic proof passed".to_string()],
+                ));
+                store
+                    .persist_task_record(epic)
+                    .await
+                    .expect("epic proof should persist");
+
+                let passed = reconcile_epics_from_descendant_progress(&store, true, false)
+                    .await
+                    .expect("reconcile should close after structured proof");
+                assert!(passed
+                    .closed_epics
+                    .iter()
+                    .any(|row| row.epic_id == "proof-gated-epic"));
+                assert_eq!(
+                    store
+                        .show_task("proof-gated-epic")
+                        .await
+                        .expect("closed epic should load")
+                        .status,
+                    "closed"
+                );
+            });
+            runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+        });
+    }
+
+    #[test]
     fn task_takeover_status_cli_accepts_json_task_and_run_filters() {
         let parsed = cli(&[
             "task",
@@ -19846,7 +19903,7 @@ mod tests {
     }
 
     #[test]
-    fn task_close_reason_text_cannot_deny_historical_close() {
+    fn close_gate_reason_text_cannot_deny_historical_close() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let reasons = [
@@ -19870,8 +19927,8 @@ mod tests {
                 .expect("state store should open");
             create_task_for_test(
                 &store,
-                "close-reason-epic",
-                "Close reason test epic",
+                "close-reason-parent",
+                "Close reason parent",
                 "epic",
                 "open",
                 1,
@@ -19885,8 +19942,8 @@ mod tests {
                     task_id,
                     "task",
                     "in_progress",
-                    2,
-                    Some("close-reason-epic"),
+                    1,
+                    Some("close-reason-parent"),
                 )
                 .await;
             }
@@ -19912,7 +19969,11 @@ mod tests {
                 .expect("state store should reopen");
             for (task_id, _) in reasons {
                 assert_eq!(
-                    store.show_task(task_id).await.expect("task should load").status,
+                    store
+                        .show_task(task_id)
+                        .await
+                        .expect("task should load")
+                        .status,
                     "closed"
                 );
             }
@@ -19920,30 +19981,48 @@ mod tests {
     }
 
     #[test]
-    fn task_close_structured_runtime_blocker_survives_text_classifier_miss() {
+    fn close_gate_runtime_blocker_uses_canonical_label_not_close_reason() {
         let target = "cargo test -p vida close_reason_runtime_blocker";
         let mut task = owned_task_record("runtime-blocked-proof", Vec::new());
         task.labels = vec!["proof-blocked-by-runtime".to_string()];
-        task.close_reason = Some(
-            "Scoped follow-up is complete; proof target wording only.".to_string(),
-        );
+        task.close_reason =
+            Some("Historical runtime blocker; scoped follow-up is complete.".to_string());
         task.planner_metadata.proof_targets = vec![target.to_string()];
 
-        assert_eq!(
-            crate::agent_feedback_surface::canonical_close_status_from_reason(
-                task.close_reason.as_deref().expect("close reason")
-            ),
-            None,
-            "text classifier must not be needed for structured runtime blocker"
-        );
         let status = super::task_proof_target_status(&task, target);
         assert_eq!(status.status, "blocked_by_runtime");
-        assert_eq!(status.evidence_source, "close_reason");
+        assert_eq!(status.evidence_source, "task_verify_label");
         assert_eq!(status.legacy_close_reason_match, false);
     }
 
     #[test]
-    fn task_close_proof_target_wording_does_not_count_as_structured_proof() {
+    fn close_gate_structured_blocked_receipt_is_authoritative() {
+        let target = "cargo test -p vida close_reason_structured_blocker";
+        let mut task = owned_task_record("structured-runtime-blocked-proof", Vec::new());
+        task.notes = Some(super::append_task_proof_evidence_note(
+            None,
+            target,
+            Some(target),
+            "blocked",
+            "command",
+            Some("artifacts/runtime-blocked.json"),
+            &["runtime unavailable".to_string()],
+        ));
+        task.planner_metadata.proof_targets = vec![target.to_string()];
+
+        let status = super::task_proof_target_status(&task, target);
+        assert_eq!(status.status, "blocked_by_runtime");
+        assert_eq!(status.evidence_source, "task_proof_evidence_registry");
+        let payload = super::task_close_structured_proof_gate_payload(&task, None)
+            .expect("structured blocked receipt must deny closure");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["proof_blocked_by_runtime"])
+        );
+    }
+
+    #[test]
+    fn close_gate_proof_target_wording_does_not_count_as_structured_proof() {
         let target = "cargo test -p vida close_reason_target_wording";
         let mut task = owned_task_record("target-wording-proof", Vec::new());
         task.close_reason = Some(format!(
@@ -19954,12 +20033,63 @@ mod tests {
         let status = super::task_proof_target_status(&task, target);
         assert_eq!(status.status, "pending");
         assert_eq!(status.legacy_close_reason_match, true);
-        assert!(
-            status
-                .evidence_detail
-                .contains("structured proof evidence is required")
-        );
+        assert!(status
+            .evidence_detail
+            .contains("structured proof evidence is required"));
         assert!(super::task_close_structured_proof_gate_payload(&task, None).is_some());
+    }
+
+    #[test]
+    fn close_gate_stale_literal_reason_is_diagnostics_only_when_structured_proof_passes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let target = "cargo test -p vida close_gate_stale_literal";
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let mut task = owned_task_record("stale-literal-proof", Vec::new());
+            task.close_reason =
+                Some("Historical runtime blocker; scoped follow-up completed.".to_string());
+            task.planner_metadata.proof_targets = vec![target.to_string()];
+            task.notes = Some(super::append_task_proof_evidence_note(
+                None,
+                target,
+                Some(target),
+                "pass",
+                "command",
+                Some("artifacts/close-gate-pass.json"),
+                &["focused proof passed".to_string()],
+            ));
+            store
+                .persist_task_record(task)
+                .await
+                .expect("stale literal fixture should persist");
+        });
+
+        let current_reason = "Runtime blocker literal retained for diagnostics only.";
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Close(close_args_for_reason_test(
+                    "stale-literal-proof",
+                    current_reason,
+                    harness.path(),
+                )),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("stale-literal-proof")
+                .await
+                .expect("closed task should load");
+            assert_eq!(task.status, "closed");
+            assert_eq!(task.close_reason.as_deref(), Some(current_reason));
+        });
     }
 
     #[test]

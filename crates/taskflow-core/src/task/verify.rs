@@ -1,5 +1,7 @@
 //! Task verification command helpers.
 
+use std::collections::BTreeSet;
+
 pub const TASK_VERIFY_LABEL_SOURCE_FIXED: &str = "source-fixed";
 pub const TASK_VERIFY_LABEL_TESTS_GREEN: &str = "tests-green";
 pub const TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME: &str = "proof-blocked-by-runtime";
@@ -17,6 +19,14 @@ pub fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskProofEvidenceMatch {
+    pub evidence_source: String,
+    pub evidence_detail: String,
+    pub artifact_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProofEvidenceStatus {
+    pub result: String,
     pub evidence_source: String,
     pub evidence_detail: String,
     pub artifact_status: String,
@@ -244,10 +254,10 @@ pub fn append_task_browser_proof_note(
 }
 
 #[must_use]
-pub fn structured_task_proof_evidence_match(
+pub fn structured_task_proof_evidence_status(
     notes: Option<&str>,
     target: &str,
-) -> Option<TaskProofEvidenceMatch> {
+) -> Option<TaskProofEvidenceStatus> {
     let target = target.trim();
     if target.is_empty() {
         return None;
@@ -260,9 +270,7 @@ pub fn structured_task_proof_evidence_match(
                 || record.command.as_deref() == Some(target)
         });
     if let Some(record) = latest_structured {
-        if record.result.as_deref() != Some("pass") {
-            return None;
-        }
+        let result = record.result.unwrap_or_else(|| "invalid".to_string());
         let evidence_kind = record
             .evidence_kind
             .as_deref()
@@ -273,10 +281,11 @@ pub fn structured_task_proof_evidence_match(
         } else {
             "recorded_in_task_notes"
         };
-        return Some(TaskProofEvidenceMatch {
+        return Some(TaskProofEvidenceStatus {
+            result: result.clone(),
             evidence_source: "task_proof_evidence_registry".to_string(),
             evidence_detail: format!(
-                "latest structured {evidence_kind} proof evidence reports result pass"
+                "latest structured {evidence_kind} proof evidence reports result {result}"
             ),
             artifact_status: artifact_status.to_string(),
         });
@@ -286,16 +295,66 @@ pub fn structured_task_proof_evidence_match(
         .into_iter()
         .rev()
         .find(|artifact| artifact.proof_target == target || artifact.command == target);
-    latest_browser
-        .filter(|artifact| artifact.satisfies_target(target))
-        .map(|artifact| TaskProofEvidenceMatch {
-            evidence_source: "task_browser_proof_artifact".to_string(),
-            evidence_detail: format!(
-                "latest schema {} browser proof reports result pass",
-                artifact.schema_version
-            ),
-            artifact_status: artifact.artifact_status().to_string(),
-        })
+    latest_browser.map(|artifact| TaskProofEvidenceStatus {
+        result: artifact.result.clone(),
+        evidence_source: "task_browser_proof_artifact".to_string(),
+        evidence_detail: format!(
+            "latest schema {} browser proof reports result {}",
+            artifact.schema_version, artifact.result
+        ),
+        artifact_status: artifact.artifact_status().to_string(),
+    })
+}
+
+#[must_use]
+pub fn structured_task_proof_evidence_match(
+    notes: Option<&str>,
+    target: &str,
+) -> Option<TaskProofEvidenceMatch> {
+    let status = structured_task_proof_evidence_status(notes, target)?;
+    (status.result == "pass").then(|| TaskProofEvidenceMatch {
+        evidence_source: status.evidence_source,
+        evidence_detail: status.evidence_detail,
+        artifact_status: status.artifact_status,
+    })
+}
+
+#[must_use]
+pub fn canonical_task_proof_target_projection(
+    configured: &[String],
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut targets = BTreeSet::new();
+    let mut duplicate_targets = BTreeSet::new();
+    let mut stale_targets = BTreeSet::new();
+
+    for stored_target in configured {
+        let stored_target = stored_target.trim();
+        if stored_target.is_empty() {
+            continue;
+        }
+        let normalized_targets =
+            crate::task::update::normalize_proof_target_commands(vec![stored_target.to_string()]);
+        if normalized_targets.len() != 1
+            || normalized_targets.first().map(String::as_str) != Some(stored_target)
+        {
+            stale_targets.insert(stored_target.to_string());
+        }
+        for target in normalized_targets {
+            let target = target.trim();
+            if target.is_empty() {
+                continue;
+            }
+            if !targets.insert(target.to_string()) {
+                duplicate_targets.insert(target.to_string());
+            }
+        }
+    }
+
+    (
+        targets.into_iter().collect(),
+        duplicate_targets.into_iter().collect(),
+        stale_targets.into_iter().collect(),
+    )
 }
 
 #[must_use]
@@ -403,17 +462,10 @@ pub fn task_verify_label_is_runtime_proof_blocker(value: &str) -> bool {
 }
 
 #[must_use]
-pub fn task_reports_runtime_proof_blocker(labels: &[String], close_reason: Option<&str>) -> bool {
-    close_reason
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|reason| {
-            reason.contains("proof blocked by runtime")
-                || reason.contains("runtime proof blocker")
-                || reason.contains("runtime blocker")
-        })
-        || labels
-            .iter()
-            .any(|label| task_verify_label_is_runtime_proof_blocker(label))
+pub fn task_reports_runtime_proof_blocker(labels: &[String]) -> bool {
+    labels
+        .iter()
+        .any(|label| task_verify_label_is_runtime_proof_blocker(label))
 }
 
 #[must_use]
@@ -617,9 +669,10 @@ mod tests {
         TaskBrowserProofArtifact, append_task_browser_proof_note_with_timestamp,
         append_task_proof_evidence_note_with_timestamp, append_task_verify_note_with_timestamp,
         canonical_task_verify_label, normalized_task_verify_evidence,
-        structured_task_proof_evidence_match, task_browser_proof_target,
-        task_reports_runtime_proof_blocker, task_verify_label_is_runtime_proof_blocker,
-        task_verify_labels, verify_proof_targets_for_empty_existing,
+        structured_task_proof_evidence_match, structured_task_proof_evidence_status,
+        task_browser_proof_target, task_reports_runtime_proof_blocker,
+        task_verify_label_is_runtime_proof_blocker, task_verify_labels,
+        verify_proof_targets_for_empty_existing,
     };
 
     #[test]
@@ -693,14 +746,41 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
                 "proof-blocked-by-runtime".to_string()
             ]
         );
-        assert!(task_reports_runtime_proof_blocker(
-            &["runtime-proof-blocked".to_string()],
+        assert!(task_reports_runtime_proof_blocker(&[
+            "runtime-proof-blocked".to_string()
+        ]));
+        assert!(!task_reports_runtime_proof_blocker(&[]));
+    }
+
+    #[test]
+    fn close_gate_structured_status_preserves_latest_blocked_receipt() {
+        let target = "cargo test -p vida close_gate";
+        let notes = append_task_proof_evidence_note_with_timestamp(
             None,
-        ));
-        assert!(task_reports_runtime_proof_blocker(
-            &[],
-            Some("Runtime proof blocker: browser unavailable"),
-        ));
+            target,
+            Some(target),
+            "pass",
+            "command",
+            Some("artifacts/older-pass.json"),
+            &["older pass".to_string()],
+            1,
+        );
+        let notes = append_task_proof_evidence_note_with_timestamp(
+            Some(&notes),
+            target,
+            Some(target),
+            "blocked",
+            "command",
+            Some("artifacts/runtime-blocked.json"),
+            &["runtime unavailable".to_string()],
+            2,
+        );
+
+        let status = structured_task_proof_evidence_status(Some(&notes), target)
+            .expect("latest structured receipt should project");
+        assert_eq!(status.result, "blocked");
+        assert_eq!(status.evidence_source, "task_proof_evidence_registry");
+        assert!(structured_task_proof_evidence_match(Some(&notes), target).is_none());
     }
 
     #[test]

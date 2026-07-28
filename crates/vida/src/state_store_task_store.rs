@@ -18,6 +18,10 @@ use taskflow_core::task::aggregate::{
     TaskReparentCommand, TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
+use taskflow_core::task::verify::{
+    canonical_task_proof_target_projection, structured_task_proof_evidence_match,
+    TaskProofEvidenceMatch,
+};
 
 const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
 const TASK_SNAPSHOT_STATE_GENERATION_FILE: &str = ".task-snapshot-state-generation";
@@ -1381,12 +1385,80 @@ impl StateStore {
         status
     }
 
+    pub(crate) fn task_structured_proof_target_match(
+        task: &TaskRecord,
+        target: &str,
+        tasks: &[TaskRecord],
+    ) -> Option<TaskProofEvidenceMatch> {
+        if let Some(proof_match) =
+            structured_task_proof_evidence_match(task.notes.as_deref(), target)
+        {
+            return Some(proof_match);
+        }
+        let children = tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.dependencies.iter().any(|dependency| {
+                    dependency.edge_type == "parent-child" && dependency.depends_on_id == task.id
+                })
+            })
+            .collect::<Vec<_>>();
+        if children.len() != 1 || !Self::task_status_is_closed_like(&children[0].status) {
+            return None;
+        }
+        let child = children[0];
+        structured_task_proof_evidence_match(child.notes.as_deref(), target).map(|proof_match| {
+            TaskProofEvidenceMatch {
+                evidence_source: "inherited_child_task_proof_evidence".to_string(),
+                evidence_detail: format!(
+                    "single closed child `{}` has matching structured proof evidence: {}",
+                    child.id, proof_match.evidence_detail
+                ),
+                artifact_status: proof_match.artifact_status,
+            }
+        })
+    }
+
+    pub(crate) fn task_missing_structured_proof_targets(
+        task: &TaskRecord,
+        tasks: &[TaskRecord],
+    ) -> Vec<String> {
+        canonical_task_proof_target_projection(&task.planner_metadata.proof_targets)
+            .0
+            .into_iter()
+            .filter(|target| {
+                Self::task_structured_proof_target_match(task, target, tasks).is_none()
+            })
+            .collect()
+    }
+
+    fn ensure_task_structured_proof_admitted(
+        task: &TaskRecord,
+        tasks: &[TaskRecord],
+    ) -> Result<(), StateStoreError> {
+        let missing_targets = Self::task_missing_structured_proof_targets(task, tasks);
+        if missing_targets.is_empty() {
+            return Ok(());
+        }
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "task `{}` has configured proof targets without matching structured pass evidence: {}",
+                task.id,
+                missing_targets.join(" | ")
+            ),
+        })
+    }
+
     async fn filter_auto_closed_parents_ready_for_close(
         &self,
         parents: Vec<TaskRecord>,
+        tasks: &[TaskRecord],
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut ready = Vec::new();
         for parent in parents {
+            if !Self::task_missing_structured_proof_targets(&parent, tasks).is_empty() {
+                continue;
+            }
             if self
                 .auto_closed_parent_has_unresolved_run_graph(&parent.id)
                 .await?
@@ -1791,10 +1863,7 @@ impl StateStore {
             }
             let has_canonical_close_truth = Self::task_has_canonical_close_truth(&task);
             let has_closure_receipt_truth = self
-                .task_close_reconcile_has_persisted_closure_receipt_truth(
-                    &row.run_id,
-                    &row.task_id,
-                )
+                .task_close_reconcile_has_persisted_closure_receipt_truth(&row.run_id, &row.task_id)
                 .await?;
             let status = if row.status == "completed"
                 && Self::task_status_is_closed_like(&task.status)
@@ -3393,7 +3462,7 @@ impl StateStore {
             )
         };
         let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents)
+            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
             .await?;
         let mut touched_task_ids = reopened_parents
             .iter()
@@ -3764,6 +3833,9 @@ impl StateStore {
             &now,
             &format!("all direct child tasks moved from `{from_parent_id}` to `{to_parent_id}`"),
         );
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
+            .await?;
 
         let touched_task_ids = moved_tasks
             .iter()
@@ -4175,6 +4247,7 @@ impl StateStore {
         let tasks = self.all_tasks().await?;
 
         let mut task = self.show_task(task_id).await?;
+        Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
         let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
         Self::ensure_task_lifecycle_admitted(
             task_id,
@@ -4227,7 +4300,7 @@ impl StateStore {
             });
         }
         let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents)
+            .filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
             .await?;
         let close_plan = plan_close_task(TaskCloseCommand {
             task: TaskAggregateTaskSnapshot {
@@ -5122,6 +5195,105 @@ mod tests {
             .expect("unrelated historical orphan should not block close");
 
         assert_eq!(closed.status, "closed");
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn close_gate_parent_auto_close_requires_structured_proof() {
+        let root = unique_task_store_temp_root("vida-close-gate-parent-auto-close");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let target = "cargo test -p vida close_gate_parent_auto_close";
+        let mut parent_metadata = TaskPlannerMetadata::default();
+        parent_metadata.proof_targets = vec![target.to_string()];
+
+        for (parent_id, child_id) in [
+            ("missing-proof-parent", "missing-proof-child"),
+            ("inherited-proof-parent", "inherited-proof-child"),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: parent_id,
+                    title: parent_id,
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: parent_metadata.clone(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create proof-gated parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: child_id,
+                    title: child_id,
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: Some(parent_id),
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create proof child");
+        }
+
+        let mut inherited_child = store
+            .show_task("inherited-proof-child")
+            .await
+            .expect("inherited child should load");
+        inherited_child.notes = Some(
+            taskflow_core::task::verify::append_task_proof_evidence_note(
+                None,
+                target,
+                Some(target),
+                "pass",
+                "command",
+                Some("artifacts/inherited-parent-proof.json"),
+                &["child proof passed".to_string()],
+            ),
+        );
+        store
+            .persist_task_record(inherited_child)
+            .await
+            .expect("child proof should persist");
+
+        store
+            .close_task("missing-proof-child", "child complete")
+            .await
+            .expect("child should close independently");
+        assert_eq!(
+            store
+                .show_task("missing-proof-parent")
+                .await
+                .expect("missing-proof parent should load")
+                .status,
+            "open"
+        );
+
+        store
+            .close_task("inherited-proof-child", "child complete")
+            .await
+            .expect("proven child should close");
+        assert_eq!(
+            store
+                .show_task("inherited-proof-parent")
+                .await
+                .expect("inherited-proof parent should load")
+                .status,
+            "closed"
+        );
+
         close_store_and_remove_root(store, root).await;
     }
 
@@ -7396,11 +7568,9 @@ mod tests {
 
         let project_root = crate::resolve_runtime_project_root().expect("resolve project root");
         let config = crate::load_project_overlay_yaml().expect("load project overlay");
-        let compiled_bundle = crate::build_compiled_agent_extension_bundle_for_root(
-            &config,
-            &project_root,
-        )
-        .expect("compile agent extension bundle");
+        let compiled_bundle =
+            crate::build_compiled_agent_extension_bundle_for_root(&config, &project_root)
+                .expect("compile agent extension bundle");
         store
             .write_launcher_activation_snapshot(&crate::state_store::LauncherActivationSnapshot {
                 source: "state_store".to_string(),
@@ -7446,8 +7616,8 @@ mod tests {
                 dispatch_contract.remove("team_flow_authority_selected_node_id");
             }
         }
-        let mut persisted_selection = serde_json::to_value(&role_selection)
-            .expect("encode persisted role selection");
+        let mut persisted_selection =
+            serde_json::to_value(&role_selection).expect("encode persisted role selection");
         persisted_selection["compiled_bundle"] = serde_json::Value::Null;
         persisted_selection["execution_plan"] = legacy_execution_plan;
         let packet_path = root.join("runtime-consumption/dispatch-packets/closed-receipt-run.json");
@@ -7620,7 +7790,10 @@ mod tests {
             .expect("canonical task close truth should keep malformed run readable");
         assert_eq!(direct_canonical_close_only.status, "completed");
         assert_eq!(direct_canonical_close_only.active_node, "closure");
-        assert_eq!(direct_canonical_close_only.lifecycle_stage, "closure_complete");
+        assert_eq!(
+            direct_canonical_close_only.lifecycle_stage,
+            "closure_complete"
+        );
         let mut active_receipt = receipt;
         active_receipt.run_id = "active-legacy-run".to_string();
         active_receipt.dispatch_packet_path = Some(active_packet_path.display().to_string());
