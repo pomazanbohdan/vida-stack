@@ -7,6 +7,167 @@ use taskflow_contracts::Release1ContractStatus;
 use crate::request::HostBridgeRequest;
 
 pub const HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION: &str = "host-bridge-receipt-identity-v1";
+pub const HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION: &str =
+    "host-bridge-precursor-fingerprint-v1";
+pub const BLOCKER_PRECURSOR_FINGERPRINT_MISSING: &str = "host_bridge_precursor_fingerprint_missing";
+
+pub const HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS: &[&str] = &[
+    "run_id",
+    "dispatch_target",
+    "dispatch_status",
+    "lane_status",
+    "supersedes_receipt_id",
+    "exception_path_receipt_id",
+    "dispatch_kind",
+    "dispatch_surface",
+    "dispatch_command",
+    "dispatch_packet_path",
+    "dispatch_result_path",
+    "blocker_code",
+    "downstream_dispatch_target",
+    "downstream_dispatch_command",
+    "downstream_dispatch_note",
+    "downstream_dispatch_ready",
+    "downstream_dispatch_blockers",
+    "downstream_dispatch_packet_path",
+    "downstream_dispatch_status",
+    "downstream_dispatch_result_path",
+    "downstream_dispatch_trace_path",
+    "downstream_dispatch_executed_count",
+    "downstream_dispatch_active_target",
+    "downstream_dispatch_last_target",
+    "activation_agent_type",
+    "activation_runtime_role",
+    "selected_backend",
+    "recorded_at",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostBridgePrecursorFingerprintV1 {
+    pub schema_version: String,
+    pub request_id: String,
+    pub receipt: Value,
+}
+
+impl HostBridgePrecursorFingerprintV1 {
+    pub fn from_dispatch_receipt(request_id: &str, receipt: &Value) -> Result<Self, String> {
+        if request_id.trim().is_empty() {
+            return Err(BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string());
+        }
+        Ok(Self {
+            schema_version: HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION.to_string(),
+            request_id: request_id.to_string(),
+            receipt: canonical_precursor_receipt(receipt)?,
+        })
+    }
+
+    pub fn from_value(value: Option<&Value>) -> Result<Self, String> {
+        let value = value.ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        let parsed: Self = serde_json::from_value(value.clone())
+            .map_err(|_| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        if parsed.schema_version != HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION
+            || parsed.request_id.trim().is_empty()
+        {
+            return Err(BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string());
+        }
+        Self::from_dispatch_receipt(&parsed.request_id, &parsed.receipt)
+    }
+
+    #[must_use]
+    pub fn canonical_serialization(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("host bridge precursor fingerprint serializes")
+    }
+
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        format!(
+            "hbpf-v1-{}",
+            blake3::hash(&self.canonical_serialization()).to_hex()
+        )
+    }
+
+    #[must_use]
+    pub fn exact_binding_key(&self) -> String {
+        format!(
+            "hbpf-exact-v1-{}",
+            blake3::hash(&self.canonical_serialization()).to_hex()
+        )
+    }
+
+    #[must_use]
+    pub fn compact_binding_key(&self) -> String {
+        let compact = serde_json::json!({
+            "schema_version": self.schema_version,
+            "receipt": self.receipt,
+        });
+        format!(
+            "hbpf-compact-v1-{}",
+            blake3::hash(
+                &serde_json::to_vec(&compact)
+                    .expect("compact host bridge precursor fingerprint serializes")
+            )
+            .to_hex()
+        )
+    }
+}
+
+fn canonical_precursor_receipt(receipt: &Value) -> Result<Value, String> {
+    let object = receipt
+        .as_object()
+        .filter(|object| object.len() == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len())
+        .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+    let mut canonical = serde_json::Map::new();
+    for field in HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS {
+        let value = object
+            .get(*field)
+            .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        let value = match *field {
+            "dispatch_status" | "lane_status" => Value::String(normalize_precursor_status(value)?),
+            "dispatch_result_path" => normalize_precursor_result_path(value)?,
+            _ => value.clone(),
+        };
+        canonical.insert((*field).to_string(), value);
+    }
+    Ok(Value::Object(canonical))
+}
+
+fn normalize_precursor_status(value: &Value) -> Result<String, String> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+    let mut normalized = String::new();
+    let mut separator = false;
+    for character in value.trim().chars() {
+        if character == '-' || character.is_ascii_whitespace() {
+            if !normalized.is_empty() {
+                separator = true;
+            }
+        } else {
+            if separator && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            normalized.push(character.to_ascii_lowercase());
+            separator = false;
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_precursor_result_path(value: &Value) -> Result<Value, String> {
+    match value {
+        Value::Null => Ok(Value::Null),
+        Value::String(path) => {
+            let path = path.trim();
+            if path.is_empty() {
+                Ok(Value::Null)
+            } else {
+                Ok(Value::String(path.replace('\\', "/")))
+            }
+        }
+        _ => Err(BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string()),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeReceiptIdentityV1 {
@@ -574,6 +735,174 @@ fn rejected(blocker_codes: Vec<String>) -> DispatchReceiptBindingDecision {
 mod tests {
     use super::*;
     use crate::tests::minimal_request;
+
+    fn precursor_receipt() -> Value {
+        serde_json::json!({
+            "run_id": "run-1",
+            "dispatch_target": "developer",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "lane_running",
+            "supersedes_receipt_id": "receipt-0",
+            "exception_path_receipt_id": null,
+            "dispatch_kind": "host_bridge",
+            "dispatch_surface": "agent",
+            "dispatch_command": "dispatch",
+            "dispatch_packet_path": "runtime/packet.json",
+            "dispatch_result_path": "runtime/result.json",
+            "blocker_code": null,
+            "downstream_dispatch_target": "tester",
+            "downstream_dispatch_command": "test",
+            "downstream_dispatch_note": "ready",
+            "downstream_dispatch_ready": true,
+            "downstream_dispatch_blockers": ["proof_pending"],
+            "downstream_dispatch_packet_path": "runtime/downstream.json",
+            "downstream_dispatch_status": "packet_ready",
+            "downstream_dispatch_result_path": "runtime/downstream-result.json",
+            "downstream_dispatch_trace_path": "runtime/trace.json",
+            "downstream_dispatch_executed_count": 1,
+            "downstream_dispatch_active_target": "tester",
+            "downstream_dispatch_last_target": "developer",
+            "activation_agent_type": "worker",
+            "activation_runtime_role": "implementer",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-07-28T00:00:00Z"
+        })
+    }
+
+    #[test]
+    fn precursor_fingerprint_mutation_matrix_conflicts_for_every_receipt_field() {
+        let receipt = precursor_receipt();
+        let baseline =
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+                .expect("baseline fingerprint");
+        let mutations = [
+            ("run_id", serde_json::json!("run-2")),
+            ("dispatch_target", serde_json::json!("tester")),
+            ("dispatch_status", serde_json::json!("executed")),
+            ("lane_status", serde_json::json!("lane_completed")),
+            ("supersedes_receipt_id", serde_json::json!("receipt-x")),
+            (
+                "exception_path_receipt_id",
+                serde_json::json!("exception-1"),
+            ),
+            ("dispatch_kind", serde_json::json!("direct")),
+            ("dispatch_surface", serde_json::json!("consume")),
+            ("dispatch_command", serde_json::json!("other")),
+            (
+                "dispatch_packet_path",
+                serde_json::json!("runtime/other.json"),
+            ),
+            (
+                "dispatch_result_path",
+                serde_json::json!("runtime/other-result.json"),
+            ),
+            ("blocker_code", serde_json::json!("blocked")),
+            ("downstream_dispatch_target", serde_json::json!("reviewer")),
+            ("downstream_dispatch_command", serde_json::json!("review")),
+            ("downstream_dispatch_note", serde_json::json!("changed")),
+            ("downstream_dispatch_ready", serde_json::json!(false)),
+            ("downstream_dispatch_blockers", serde_json::json!(["other"])),
+            (
+                "downstream_dispatch_packet_path",
+                serde_json::json!("runtime/other-downstream.json"),
+            ),
+            ("downstream_dispatch_status", serde_json::json!("blocked")),
+            (
+                "downstream_dispatch_result_path",
+                serde_json::json!("runtime/other-downstream-result.json"),
+            ),
+            (
+                "downstream_dispatch_trace_path",
+                serde_json::json!("runtime/other-trace.json"),
+            ),
+            ("downstream_dispatch_executed_count", serde_json::json!(2)),
+            (
+                "downstream_dispatch_active_target",
+                serde_json::json!("reviewer"),
+            ),
+            (
+                "downstream_dispatch_last_target",
+                serde_json::json!("tester"),
+            ),
+            ("activation_agent_type", serde_json::json!("reviewer")),
+            ("activation_runtime_role", serde_json::json!("verification")),
+            ("selected_backend", serde_json::json!("external")),
+            ("recorded_at", serde_json::json!("2026-07-28T00:00:01Z")),
+        ];
+
+        assert_eq!(mutations.len(), HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len());
+        for (field, mutation) in mutations {
+            let mut changed = receipt.clone();
+            changed[field] = mutation;
+            let changed =
+                HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &changed)
+                    .expect("mutated fingerprint");
+            assert_ne!(
+                baseline.fingerprint(),
+                changed.fingerprint(),
+                "mutation of `{field}` must conflict"
+            );
+        }
+    }
+
+    #[test]
+    fn precursor_fingerprint_normalizes_only_statuses_and_dispatch_result_path() {
+        let receipt = precursor_receipt();
+        let baseline =
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+                .expect("baseline fingerprint");
+        let mut variant = receipt;
+        variant["dispatch_status"] = serde_json::json!(" Bridge-Request Pending ");
+        variant["lane_status"] = serde_json::json!(" Lane Running ");
+        variant["dispatch_result_path"] = serde_json::json!(r" runtime\result.json ");
+        let variant =
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &variant)
+                .expect("normalized variant");
+
+        assert_eq!(baseline, variant);
+        assert_eq!(baseline.fingerprint(), variant.fingerprint());
+        assert_eq!(baseline.exact_binding_key(), variant.exact_binding_key());
+        assert_eq!(
+            baseline.compact_binding_key(),
+            variant.compact_binding_key()
+        );
+    }
+
+    #[test]
+    fn precursor_fingerprint_compact_key_excludes_only_request_id() {
+        let receipt = precursor_receipt();
+        let first = HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+            .expect("first fingerprint");
+        let duplicate =
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-2", &receipt)
+                .expect("duplicate fingerprint");
+
+        assert_ne!(first.fingerprint(), duplicate.fingerprint());
+        assert_ne!(first.exact_binding_key(), duplicate.exact_binding_key());
+        assert_eq!(first.compact_binding_key(), duplicate.compact_binding_key());
+        assert_eq!(
+            first.compact_binding_key(),
+            first.compact_binding_key(),
+            "compact key must be deterministic"
+        );
+    }
+
+    #[test]
+    fn precursor_fingerprint_missing_or_malformed_fails_closed() {
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_value(None).expect_err("missing must block"),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_value(Some(&serde_json::json!({
+                "schema_version": HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION,
+                "request_id": "request-1",
+                "receipt": {"run_id": "run-1"}
+            })))
+            .expect_err("malformed must block"),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+    }
 
     #[test]
     fn receipt_binding_rejects_missing_receipt() {
