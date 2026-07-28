@@ -440,6 +440,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: None,
+            policy_bundle_ref: None,
             effective_execution_posture: serde_json::json!({}),
             route_policy: serde_json::json!({}),
             activation_evidence: serde_json::json!({}),
