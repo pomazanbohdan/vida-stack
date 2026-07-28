@@ -8229,6 +8229,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("middle".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-17T00:00:00Z".to_string(),
         };
 
@@ -8283,6 +8284,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-25T00:00:00Z".to_string(),
         };
 
@@ -8377,6 +8379,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-25T00:00:00Z".to_string(),
             })
             .await
@@ -8723,6 +8726,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-15T08:00:00Z".to_string(),
         });
 
@@ -8765,6 +8769,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-15T08:00:00Z".to_string(),
         });
 
@@ -8805,6 +8810,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-05-15T08:00:00Z".to_string(),
         });
 
@@ -8863,6 +8869,7 @@ mod tests {
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("pm".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
             recorded_at: "2026-06-02T06:52:54Z".to_string(),
         };
 
@@ -8969,6 +8976,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("junior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-10T10:00:01Z".to_string(),
             })
             .await
@@ -10021,6 +10029,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-12T08:00:00Z".to_string(),
             })
             .await
@@ -10149,6 +10158,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-12T08:00:00Z".to_string(),
             })
             .await
@@ -10305,6 +10315,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("implementer".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-06-13T00:00:00Z".to_string(),
             })
             .await
@@ -10924,6 +10935,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
             })
             .await
@@ -11368,6 +11380,7 @@ mod tests {
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("verifier".to_string()),
                 selected_backend: Some("senior".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-14T00:00:00Z".to_string(),
             })
             .await
@@ -11442,6 +11455,7 @@ mod tests {
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("verifier".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-23T00:00:00Z".to_string(),
             })
             .await
@@ -11544,6 +11558,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-15T19:40:00Z".to_string(),
             })
             .await
@@ -11823,6 +11838,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-07-15T23:00:08Z".to_string(),
             })
             .await
@@ -11960,6 +11976,7 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: None,
+            policy_bundle_ref: None,
             recorded_at: "2026-07-19T00:00:00Z".to_string(),
         };
         store
@@ -12057,6 +12074,7 @@ mod tests {
                 activation_agent_type: None,
                 activation_runtime_role: None,
                 selected_backend: Some("opencode_cli".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-16T00:00:00Z".to_string(),
             })
             .await
@@ -12140,6 +12158,7 @@ mod tests {
                 activation_agent_type: None,
                 activation_runtime_role: None,
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
             })
             .await
@@ -12232,6 +12251,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-16T00:00:00Z".to_string(),
             })
             .await
@@ -12322,6 +12342,7 @@ mod tests {
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-17T00:00:00Z".to_string(),
             })
             .await
@@ -12427,6 +12448,7 @@ mod tests {
                 activation_agent_type: Some("senior".to_string()),
                 activation_runtime_role: Some("verifier".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-19T00:00:00Z".to_string(),
             })
             .await
@@ -12525,6 +12547,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-12T00:00:00Z".to_string(),
             })
             .await
@@ -12608,6 +12631,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-17T00:00:00Z".to_string(),
             })
             .await
@@ -12716,6 +12740,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-22T00:00:00Z".to_string(),
             })
             .await
@@ -12836,6 +12861,7 @@ mod tests {
                 activation_agent_type: Some("internal_subagents".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
                 selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-22T00:00:00Z".to_string(),
             })
             .await
@@ -12950,6 +12976,7 @@ mod tests {
                 activation_agent_type: None,
                 activation_runtime_role: None,
                 selected_backend: Some("opencode_cli".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-04-16T00:00:00Z".to_string(),
             })
             .await
@@ -13381,6 +13408,7 @@ mod tests {
                 activation_agent_type: Some("middle".to_string()),
                 activation_runtime_role: Some("business_analyst".to_string()),
                 selected_backend: Some("middle".to_string()),
+                policy_bundle_ref: None,
                 recorded_at: "2026-05-06T11:58:00Z".to_string(),
             })
             .await
