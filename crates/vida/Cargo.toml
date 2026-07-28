@@ -50,6 +50,7 @@ toml_edit = "0.25.12"
 tower = "0.5.3"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }
+vida-policy-rhai = { path = "../vida-policy-rhai" }
 vida-runtime-local = { path = "../vida-runtime-local" }
 
 [dev-dependencies]

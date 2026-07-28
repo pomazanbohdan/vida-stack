@@ -42,6 +42,8 @@ const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive 
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
 
+const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path>\n\nOptions:\n  --bundle <path>    Read one versioned policy bundle without writing runtime state\n  --json             Emit the release-1 machine-readable envelope\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  `check` validates bounded size, schema, ABI, normalized source, syntax, and digest.\n  `test` performs the same checks and runs mandatory fixtures when the fixture runner is available.";
+
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
 const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id>\n  vida task create <subtask-id> <title> --type subtask --parent-id <task-id>\n  vida task create <step-id> <title> --type step --parent-id <task-or-subtask-id>\n  vida task create <task-id> --title <title> --parent-id <parent-id> --description \"...\" --notes \"...\"\n  vida task create <task-id> <title> --parent-id <parent-id> --owned-path crates/vida/src/lib.rs --acceptance-target \"Default output shows the needed field\" --proof-target \"cargo test -p vida focused_test\"\n  vida task create <task-id> <title> --acceptance-target-literal \"One prose target, with commas preserved\" --proof-target-literal \"Manual proof, with punctuation preserved\"\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n\nOne-shot metadata:\n  When owned paths, acceptance targets, proof targets, labels, notes, or execution semantics are known, pass them on `vida task create` instead of creating the task and immediately updating it.\n  Comma-delimited list flags remain available for compact lists; use the `*-literal` variants or `vida task import --file` JSON/YAML arrays for long prose values that contain commas.\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  `step` is the canonical execution-step type; `todo` remains accepted as a deprecated alias without rewriting existing records.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary` to verify parallel-safe admission after mutation; use `--json` only for machine-readable automation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
@@ -221,6 +223,16 @@ pub(crate) fn command_metadata_by_name(name: &str) -> Option<CommandMetadata> {
             false,
             COMPACT_TOON_OUTPUT_HELP,
             "Run `vida coder capabilities` to inspect available provider support.",
+        ),
+        "policy" => command_metadata(
+            "vida policy",
+            "vida policy check --bundle <path>",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida policy check --help` for read-only policy validation.",
         ),
         "protocol" => command_metadata(
             "vida protocol",
@@ -542,6 +554,9 @@ pub(crate) fn command_metadata_for_command(command: &Option<Command>) -> Command
         Some(Command::Coder(_)) => {
             command_metadata_by_name("coder").expect("coder metadata exists")
         }
+        Some(Command::Policy(_)) => {
+            command_metadata_by_name("policy").expect("policy metadata exists")
+        }
         Some(Command::Protocol(_)) => {
             command_metadata_by_name("protocol").expect("protocol metadata exists")
         }
@@ -672,6 +687,11 @@ pub(crate) enum Command {
         after_help = CODER_AFTER_HELP
     )]
     Coder(CoderArgs),
+    #[command(
+        about = "check or test one versioned Rhai policy bundle without writing runtime state",
+        after_help = POLICY_AFTER_HELP
+    )]
+    Policy(PolicyArgs),
     #[command(about = "resolve and render framework protocol/guide surfaces")]
     Protocol(ProtocolArgs),
     #[command(
@@ -1189,6 +1209,36 @@ pub(crate) struct CoderRunArgs {
     pub(crate) request: Option<String>,
 
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct PolicyArgs {
+    #[command(subcommand)]
+    pub(crate) command: PolicyCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum PolicyCommand {
+    #[command(about = "validate one policy bundle without writing runtime state")]
+    Check(PolicyBundleArgs),
+    #[command(
+        about = "validate one policy bundle and run mandatory fixtures when available"
+    )]
+    Test(PolicyBundleArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PolicyBundleArgs {
+    #[arg(
+        long = "bundle",
+        value_name = "PATH",
+        help = "Path to one versioned JSON policy bundle"
+    )]
+    pub(crate) bundle: PathBuf,
+
+    #[arg(long = "json", help = "Emit the release-1 machine-readable envelope")]
     pub(crate) json: bool,
 }
 

@@ -8381,6 +8381,7 @@ dependencies = [
  "tower",
  "tower-test",
  "vida-contracts",
+ "vida-policy-rhai",
  "vida-runtime-local",
  "vida-test-support",
 ]

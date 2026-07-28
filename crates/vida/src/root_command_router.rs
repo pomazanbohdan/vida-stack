@@ -3,7 +3,8 @@ use std::{ffi::OsString, process::ExitCode};
 use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
-    orchestrator_session_surface, pack_surface, print_root_help, project_activator_surface,
+    orchestrator_session_surface, pack_surface, policy_cli, print_root_help,
+    project_activator_surface,
     proof_surface, protocol_surface, quality_surface, release_surface, requirement_surface,
     run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, status_surface,
     task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
@@ -61,6 +62,7 @@ pub(crate) async fn run_root_command_with_args(cli: Cli, raw_args: &[OsString]) 
                 vida::run_coder(&args.provider, args.request.as_deref(), args.json)
             }
         },
+        Some(Command::Policy(args)) => policy_cli::run_policy(args),
         Some(Command::Protocol(args)) => protocol_surface::run_protocol(args).await,
         Some(Command::ProjectActivator(args)) => {
             project_activator_surface::run_project_activator(args).await

@@ -51,6 +51,7 @@ mod operator_projection_cache;
 mod operator_session_projection;
 mod orchestrator_session_surface;
 mod pack_surface;
+mod policy_cli;
 mod project_activator_activation_summary;
 mod project_activator_agent_extensions_summary;
 mod project_activator_host_cli_summary;
