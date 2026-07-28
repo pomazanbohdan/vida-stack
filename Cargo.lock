@@ -5940,6 +5940,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7366,6 +7367,7 @@ dependencies = [
 name = "taskflow-state-fs"
 version = "0.9.7"
 dependencies = [
+ "runtime-path-policy",
  "serde",
  "serde_json",
  "taskflow-contracts",

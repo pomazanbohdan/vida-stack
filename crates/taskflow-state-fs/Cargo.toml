@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+runtime-path-policy = { path = "../runtime-path-policy" }
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-state = { path = "../taskflow-state" }
 
