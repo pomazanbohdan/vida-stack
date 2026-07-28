@@ -16849,63 +16849,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         );
                         return ExitCode::from(1);
                     }
-                    if crate::agent_feedback_surface::canonical_close_status_from_reason(
-                        &close_reason,
-                    )
-                    .is_some()
-                    {
-                        let task_value = serde_json::to_value(&preclose_task)
-                            .expect("task close payload should serialize");
-                        let telemetry = task_close_host_agent_telemetry(
-                            &state_dir,
-                            explicit_state_dir,
-                            project_root.as_deref(),
-                            &task_value,
-                            &close_reason,
-                            feedback_source,
-                        );
-                        if let Some((blocker_codes, next_actions)) =
-                            task_close_feedback_blocker_summary(&telemetry)
-                        {
-                            if command.json {
-                                let payload =
-                                    crate::release1_operator_output::Release1OperatorOutputBuilder::new(
-                                        "vida task close",
-                                    )
-                                    .blocker_codes(blocker_codes)
-                                    .next_actions(next_actions)
-                                    .artifact_refs(serde_json::json!({
-                                        "surface": "vida task close",
-                                        "task_id": preclose_task.id.clone(),
-                                        "feedback_source": feedback_source,
-                                    }))
-                                    .extra_fields(serde_json::json!({
-                                        "task": preclose_task,
-                                        "host_agent_telemetry": telemetry,
-                                        "automation": null,
-                                    }))
-                                    .build()
-                                    .expect("task close feedback blocker should satisfy release-1 operator contract");
-                                crate::print_json_pretty(&payload);
-                            } else {
-                                print_task_mutation(
-                                    command.render,
-                                    "vida task close",
-                                    &preclose_task,
-                                    false,
-                                );
-                                print_surface_line(
-                                    command.render,
-                                    "telemetry blockers",
-                                    &blocker_codes.join(", "),
-                                );
-                                for action in next_actions {
-                                    print_surface_line(command.render, "next", &action);
-                                }
-                            }
-                            return ExitCode::from(1);
-                        }
-                    }
+                    // Close authorization is decided only by structured gates above. Close-reason
+                    // classification remains post-close diagnostics and cannot deny closure.
                     match store.close_task(&command.task_id, &close_reason).await {
                         Ok(_task) => {
                             if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
@@ -19869,6 +19814,134 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    fn close_args_for_reason_test(
+        task_id: &str,
+        reason: &str,
+        state_dir: &std::path::Path,
+    ) -> crate::TaskCloseArgs {
+        crate::TaskCloseArgs {
+            task_id: task_id.to_string(),
+            reason: Some(reason.to_string()),
+            reason_file: None,
+            source: Some("task_close_reason_proof_gate_test".to_string()),
+            release: false,
+            install: false,
+            install_target: "current".to_string(),
+            skip_release_build: false,
+            source_binary: None,
+            install_root: None,
+            commit: false,
+            push: false,
+            include_global_progress: false,
+            summary: false,
+            stage_owned: false,
+            commit_files: Vec::new(),
+            commit_message: None,
+            state_dir: Some(state_dir.to_path_buf()),
+            render: crate::RenderMode::Plain,
+            json: true,
+        }
+    }
+
+    #[test]
+    fn task_close_reason_text_cannot_deny_historical_close() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let reasons = [
+            (
+                "close-reason-rejected",
+                "Rejected historical blocker marker; scoped follow-up negation; proof target wording only; 0-failed.",
+            ),
+            (
+                "close-reason-blocked",
+                "Blocked marker was historical and the scoped follow-up is complete; proof target wording only.",
+            ),
+            (
+                "close-reason-zero-failed",
+                "0 failed in the current proof; previous rejected/blocked context is historical; scoped follow-up is negated.",
+            ),
+        ];
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            for (task_id, _) in reasons {
+                create_task_for_test(&store, task_id, task_id, "task", "in_progress", 1, None)
+                    .await;
+            }
+        });
+
+        for (task_id, reason) in reasons {
+            assert_eq!(
+                runtime.block_on(super::run_task(crate::TaskArgs {
+                    command: crate::TaskCommand::Close(close_args_for_reason_test(
+                        task_id,
+                        reason,
+                        harness.path(),
+                    )),
+                })),
+                ExitCode::SUCCESS,
+                "diagnostic close-reason text must not deny {task_id}"
+            );
+        }
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            for (task_id, _) in reasons {
+                assert_eq!(
+                    store.show_task(task_id).await.expect("task should load").status,
+                    "closed"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn task_close_structured_runtime_blocker_survives_text_classifier_miss() {
+        let target = "cargo test -p vida close_reason_runtime_blocker";
+        let mut task = owned_task_record("runtime-blocked-proof", Vec::new());
+        task.labels = vec!["proof-blocked-by-runtime".to_string()];
+        task.close_reason = Some(
+            "Scoped follow-up is complete; proof target wording only.".to_string(),
+        );
+        task.planner_metadata.proof_targets = vec![target.to_string()];
+
+        assert_eq!(
+            crate::agent_feedback_surface::canonical_close_status_from_reason(
+                task.close_reason.as_deref().expect("close reason")
+            ),
+            None,
+            "text classifier must not be needed for structured runtime blocker"
+        );
+        let status = super::task_proof_target_status(&task, target);
+        assert_eq!(status.status, "blocked_by_runtime");
+        assert_eq!(status.evidence_source, "close_reason");
+        assert_eq!(status.legacy_close_reason_match, false);
+    }
+
+    #[test]
+    fn task_close_proof_target_wording_does_not_count_as_structured_proof() {
+        let target = "cargo test -p vida close_reason_target_wording";
+        let mut task = owned_task_record("target-wording-proof", Vec::new());
+        task.close_reason = Some(format!(
+            "Proof target `{target}` passed; scoped follow-up complete."
+        ));
+        task.planner_metadata.proof_targets = vec![target.to_string()];
+
+        let status = super::task_proof_target_status(&task, target);
+        assert_eq!(status.status, "pending");
+        assert_eq!(status.legacy_close_reason_match, true);
+        assert!(
+            status
+                .evidence_detail
+                .contains("structured proof evidence is required")
+        );
+        assert!(super::task_close_structured_proof_gate_payload(&task, None).is_some());
     }
 
     #[test]
