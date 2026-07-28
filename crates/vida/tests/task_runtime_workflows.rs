@@ -1254,6 +1254,157 @@ fn task_close_accepts_replay_persistence_consistency_matrix_and_taskflow_metadat
     );
 }
 
+
+#[test]
+fn task_proof_projection_cli_matrix_is_deterministic_for_duplicate_stale_and_latest_evidence() {
+    let fixture = PersistentRuntimeFixture::state_only("proof-projection-close-gate-matrix");
+    fixture.boot();
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "proof-projection-epic",
+            "Proof projection epic",
+            "--type",
+            "epic",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+    );
+
+
+    let cargo_target = "cargo test -p vida proof_projection";
+    let diagnostics_target = "vida diagnostics post-commit --json";
+    let notes = format!(
+        "task_proof_evidence:\n  proof_target: {cargo_target}\n  result: pass\n  evidence: older pass\n\n         task_proof_evidence:\n  proof_target: {cargo_target}\n  result: fail\n  evidence: newer fail\n\n         task_proof_evidence:\n  proof_target: {diagnostics_target}\n  result: pass\n  evidence: diagnostics pass\n\n{}",
+        zombie_d_matrix_note(serde_json::json!([]))
+    );
+    let import_path = fixture.state_dir().join("proof-projection-matrix.jsonl");
+    let import_record = serde_json::json!({
+        "id": "proof-projection-task",
+        "display_id": null,
+        "title": "Proof projection task",
+        "description": "",
+        "status": "in_progress",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-07-28T00:00:00Z",
+        "created_by": "test",
+        "updated_at": "2026-07-28T00:00:00Z",
+        "closed_at": null,
+        "close_reason": null,
+        "source_repo": ".",
+        "compaction_level": 0,
+        "original_size": 0,
+        "notes": notes,
+        "labels": ["zombie-d"],
+        "planner_metadata": {
+            "owned_paths": ["crates/vida/src/zombie_d_gate.rs"],
+            "proof_targets": [
+                cargo_target,
+                cargo_target,
+                "vida diagnostics --json",
+                diagnostics_target,
+                "zombie_d_matrix"
+            ]
+        },
+        "dependencies": [{
+            "issue_id": "proof-projection-task",
+            "depends_on_id": "proof-projection-epic",
+            "edge_type": "parent-child",
+            "created_at": "1",
+            "created_by": "test",
+            "metadata": "{}",
+            "thread_id": ""
+        }]
+    });
+    std::fs::write(
+        &import_path,
+        format!(
+            "{}\n",
+            serde_json::to_string(&import_record).expect("serialize proof projection import")
+        ),
+    )
+    .expect("write proof projection import");
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "import-jsonl",
+            import_path.to_str().expect("proof projection import path should be utf8"),
+            "--json",
+        ],
+    );
+
+    let status = run_json_success(
+        &fixture,
+        &["task", "proof", "status", "proof-projection-task", "--json"],
+    );
+    assert_eq!(status["configured_proof_target_count"], 3);
+    assert_eq!(status["stored_proof_target_count"], 4);
+    assert_eq!(status["satisfied_count"], 2);
+    assert_eq!(status["missing_count"], 1);
+    assert_eq!(status["missing_targets"], serde_json::json!([cargo_target]));
+    assert_eq!(
+        status["duplicate_proof_targets"],
+        serde_json::json!([diagnostics_target])
+    );
+    assert_eq!(
+        status["stale_proof_targets"],
+        serde_json::json!(["vida diagnostics --json"])
+    );
+    assert_eq!(status["proof_targets"].as_array().map(Vec::len), Some(3));
+
+    let blocked_close = run_json(
+        &fixture,
+        &[
+            "task",
+            "close",
+            "proof-projection-task",
+            "--reason",
+            "proof projection matrix is incomplete",
+            "--json",
+        ],
+    );
+    assert_eq!(blocked_close["status"], "blocked");
+    assert!(blocked_close["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes.iter().any(|code| code == "missing_structured_proof_evidence")));
+
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            "proof-projection-task",
+            "--proof-target",
+            cargo_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/proof-projection.txt",
+            "--evidence",
+            "latest cargo proof passed",
+            "--json",
+        ],
+    );
+    let passed_close = run_json_success(
+        &fixture,
+        &[
+            "task",
+            "close",
+            "proof-projection-task",
+            "--reason",
+            "proof projection matrix passed",
+            "--json",
+        ],
+    );
+    assert_eq!(passed_close["status"], "pass");
+}
+
 #[test]
 fn team_flow_transition_zombie_d_public_matrix() {
     let fixture = PersistentRuntimeFixture::state_only("team-flow-transition-zombie-d");

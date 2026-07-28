@@ -252,48 +252,49 @@ pub fn structured_task_proof_evidence_match(
     if target.is_empty() {
         return None;
     }
-    task_proof_evidence_records(notes)
+    let latest_structured = task_proof_evidence_records(notes)
         .into_iter()
-        .find_map(|record| {
-            let result = record.result.as_deref()?;
-            if result != "pass" {
-                return None;
-            }
-            let matches_target = record.proof_target.as_deref() == Some(target)
-                || record.command.as_deref() == Some(target);
-            if !matches_target {
-                return None;
-            }
-            let evidence_kind = record
-                .evidence_kind
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or(record.record_kind.as_str());
-            let artifact_status = if record.artifact_ref.is_some() {
-                "recorded"
-            } else {
-                "recorded_in_task_notes"
-            };
-            Some(TaskProofEvidenceMatch {
-                evidence_source: "task_proof_evidence_registry".to_string(),
-                evidence_detail: format!(
-                    "structured {evidence_kind} proof evidence reports result pass"
-                ),
-                artifact_status: artifact_status.to_string(),
-            })
-        })
-        .or_else(|| {
-            task_browser_proof_artifacts(notes)
-                .into_iter()
-                .find(|artifact| artifact.satisfies_target(target))
-                .map(|artifact| TaskProofEvidenceMatch {
-                    evidence_source: "task_browser_proof_artifact".to_string(),
-                    evidence_detail: format!(
-                        "schema {} browser proof reports result pass",
-                        artifact.schema_version
-                    ),
-                    artifact_status: artifact.artifact_status().to_string(),
-                })
+        .rev()
+        .find(|record| {
+            record.proof_target.as_deref() == Some(target)
+                || record.command.as_deref() == Some(target)
+        });
+    if let Some(record) = latest_structured {
+        if record.result.as_deref() != Some("pass") {
+            return None;
+        }
+        let evidence_kind = record
+            .evidence_kind
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(record.record_kind.as_str());
+        let artifact_status = if record.artifact_ref.is_some() {
+            "recorded"
+        } else {
+            "recorded_in_task_notes"
+        };
+        return Some(TaskProofEvidenceMatch {
+            evidence_source: "task_proof_evidence_registry".to_string(),
+            evidence_detail: format!(
+                "latest structured {evidence_kind} proof evidence reports result pass"
+            ),
+            artifact_status: artifact_status.to_string(),
+        });
+    }
+
+    let latest_browser = task_browser_proof_artifacts(notes)
+        .into_iter()
+        .rev()
+        .find(|artifact| artifact.proof_target == target || artifact.command == target);
+    latest_browser
+        .filter(|artifact| artifact.satisfies_target(target))
+        .map(|artifact| TaskProofEvidenceMatch {
+            evidence_source: "task_browser_proof_artifact".to_string(),
+            evidence_detail: format!(
+                "latest schema {} browser proof reports result pass",
+                artifact.schema_version
+            ),
+            artifact_status: artifact.artifact_status().to_string(),
         })
 }
 

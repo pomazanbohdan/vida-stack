@@ -1051,6 +1051,43 @@ struct TaskProofTargetStatus {
     next_action: String,
 }
 
+
+fn canonical_task_proof_target_projection(
+    configured: &[String],
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut targets = BTreeSet::new();
+    let mut duplicate_targets = BTreeSet::new();
+    let mut stale_targets = BTreeSet::new();
+
+    for stored_target in configured {
+        let stored_target = stored_target.trim();
+        if stored_target.is_empty() {
+            continue;
+        }
+        let normalized_targets = normalize_proof_target_commands(vec![stored_target.to_string()]);
+        if normalized_targets.len() != 1
+            || normalized_targets.first().map(String::as_str) != Some(stored_target)
+        {
+            stale_targets.insert(stored_target.to_string());
+        }
+        for target in normalized_targets {
+            let target = target.trim();
+            if target.is_empty() {
+                continue;
+            }
+            if !targets.insert(target.to_string()) {
+                duplicate_targets.insert(target.to_string());
+            }
+        }
+    }
+
+    (
+        targets.into_iter().collect(),
+        duplicate_targets.into_iter().collect(),
+        stale_targets.into_iter().collect(),
+    )
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskProofAttachBrowserReceipt {
     surface: &'static str,
@@ -1473,9 +1510,9 @@ fn task_proof_status_payload_with_inheritance(
     read_metadata: Option<&TaskReadMetadata>,
     inheritance_rows: Option<&[state_store::TaskRecord]>,
 ) -> serde_json::Value {
-    let targets = task
-        .planner_metadata
-        .proof_targets
+    let (configured_targets, duplicate_targets, stale_targets) =
+        canonical_task_proof_target_projection(&task.planner_metadata.proof_targets);
+    let targets = configured_targets
         .iter()
         .map(|target| task_proof_target_status_with_inheritance(task, target, inheritance_rows))
         .collect::<Vec<_>>();
@@ -1532,13 +1569,17 @@ fn task_proof_status_payload_with_inheritance(
             "task_id": task.id,
             "task_status": task.status,
             "configured_proof_target_count": configured_count,
+            "stored_proof_target_count": task.planner_metadata.proof_targets.len(),
             "satisfied_count": satisfied_count,
             "missing_count": missing_count,
             "runtime_blocked_count": runtime_blocked_count,
             "missing_proof": configured_count > 0 && missing_count > 0,
             "proof_blocked_by_runtime": runtime_blocked_count > 0,
             "proof_targets": targets,
+            "configured_proof_targets": configured_targets,
             "missing_targets": missing_targets,
+            "duplicate_proof_targets": duplicate_targets,
+            "stale_proof_targets": stale_targets,
             "next_required_command": next_required_command,
             "evidence_model": {
                 "configured_targets_source": "task.planner_metadata.proof_targets",
