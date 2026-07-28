@@ -8431,6 +8431,7 @@ dependencies = [
 name = "vida-policy-rhai"
 version = "0.9.7"
 dependencies = [
+ "blake3",
  "rhai",
  "serde",
  "serde_json",

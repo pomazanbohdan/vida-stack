@@ -5,6 +5,10 @@ use std::{error::Error, fmt};
 use rhai::{Dynamic, Engine, EvalAltResult, Scope};
 use serde_json::Value;
 
+pub mod bundle;
+
+pub use bundle::{BundleCacheStatus, PolicyBundle, PolicyBundleCache, PolicyBundleError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_operations: u64,
@@ -90,6 +94,14 @@ pub fn build_policy_engine(limits: Limits) -> PolicyEngine {
 }
 
 impl PolicyEngine {
+    pub(crate) fn compile_source(&self, script: &str) -> Result<rhai::AST, PolicyError> {
+        let mut scope = Scope::new();
+        scope.push_dynamic("ctx", Dynamic::UNIT);
+        self.engine
+            .compile_with_scope(&scope, script)
+            .map_err(|error| PolicyError::Compile(error.to_string()))
+    }
+
     pub fn evaluate(&self, script: &str, ctx: Value) -> Result<Value, PolicyError> {
         if script.len() > self.limits.max_script_size {
             return Err(PolicyError::ScriptTooLarge {
