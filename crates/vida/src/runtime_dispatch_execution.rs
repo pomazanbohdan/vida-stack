@@ -3767,9 +3767,15 @@ fn host_bridge_receipt_binding_value(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     backend_id: &str,
 ) -> serde_json::Value {
+    let precursor_fingerprint =
+        taskflow_host_bridge::host_bridge_precursor_fingerprint(
+            &serde_json::to_value(receipt).expect("dispatch receipt should serialize"),
+        )
+        .expect("dispatch receipt should fingerprint");
     serde_json::json!({
         "receipt_backed": true,
         "dispatch_status": receipt.dispatch_status,
+        "precursor_fingerprint": precursor_fingerprint,
         "request_id": request.get("request_id"),
         "run_id": receipt.run_id,
         "task_id": request.get("task_id"),
@@ -3880,20 +3886,24 @@ pub(crate) fn validated_host_bridge_receipt_identity(
     let contract_source = crate::config_file_path_for_root(project_root)
         .display()
         .to_string();
-    let identity = HostBridgeReceiptIdentityV1::from_request(
+    let mut receipt_value = serde_json::to_value(receipt).map_err(|error| {
+        format!("host_bridge_receipt_identity_receipt_invalid:{error}")
+    })?;
+    let precursor_fingerprint =
+        taskflow_host_bridge::host_bridge_precursor_fingerprint(&receipt_value)?;
+    receipt_value["precursor_fingerprint"] =
+        serde_json::Value::String(precursor_fingerprint.clone());
+    let identity = HostBridgeReceiptIdentityV1::from_request_with_precursor_fingerprint(
         &request,
         &registry,
         &contract_source,
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|error| format!("host_bridge_receipt_identity_recorded_at_invalid:{error}"))?,
+        Some(precursor_fingerprint),
     )?;
     identity.validate_paths(state_root)?;
-    let blockers =
-        identity
-            .compact_receipt_blockers(&serde_json::to_value(receipt).map_err(|error| {
-                format!("host_bridge_receipt_identity_receipt_invalid:{error}")
-            })?);
+    let blockers = identity.compact_receipt_blockers(&receipt_value);
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }

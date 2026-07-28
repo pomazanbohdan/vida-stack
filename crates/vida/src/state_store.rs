@@ -1146,6 +1146,7 @@ mod tests {
             result_path: "host-tool-bridge/results/state-store.json".to_string(),
             receipt_path: "host-tool-bridge/receipts/state-store.json".to_string(),
             recorded_at: "2026-07-18T00:00:00Z".to_string(),
+            precursor_fingerprint: Some("state-store-precursor-digest".to_string()),
         }
     }
 
@@ -1247,6 +1248,37 @@ mod tests {
             .await
             .expect("cleared compact identity lookup should succeed")
             .is_none());
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_identity_rejects_legacy_missing_precursor_fingerprint() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-legacy-identity-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
+        let identity = sample_host_bridge_receipt_identity();
+        let mut legacy_value = identity.as_value();
+        legacy_value
+            .as_object_mut()
+            .expect("identity should be an object")
+            .remove("precursor_fingerprint");
+        let legacy: taskflow_host_bridge::HostBridgeReceiptIdentityV1 =
+            serde_json::from_value(legacy_value).expect("legacy identity should deserialize");
+
+        let error = store
+            .record_host_bridge_receipt_identity(&legacy)
+            .await
+            .expect_err("legacy identity must fail closed");
+        assert!(error
+            .to_string()
+            .contains("host_bridge_precursor_fingerprint_missing"));
+
         store.close().await;
         let _ = fs::remove_dir_all(root);
     }

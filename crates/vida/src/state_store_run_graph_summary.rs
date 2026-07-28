@@ -2969,6 +2969,7 @@ impl StateStore {
             request_path: identity.request_path.clone(),
             result_path: identity.result_path.clone(),
             receipt_path: identity.receipt_path.clone(),
+            precursor_fingerprint: identity.precursor_fingerprint.clone(),
             recorded_at: identity.recorded_at.clone(),
         })
     }
@@ -3005,10 +3006,16 @@ impl StateStore {
                 reason: "host_bridge_receipt_binding_identity_mismatch:run_or_target".to_string(),
             });
         }
-        let compact_value =
+        let mut compact_value =
             serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
                 reason: format!("host_bridge_receipt_binding_compact_serialize_failed:{error}"),
             })?;
+        let precursor_fingerprint =
+            taskflow_host_bridge::host_bridge_precursor_fingerprint(&compact_value).map_err(
+                |reason| StateStoreError::InvalidTaskRecord { reason },
+            )?;
+        compact_value["precursor_fingerprint"] =
+            serde_json::Value::String(precursor_fingerprint);
         let blockers = identity.compact_receipt_blockers(&compact_value);
         if !blockers.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
@@ -3031,7 +3038,7 @@ impl StateStore {
             .db
             .query(
                 "BEGIN TRANSACTION; \
-                 LET $existing_identity = SELECT VALUE { schema_version: schema_version, request_id: request_id, run_id: run_id, task_id: task_id, attempt_id: attempt_id, packet_id: packet_id, dispatch_target: dispatch_target, packet_path: packet_path, backend_id: backend_id, carrier_id: carrier_id, adapter_kind: adapter_kind, adapter_capability_id: adapter_capability_id, invocation_mode: invocation_mode, dispatch_transport: dispatch_transport, receipt_mode: receipt_mode, adapter_contract_source: adapter_contract_source, adapter_contract_snapshot: adapter_contract_snapshot, adapter_contract_hash: adapter_contract_hash, adapter_operations: adapter_operations, request_path: request_path, result_path: result_path, receipt_path: receipt_path, recorded_at: recorded_at } FROM type::record('host_bridge_receipt_identity', $identity_key); \
+                 LET $existing_identity = SELECT VALUE { schema_version: schema_version, request_id: request_id, run_id: run_id, task_id: task_id, attempt_id: attempt_id, packet_id: packet_id, dispatch_target: dispatch_target, packet_path: packet_path, backend_id: backend_id, carrier_id: carrier_id, adapter_kind: adapter_kind, adapter_capability_id: adapter_capability_id, invocation_mode: invocation_mode, dispatch_transport: dispatch_transport, receipt_mode: receipt_mode, adapter_contract_source: adapter_contract_source, adapter_contract_snapshot: adapter_contract_snapshot, adapter_contract_hash: adapter_contract_hash, adapter_operations: adapter_operations, request_path: request_path, result_path: result_path, receipt_path: receipt_path, precursor_fingerprint: precursor_fingerprint, recorded_at: recorded_at } FROM type::record('host_bridge_receipt_identity', $identity_key); \
                  IF array::len($existing_identity) > 0 AND $existing_identity[0] != $identity { \
                    THROW 'host_bridge_receipt_binding_conflict:identity_key=' + $identity_key; \
                  }; \
@@ -3189,6 +3196,7 @@ impl StateStore {
             request_path: row.request_path,
             result_path: row.result_path,
             receipt_path: row.receipt_path,
+            precursor_fingerprint: row.precursor_fingerprint,
             recorded_at: row.recorded_at,
         };
         identity
@@ -3242,6 +3250,7 @@ impl StateStore {
                     request_path: row.request_path,
                     result_path: row.result_path,
                     receipt_path: row.receipt_path,
+                    precursor_fingerprint: row.precursor_fingerprint,
                     recorded_at: row.recorded_at,
                 };
                 identity
@@ -6895,6 +6904,11 @@ mod tests {
         )
         .to_hex()
         .to_string();
+        let precursor_fingerprint =
+            taskflow_host_bridge::host_bridge_precursor_fingerprint(
+                &serde_json::to_value(receipt).expect("dispatch receipt should serialize"),
+            )
+            .expect("dispatch fixture should fingerprint");
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION
                 .to_string(),
@@ -6929,6 +6943,7 @@ mod tests {
             result_path: format!("host-tool-bridge/results/{run_id}.json"),
             receipt_path: format!("host-tool-bridge/receipts/{run_id}.json"),
             recorded_at: "2026-07-18T00:00:00Z".to_string(),
+            precursor_fingerprint: Some(precursor_fingerprint),
         }
     }
 

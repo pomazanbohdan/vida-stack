@@ -453,6 +453,8 @@ pub(crate) struct HostBridgeReceiptIdentityStored {
     pub(crate) request_path: String,
     pub(crate) result_path: String,
     pub(crate) receipt_path: String,
+    #[serde(default)]
+    pub(crate) precursor_fingerprint: Option<String>,
     pub(crate) recorded_at: String,
 }
 
