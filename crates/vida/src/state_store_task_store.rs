@@ -20,7 +20,7 @@ use taskflow_core::task::aggregate::{
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 use taskflow_core::task::verify::{
     canonical_task_proof_target_projection, structured_task_proof_evidence_match,
-    TaskProofEvidenceMatch,
+    structured_task_proof_evidence_status, TaskProofEvidenceMatch,
 };
 
 const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
@@ -1365,10 +1365,8 @@ impl StateStore {
         target: &str,
         tasks: &[TaskRecord],
     ) -> Option<TaskProofEvidenceMatch> {
-        if let Some(proof_match) =
-            structured_task_proof_evidence_match(task.notes.as_deref(), target)
-        {
-            return Some(proof_match);
+        if structured_task_proof_evidence_status(task.notes.as_deref(), target).is_some() {
+            return structured_task_proof_evidence_match(task.notes.as_deref(), target);
         }
         let children = tasks
             .iter()
@@ -5331,6 +5329,8 @@ mod tests {
         for (parent_id, child_id) in [
             ("missing-proof-parent", "missing-proof-child"),
             ("inherited-proof-parent", "inherited-proof-child"),
+            ("blocked-proof-parent", "blocked-proof-child"),
+            ("failed-proof-parent", "failed-proof-child"),
         ] {
             store
                 .create_task(CreateTaskRequest {
@@ -5370,25 +5370,56 @@ mod tests {
                 .expect("create proof child");
         }
 
-        let mut inherited_child = store
-            .show_task("inherited-proof-child")
-            .await
-            .expect("inherited child should load");
-        inherited_child.notes = Some(
-            taskflow_core::task::verify::append_task_proof_evidence_note(
-                None,
-                target,
-                Some(target),
-                "pass",
-                "command",
-                Some("artifacts/inherited-parent-proof.json"),
-                &["child proof passed".to_string()],
-            ),
-        );
-        store
-            .persist_task_record(inherited_child)
-            .await
-            .expect("child proof should persist");
+        for child_id in [
+            "inherited-proof-child",
+            "blocked-proof-child",
+            "failed-proof-child",
+        ] {
+            let mut child = store
+                .show_task(child_id)
+                .await
+                .expect("proof child should load");
+            child.notes = Some(
+                taskflow_core::task::verify::append_task_proof_evidence_note(
+                    None,
+                    target,
+                    Some(target),
+                    "pass",
+                    "command",
+                    Some("artifacts/inherited-parent-proof.json"),
+                    &["child proof passed".to_string()],
+                ),
+            );
+            store
+                .persist_task_record(child)
+                .await
+                .expect("child proof should persist");
+        }
+
+        for (parent_id, result) in [
+            ("blocked-proof-parent", "blocked"),
+            ("failed-proof-parent", "fail"),
+        ] {
+            let mut parent = store
+                .show_task(parent_id)
+                .await
+                .expect("proof parent should load");
+            parent.notes = Some(
+                taskflow_core::task::verify::append_task_proof_evidence_note(
+                    None,
+                    target,
+                    Some(target),
+                    result,
+                    "command",
+                    None,
+                    &[format!("parent proof {result}")],
+                ),
+            );
+            store
+                .persist_task_record(parent)
+                .await
+                .expect("parent proof should persist");
+        }
 
         store
             .close_task("missing-proof-child", "child complete")
@@ -5415,6 +5446,24 @@ mod tests {
                 .status,
             "closed"
         );
+
+        for (parent_id, child_id) in [
+            ("blocked-proof-parent", "blocked-proof-child"),
+            ("failed-proof-parent", "failed-proof-child"),
+        ] {
+            store
+                .close_task(child_id, "child complete")
+                .await
+                .expect("proven child should close");
+            assert_eq!(
+                store
+                    .show_task(parent_id)
+                    .await
+                    .expect("non-pass parent should load")
+                    .status,
+                "open"
+            );
+        }
 
         close_store_and_remove_root(store, root).await;
     }
