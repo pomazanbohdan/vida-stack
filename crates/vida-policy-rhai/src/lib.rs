@@ -44,6 +44,7 @@ impl Default for Limits {
 pub enum PolicyErrorCode {
     ScriptTooLarge,
     ContextTooLarge,
+    OutputTooLarge,
     Compile,
     Evaluation,
     UnsupportedValue,
@@ -56,6 +57,7 @@ impl PolicyErrorCode {
         match self {
             Self::ScriptTooLarge => "script_too_large",
             Self::ContextTooLarge => "context_too_large",
+            Self::OutputTooLarge => "output_too_large",
             Self::Compile => "compile",
             Self::Evaluation => "evaluation",
             Self::UnsupportedValue => "unsupported_value",
@@ -68,6 +70,7 @@ impl PolicyErrorCode {
 pub enum PolicyError {
     ScriptTooLarge { actual: usize, limit: usize },
     ContextTooLarge { actual: usize, limit: usize },
+    OutputTooLarge { actual: usize, limit: usize },
     Compile(String),
     Evaluation(String),
     UnsupportedValue(String),
@@ -80,6 +83,7 @@ impl PolicyError {
         match self {
             Self::ScriptTooLarge { .. } => PolicyErrorCode::ScriptTooLarge,
             Self::ContextTooLarge { .. } => PolicyErrorCode::ContextTooLarge,
+            Self::OutputTooLarge { .. } => PolicyErrorCode::OutputTooLarge,
             Self::Compile(_) => PolicyErrorCode::Compile,
             Self::Evaluation(_) => PolicyErrorCode::Evaluation,
             Self::UnsupportedValue(_) => PolicyErrorCode::UnsupportedValue,
@@ -101,6 +105,12 @@ impl fmt::Display for PolicyError {
                 write!(
                     formatter,
                     "policy context size {actual} exceeds limit {limit}"
+                )
+            }
+            Self::OutputTooLarge { actual, limit } => {
+                write!(
+                    formatter,
+                    "policy output size exceeds limit {limit} bytes (at least {actual} bytes)"
                 )
             }
             Self::Compile(error) => write!(formatter, "policy compile failed: {error}"),
@@ -174,7 +184,7 @@ impl PolicyEngine {
             .engine
             .eval_ast_with_scope::<Dynamic>(&mut scope, ast)
             .map_err(|error| PolicyError::Evaluation(error.to_string()))?;
-        dynamic_to_json(result)
+        dynamic_to_json(result, &mut OutputBudget::new(self.limits.max_context_size))
     }
 
     fn validate_script(&self, script: &str) -> Result<(), PolicyError> {
@@ -236,31 +246,74 @@ fn json_to_dynamic(value: &Value) -> Dynamic {
     }
 }
 
-fn dynamic_to_json(value: Dynamic) -> Result<Value, PolicyError> {
+struct OutputBudget {
+    used: usize,
+    limit: usize,
+}
+
+impl OutputBudget {
+    const fn new(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
+    fn consume(&mut self, bytes: usize) -> Result<(), PolicyError> {
+        self.used = self.used.saturating_add(bytes);
+        if self.used > self.limit {
+            return Err(PolicyError::OutputTooLarge {
+                actual: self.used,
+                limit: self.limit,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn dynamic_to_json(value: Dynamic, budget: &mut OutputBudget) -> Result<Value, PolicyError> {
     if value.is_unit() {
+        budget.consume(4)?;
         return Ok(Value::Null);
     }
     if let Some(value) = value.clone().try_cast::<bool>() {
+        budget.consume(if value { 4 } else { 5 })?;
         return Ok(Value::Bool(value));
     }
     if let Some(value) = value.clone().try_cast::<rhai::INT>() {
+        budget.consume(value.to_string().len())?;
         return Ok(Value::Number(value.into()));
     }
     if let Some(value) = value.clone().try_cast::<rhai::FLOAT>() {
         let number = serde_json::Number::from_f64(value as f64)
             .ok_or_else(|| PolicyError::UnsupportedValue("non-finite float".to_string()))?;
+        budget.consume(number.to_string().len())?;
         return Ok(Value::Number(number));
     }
     if let Some(value) = value.clone().try_cast::<rhai::ImmutableString>() {
-        return Ok(Value::String(value.to_string()));
+        let value = value.to_string();
+        let serialized_len = serde_json::to_vec(&value)
+            .map_err(|error| PolicyError::Json(error.to_string()))?
+            .len();
+        budget.consume(serialized_len)?;
+        return Ok(Value::String(value));
     }
     if let Some(values) = value.clone().try_cast::<rhai::Array>() {
-        return values.into_iter().map(dynamic_to_json).collect();
+        budget.consume(2 + values.len().saturating_sub(1))?;
+        return values
+            .into_iter()
+            .map(|value| dynamic_to_json(value, budget))
+            .collect();
     }
     if let Some(values) = value.try_cast::<rhai::Map>() {
+        budget.consume(2 + values.len().saturating_sub(1))?;
         let entries = values
             .into_iter()
-            .map(|(key, value)| dynamic_to_json(value).map(|value| (key.to_string(), value)))
+            .map(|(key, value)| {
+                let key = key.to_string();
+                let key_len = serde_json::to_vec(&key)
+                    .map_err(|error| PolicyError::Json(error.to_string()))?
+                    .len();
+                budget.consume(key_len + 1)?;
+                dynamic_to_json(value, budget).map(|value| (key, value))
+            })
             .collect::<Result<Vec<_>, PolicyError>>()?;
         return Ok(Value::Object(entries.into_iter().collect()));
     }
@@ -305,23 +358,29 @@ mod sandbox_tests {
 
     #[test]
     fn sandbox_rejects_import() {
-        assert!(engine()
-            .evaluate(r#"import \"blocked\" as blocked; 1"#, json!({}))
-            .is_err());
+        assert!(
+            engine()
+                .evaluate(r#"import \"blocked\" as blocked; 1"#, json!({}))
+                .is_err()
+        );
     }
 
     #[test]
     fn sandbox_enforces_operation_limit() {
-        assert!(engine()
-            .evaluate("let n = 0; while n < 100000 { n += 1; } n", json!({}))
-            .is_err());
+        assert!(
+            engine()
+                .evaluate("let n = 0; while n < 100000 { n += 1; } n", json!({}))
+                .is_err()
+        );
     }
 
     #[test]
     fn sandbox_enforces_recursion_call_depth() {
-        assert!(engine()
-            .evaluate("fn recurse() { recurse(); } recurse()", json!({}))
-            .is_err());
+        assert!(
+            engine()
+                .evaluate("fn recurse() { recurse(); } recurse()", json!({}))
+                .is_err()
+        );
     }
 
     #[test]
@@ -333,6 +392,25 @@ mod sandbox_tests {
         assert!(matches!(
             engine().evaluate("1", json!({"value": "x".repeat(65)})),
             Err(PolicyError::ContextTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn sandbox_rejects_output_larger_than_the_context_budget() {
+        let value = "x".repeat(24);
+        let engine = build_policy_engine(Limits {
+            max_operations: 64,
+            max_call_levels: 4,
+            max_expr_depth: 32,
+            max_string_size: 256,
+            max_array_size: 4,
+            max_map_size: 4,
+            max_script_size: 64,
+            max_context_size: 64,
+        });
+        assert!(matches!(
+            engine.evaluate("[ctx.value, ctx.value, ctx.value]", json!({"value": value})),
+            Err(PolicyError::OutputTooLarge { limit: 64, .. })
         ));
     }
 }

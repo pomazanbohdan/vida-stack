@@ -576,6 +576,32 @@ mod tests {
     }
 
     #[test]
+    fn fixture_oversized_output_is_not_retained_in_the_report() {
+        let engine = build_policy_engine(Limits {
+            max_context_size: 64,
+            ..Limits::default()
+        });
+        let report = run_fixture_jsonl(
+            &engine,
+            &bundle("[ctx.value, ctx.value, ctx.value]"),
+            &corpus(&[json!({
+                "fixture_id":"oversized-output",
+                "context":{"value":"xxxxxxxxxxxxxxxxxxxxxxxx"},
+                "expected":1
+            })]),
+        )
+        .unwrap();
+
+        let failure = report.results[0].failure.as_ref().unwrap();
+        assert_eq!(failure.code, FixtureFailureCode::UnexpectedPolicyError);
+        assert_eq!(failure.actual, None);
+        assert_eq!(
+            failure.actual_error_code,
+            Some(PolicyErrorCode::OutputTooLarge)
+        );
+    }
+
+    #[test]
     fn fixture_wrong_error_code_is_a_failed_result() {
         let report = run_fixture_jsonl(
             &engine(),
