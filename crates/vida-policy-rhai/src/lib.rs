@@ -2,12 +2,15 @@
 
 use std::{error::Error, fmt};
 
-use rhai::{Dynamic, Engine, EvalAltResult, Scope};
+use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod bundle;
+pub mod fixture;
 
 pub use bundle::{BundleCacheStatus, PolicyBundle, PolicyBundleCache, PolicyBundleError};
+pub use fixture::{FixtureReport, FixtureRunError, run_fixture_jsonl};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -36,6 +39,31 @@ impl Default for Limits {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyErrorCode {
+    ScriptTooLarge,
+    ContextTooLarge,
+    Compile,
+    Evaluation,
+    UnsupportedValue,
+    Json,
+}
+
+impl PolicyErrorCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ScriptTooLarge => "script_too_large",
+            Self::ContextTooLarge => "context_too_large",
+            Self::Compile => "compile",
+            Self::Evaluation => "evaluation",
+            Self::UnsupportedValue => "unsupported_value",
+            Self::Json => "json",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
     ScriptTooLarge { actual: usize, limit: usize },
@@ -44,6 +72,20 @@ pub enum PolicyError {
     Evaluation(String),
     UnsupportedValue(String),
     Json(String),
+}
+
+impl PolicyError {
+    #[must_use]
+    pub const fn code(&self) -> PolicyErrorCode {
+        match self {
+            Self::ScriptTooLarge { .. } => PolicyErrorCode::ScriptTooLarge,
+            Self::ContextTooLarge { .. } => PolicyErrorCode::ContextTooLarge,
+            Self::Compile(_) => PolicyErrorCode::Compile,
+            Self::Evaluation(_) => PolicyErrorCode::Evaluation,
+            Self::UnsupportedValue(_) => PolicyErrorCode::UnsupportedValue,
+            Self::Json(_) => PolicyErrorCode::Json,
+        }
+    }
 }
 
 impl fmt::Display for PolicyError {
@@ -74,6 +116,8 @@ impl Error for PolicyError {}
 pub struct PolicyEngine {
     engine: Engine,
     limits: Limits,
+    #[cfg(test)]
+    compile_count: std::cell::Cell<usize>,
 }
 
 pub fn build_policy_engine(limits: Limits) -> PolicyEngine {
@@ -90,11 +134,19 @@ pub fn build_policy_engine(limits: Limits) -> PolicyEngine {
     for symbol in ["eval", "print", "debug"] {
         engine.disable_symbol(symbol);
     }
-    PolicyEngine { engine, limits }
+    PolicyEngine {
+        engine,
+        limits,
+        #[cfg(test)]
+        compile_count: std::cell::Cell::new(0),
+    }
 }
 
 impl PolicyEngine {
-    pub(crate) fn compile_source(&self, script: &str) -> Result<rhai::AST, PolicyError> {
+    pub(crate) fn compile_source(&self, script: &str) -> Result<AST, PolicyError> {
+        self.validate_script(script)?;
+        #[cfg(test)]
+        self.compile_count.set(self.compile_count.get() + 1);
         let mut scope = Scope::new();
         scope.push_dynamic("ctx", Dynamic::UNIT);
         self.engine
@@ -103,6 +155,29 @@ impl PolicyEngine {
     }
 
     pub fn evaluate(&self, script: &str, ctx: Value) -> Result<Value, PolicyError> {
+        let ast = self.compile_source(script)?;
+        self.evaluate_ast(&ast, ctx)
+    }
+
+    pub(crate) fn evaluate_ast(&self, ast: &AST, ctx: Value) -> Result<Value, PolicyError> {
+        let context_bytes =
+            serde_json::to_vec(&ctx).map_err(|error| PolicyError::Json(error.to_string()))?;
+        if context_bytes.len() > self.limits.max_context_size {
+            return Err(PolicyError::ContextTooLarge {
+                actual: context_bytes.len(),
+                limit: self.limits.max_context_size,
+            });
+        }
+        let mut scope = Scope::new();
+        scope.push_dynamic("ctx", json_to_dynamic(&ctx));
+        let result = self
+            .engine
+            .eval_ast_with_scope::<Dynamic>(&mut scope, ast)
+            .map_err(|error| PolicyError::Evaluation(error.to_string()))?;
+        dynamic_to_json(result)
+    }
+
+    fn validate_script(&self, script: &str) -> Result<(), PolicyError> {
         if script.len() > self.limits.max_script_size {
             return Err(PolicyError::ScriptTooLarge {
                 actual: script.len(),
@@ -116,21 +191,12 @@ impl PolicyEngine {
             );
             return Err(PolicyError::Evaluation(error.to_string()));
         }
-        let context_bytes =
-            serde_json::to_vec(&ctx).map_err(|error| PolicyError::Json(error.to_string()))?;
-        if context_bytes.len() > self.limits.max_context_size {
-            return Err(PolicyError::ContextTooLarge {
-                actual: context_bytes.len(),
-                limit: self.limits.max_context_size,
-            });
-        }
-        let mut scope = Scope::new();
-        scope.push_dynamic("ctx", json_to_dynamic(&ctx));
-        let result = self
-            .engine
-            .eval_with_scope::<Dynamic>(&mut scope, script)
-            .map_err(|error| PolicyError::Evaluation(error.to_string()))?;
-        dynamic_to_json(result)
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compile_count(&self) -> usize {
+        self.compile_count.get()
     }
 }
 
