@@ -68,6 +68,7 @@ pub use provenance::{
 pub use precursor_fingerprint::{
     host_bridge_precursor_fingerprint, HostBridgePrecursorFingerprintV1,
     HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION,
+    HOST_BRIDGE_PRECURSOR_FINGERPRINT_MISSING,
 };
 pub use receipt_binding::{
     BLOCKER_PRECURSOR_FINGERPRINT_MISSING, DispatchReceiptBindingDecision,

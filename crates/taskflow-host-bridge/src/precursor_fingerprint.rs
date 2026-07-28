@@ -3,6 +3,8 @@ use serde_json::Value;
 
 pub const HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION: &str =
     "host-bridge-precursor-fingerprint-v1";
+pub const HOST_BRIDGE_PRECURSOR_FINGERPRINT_MISSING: &str =
+    "host_bridge_precursor_fingerprint_missing";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostBridgePrecursorFingerprintV1 {
@@ -40,6 +42,12 @@ pub struct HostBridgePrecursorFingerprintV1 {
 }
 
 impl HostBridgePrecursorFingerprintV1 {
+    pub fn from_value(value: Option<&Value>) -> Result<Self, String> {
+        value
+            .map(Self::from_receipt_value)
+            .unwrap_or_else(|| Err(HOST_BRIDGE_PRECURSOR_FINGERPRINT_MISSING.to_string()))
+    }
+
     pub fn from_receipt_value(receipt: &Value) -> Result<Self, String> {
         let mut fingerprint: Self = serde_json::from_value(receipt.clone())
             .map_err(|error| format!("host_bridge_precursor_fingerprint_receipt_invalid:{error}"))?;
