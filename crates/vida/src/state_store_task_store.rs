@@ -3247,6 +3247,12 @@ impl StateStore {
             planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
+        let dispatch_enabled = crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
+        let has_active_run = if dispatch_enabled {
+            self.latest_run_graph_run_id_for_task(task_id).await?.is_some()
+        } else {
+            false
+        };
         let base_task_for_update = task.clone();
         let base_updated_at = task.updated_at.clone();
         let explicit_notes_replacement = notes.is_some();
@@ -3272,6 +3278,15 @@ impl StateStore {
             let requested_status_is_closed =
                 requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
+                if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize(
+                    crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
+                    crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
+                    &crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+                ) {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: reason.to_string(),
+                    });
+                }
                 Self::ensure_task_update_close_authority(&task, planner_metadata.as_ref())?;
                 let non_closed_children = self
                     .non_closed_child_status_evidence_for_task_live(task_id)
@@ -3461,9 +3476,12 @@ impl StateStore {
                 Vec::new(),
             )
         };
-        let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
-            .await?;
+        let closed_parents = if dispatch_enabled {
+            self.filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
+                .await?
+        } else {
+            closed_parents
+        };
         let mut touched_task_ids = reopened_parents
             .iter()
             .map(|parent| parent.id.clone())
@@ -3619,10 +3637,12 @@ impl StateStore {
         };
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
-            self.refresh_run_graph_continuation_after_task_close(&parent.id)
-                .await?;
+            if dispatch_enabled {
+                self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                    .await?;
+            }
         }
-        if task_is_closed {
+        if task_is_closed && dispatch_enabled {
             self.refresh_run_graph_continuation_after_task_close(task_id)
                 .await?;
         }
@@ -4247,6 +4267,21 @@ impl StateStore {
         let tasks = self.all_tasks().await?;
 
         let mut task = self.show_task(task_id).await?;
+        let dispatch_enabled = crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
+        let has_active_run = if dispatch_enabled {
+            self.latest_run_graph_run_id_for_task(task_id).await?.is_some()
+        } else {
+            false
+        };
+        if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize(
+            crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
+            crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
+            &crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+        ) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: reason.to_string(),
+            });
+        }
         Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
         let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
         Self::ensure_task_lifecycle_admitted(
@@ -4299,9 +4334,12 @@ impl StateStore {
                 ),
             });
         }
-        let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
-            .await?;
+        let closed_parents = if dispatch_enabled {
+            self.filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
+                .await?
+        } else {
+            closed_parents
+        };
         let close_plan = plan_close_task(TaskCloseCommand {
             task: TaskAggregateTaskSnapshot {
                 id: task.id.clone(),
@@ -4338,8 +4376,10 @@ impl StateStore {
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
-            self.refresh_run_graph_continuation_after_task_close(&parent.id)
-                .await?;
+            if dispatch_enabled {
+                self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                    .await?;
+            }
         }
         self.release_active_task_claims_for_task(task_id, "task_closed")
             .await?;
@@ -4347,12 +4387,14 @@ impl StateStore {
             self.release_active_task_claims_for_task(&parent.id, "task_closed")
                 .await?;
         }
-        self.retire_canonical_task_close_active_run(&task).await?;
-        for parent in &closed_parents {
-            self.retire_canonical_task_close_active_run(parent).await?;
+        if dispatch_enabled {
+            self.retire_canonical_task_close_active_run(&task).await?;
+            for parent in &closed_parents {
+                self.retire_canonical_task_close_active_run(parent).await?;
+            }
+            self.refresh_run_graph_continuation_after_task_close(task_id)
+                .await?;
         }
-        self.refresh_run_graph_continuation_after_task_close(task_id)
-            .await?;
         Ok(task)
     }
 

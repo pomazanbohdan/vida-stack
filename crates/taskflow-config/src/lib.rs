@@ -9,10 +9,18 @@ pub struct RuntimeBundleConfig {
     pub format_profile: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TaskflowDispatchConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskflowConfig {
     pub runtime_family: String,
     pub bundle: RuntimeBundleConfig,
+    #[serde(default)]
+    pub dispatch: TaskflowDispatchConfig,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -68,6 +76,7 @@ mod tests {
 
         assert_eq!(config.runtime_family, "taskflow");
         assert_eq!(config.bundle.state_adapter, "surreal");
+        assert!(!config.dispatch.enabled);
     }
 
     #[test]
@@ -84,5 +93,21 @@ mod tests {
         .expect_err("config should fail");
 
         assert_eq!(error, TaskflowConfigError::EmptyRuntimeFamily);
+    }
+
+    #[test]
+    fn rejects_malformed_dispatch_enabled_value() {
+        let error = load_from_json_str(
+            r#"{
+                "runtime_family": "taskflow",
+                "bundle": {
+                    "state_adapter": "surreal",
+                    "format_profile": "canonical"
+                },
+                "dispatch": {"enabled": "true"}
+            }"#,
+        )
+        .expect_err("dispatch enabled must be a boolean");
+        assert!(matches!(error, TaskflowConfigError::Decode(_)));
     }
 }

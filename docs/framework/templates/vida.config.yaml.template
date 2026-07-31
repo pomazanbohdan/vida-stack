@@ -22,6 +22,10 @@ language_policy:
   documentation: __DOCUMENTATION_LANGUAGE__
   todo_protocol: __TODO_PROTOCOL_LANGUAGE__
 
+taskflow:
+  dispatch:
+    enabled: false
+
 host_environment:
   cli_system: __HOST_CLI_SYSTEM__
   bootstrap_carrier_system: codex

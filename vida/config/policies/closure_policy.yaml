@@ -11,12 +11,26 @@ kernel_rules:
   closure_ready:
     all_of:
       - task_in_progress_or_deferred
-      - route_progression_completed
-      - verification_state_satisfied
-      - approval_state_satisfied
       - no_open_blockers
-      - no_reconciliation_blocker
-      - required_proof_categories_present
+  management_runtime:
+    enabled_by_default: true
+    closure_ready:
+      all_of:
+        - task_in_progress_or_deferred
+        - no_open_management_blockers
+        - graph_and_child_guards_satisfied
+  dispatch_runtime:
+    enabled_by_config: taskflow.dispatch.enabled
+    execution_bound_tasks_only: true
+    closure_ready:
+      all_of:
+        - task_in_progress_or_deferred
+        - route_progression_completed
+        - verification_state_satisfied
+        - approval_state_satisfied
+        - no_open_blockers
+        - no_reconciliation_blocker
+        - required_proof_categories_present
 
   approval_required_when:
     any_of:

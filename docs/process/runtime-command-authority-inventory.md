@@ -57,13 +57,21 @@ State access modes:
 | `vida recovery` | TaskFlow recovery alias | Proxy | forwarded to TaskFlow recovery | TaskFlow JSON contract | recovery inspection | recovery tests |
 | `vida route` | TaskFlow route alias | Proxy | forwarded to TaskFlow route | TaskFlow JSON contract | route diagnostics | route tests |
 | `vida release` | release surface | Mutation | release/install paths | JSON when requested | binary release/install | release smoke |
-| `vida taskflow` | TaskFlow runtime family | Proxy | family-owned state-dir rules | TaskFlow JSON contract | runtime workflow | TaskFlow smoke |
+| `vida taskflow` | TaskFlow management runtime plus optional dispatch runtime | Proxy | family-owned state-dir rules | TaskFlow JSON contract | runtime workflow | TaskFlow smoke |
 | `vida docflow` | DocFlow runtime family | Proxy | family-owned docs state | DocFlow JSON contract | documentation workflow | DocFlow validation |
 | external subcommand | root external fallback | ExternalProxy | external/provider dependent | external contract | compatibility escape hatch | explicit adapter tests |
 
 ## Task Command Matrix
 
 All `vida task` subcommands are owned by the TaskFlow authoritative state store. Each subcommand preserves an explicit `--state-dir` when the CLI struct exposes one; otherwise project binding is prepared by the root router. `help` and `adaptive-preview` are parse/read surfaces that do not need project-root binding.
+
+## TaskFlow Runtime Split
+
+| Surface | Authority | Disabled behavior |
+| --- | --- | --- |
+| `vida task create|update|close|reparent|deps` | Task Management Runtime | Always available; management-only close does not reconcile dispatch artifacts. |
+| `vida taskflow dispatch status|adopt` | Task Dispatch Runtime | Returns `dispatch_runtime_disabled` when `taskflow.dispatch.enabled` is false; `adopt --apply` never writes in that mode. |
+| `vida taskflow scheduler dispatch`, `consume`, run-graph mutation aliases | Task Dispatch Runtime | Compatibility aliases fail closed with `dispatch_runtime_disabled`. |
 
 | Task subcommand | State access | Authority/role | Recommended proof |
 | --- | --- | --- | --- |

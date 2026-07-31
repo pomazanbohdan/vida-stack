@@ -477,6 +477,14 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         "binding_status": protocol_binding_registry["binding_status"]
             .as_str()
             .unwrap_or("blocked"),
+        "taskflow_runtime": {
+            "management_runtime": crate::taskflow_management::runtime_metadata(),
+            "dispatch_runtime": {
+                "enabled": crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(store.root()),
+                "authority": "execution_bound_transitions",
+                "disabled_blocker": crate::taskflow_runtime::DISPATCH_RUNTIME_DISABLED_CODE,
+            },
+        },
     });
     let startup_bundle_revision = project_protocol_projections["startup_bundle"]
         .get("artifact_revision")

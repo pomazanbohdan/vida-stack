@@ -15348,6 +15348,10 @@ async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
         return run_taskflow_query(&args.args);
     }
 
+    if matches!(args.args.first().map(String::as_str), Some("dispatch")) {
+        return crate::taskflow_dispatch::run_taskflow_dispatch(&args.args).await;
+    }
+
     if matches!(
         args.args.first().map(String::as_str),
         Some("--version" | "-V")
@@ -15415,6 +15419,18 @@ async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
     }
 
     if matches!(args.args.first().map(String::as_str), Some("scheduler")) {
+        if matches!(args.args.get(1).map(String::as_str), Some("dispatch"))
+            && !args.args.iter().any(|arg| arg == "--help" || arg == "-h")
+            && !crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(
+                &crate::taskflow_task_bridge::proxy_state_dir(),
+            )
+        {
+            crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
+                "vida taskflow scheduler dispatch",
+                crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,
+            ));
+            return ExitCode::from(1);
+        }
         return run_taskflow_scheduler_surface(&args.args).await;
     }
 

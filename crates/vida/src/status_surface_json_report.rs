@@ -121,6 +121,8 @@ pub(crate) fn build_status_json_report(
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "taskflow_counts": taskflow_counts.clone(),
+            "management_status": crate::taskflow_runtime::management_status_projection(),
+            "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(inputs.state_dir),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -172,6 +174,8 @@ pub(crate) fn build_status_json_report(
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "taskflow_counts": taskflow_counts.clone(),
+            "management_status": crate::taskflow_runtime::management_status_projection(),
+            "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(inputs.state_dir),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,

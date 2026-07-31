@@ -886,10 +886,13 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Purpose:");
             println!(
-                "  Inspect active dispatch status, blocker truth, packet/result evidence, and downstream handoff posture for one routed run."
+                "  Optional worker/run-graph runtime over the always-on task management runtime. Enable explicitly with taskflow.dispatch.enabled: true."
             );
             println!();
             println!("Canonical commands:");
+            println!("  vida taskflow dispatch status [--json]");
+            println!("  vida taskflow dispatch adopt --dry-run [--run-id <id>] [--task-id <id>] [--json]");
+            println!("  vida taskflow dispatch adopt --apply --run-id <id> --task-id <id> [--json]");
             println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] --json");
             println!("  vida taskflow recovery status <run-id> --json");
             println!("  vida taskflow packet render <run-id> --json");
@@ -903,6 +906,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  Packet rendering fails closed when no persisted dispatch packet/result evidence exists for the selected run, and `packet latest` fails closed when no latest persisted dispatch receipt exists yet."
             );
+            println!("  Dispatch mutations fail closed with dispatch_runtime_disabled when the feature flag is false.");
             return;
         }
         Some("run-graph") => {
@@ -1108,7 +1112,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Purpose:");
     println!(
-        "  Enter the TaskFlow runtime family for tracked execution, backlog state, run-graph state, and closure handoff."
+        "  Enter the TaskFlow runtime family for task management, optional worker dispatch, backlog state, run-graph state, and closure handoff."
     );
     println!();
     println!("Source of truth notes:");
@@ -1153,6 +1157,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  run-graph   resumability and node-state inspection");
     println!("  pricing     price-catalog readiness and provider snapshot import receipts");
     println!("  consume     explicit TaskFlow -> final closure handoff");
+    println!("  dispatch    optional worker/run-graph runtime; management remains always-on");
     println!("  query       launcher-owned command-discovery helper");
     println!(
         "  bootstrap-spec  one-shot epic/spec/doc bootstrap for design-first feature requests"
@@ -1178,6 +1183,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     );
     println!("  vida taskflow scheduler dispatch");
     println!("  vida taskflow scheduler dispatch --json");
+    println!("  vida taskflow dispatch status --json");
+    println!("  vida taskflow dispatch adopt --dry-run --json");
     println!("  vida taskflow help dependencies");
     println!("  vida taskflow help queue");
     println!("  vida taskflow help dispatch");

@@ -20,12 +20,13 @@ bash beads-bg-sync.sh stop
 
 Autostart note: `beads-workflow.sh` attempts to auto-start a backup-only background worker at session entry commands (`ready|start|...`). Control via env: `VIDA_BG_SYNC_AUTOSTART=1|0` (default `1`); `VIDA_BG_SYNC_AUTOSTART_INTERVAL=<sec>` (default `600`, minimum enforced `120`).
 
-## 2) Two-Layer Model
+## 2) Runtime Ownership Model
 
-1. Task lifecycle/state: `vida taskflow task` over `.vida/state/taskflow-state.db` (`open`, `in_progress`, `closed`, `deferred`, deps).
-2. Execution trace/visibility: TaskFlow blocks in beads logs (`block-plan/start/end/reflect/verify`).
+1. Task Management Runtime: `vida taskflow task` over `.vida/state/taskflow-state.db` (`open`, `in_progress`, `closed`, `deferred`, deps).
+2. Task Dispatch Runtime: optional scheduler/run-graph/receipt and worker execution state.
+3. Execution trace/visibility: TaskFlow blocks in beads logs (`block-plan/start/end/reflect/verify`).
 
-Rule: TaskFlow is not a second task-state engine. It is execution telemetry only.
+Rule: dispatch is not a second task-row store. It requests lifecycle transitions through the shared management API and is authoritative only for execution-driven transitions when enabled.
 
 Reconciliation rule: when DB-backed lifecycle state and TaskFlow execution state diverge, use `runtime-instructions/work.task-state-reconciliation-protocol` to classify the task before mutating lifecycle state.
 

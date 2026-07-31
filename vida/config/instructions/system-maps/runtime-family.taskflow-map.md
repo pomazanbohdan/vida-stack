@@ -6,13 +6,14 @@ Purpose: define the bounded `taskflow` runtime family surface used for tracked e
 
 1. runtime family: `taskflow`
 2. root surface: `vida taskflow`
-3. current role: execution/runtime substrate exposed through the TaskFlow runtime family
+3. current role: task management plus optional dispatch/runtime substrate exposed through the TaskFlow runtime family
 4. framework relationship: independently usable runtime family under the unified VIDA framework map
 
 ## Canonical Surfaces
 
 1. runtime launcher surface:
    - `vida taskflow`
+   - `vida taskflow dispatch` (opt-in worker/run-graph runtime)
 2. runtime implementation/workspace:
    - TaskFlow runtime family implementation surfaces referenced through the runtime-family map and launcher source tree
 3. runtime tests:
@@ -71,10 +72,12 @@ Read this map when:
 
 ## Boundary Rule
 
-1. `taskflow` is the current execution substrate, not the owner of framework-wide semantic canon.
-2. Framework law remains in `AGENTS.md`, `vida/config/**`, and canonical docs.
-3. The TaskFlow runtime family implementation surfaces are the bounded implementation/runtime family surface that consumes that law.
-4. When final runtime consumption is being wired or evaluated, `taskflow` must not infer canonical inventory/readiness consumption from implementation presence alone; it must explicitly activate the bounded `DocFlow` runtime-family surface as the canonical downstream documentation/readiness map.
+1. `taskflow` contains an always-on management runtime and an opt-in dispatch runtime; neither owns framework-wide semantic canon.
+2. Management closure is valid without dispatch when `taskflow.dispatch.enabled` is false.
+3. Dispatch owns execution-driven transitions only for execution-bound tasks when enabled.
+4. Framework law remains in `AGENTS.md`, `vida/config/**`, and canonical docs.
+5. The TaskFlow runtime family implementation surfaces are the bounded implementation/runtime family surface that consumes that law.
+6. When final runtime consumption is being wired or evaluated, `taskflow` must not infer canonical inventory/readiness consumption from implementation presence alone; it must explicitly activate the bounded `DocFlow` runtime-family surface as the canonical downstream documentation/readiness map.
 
 -----
 artifact_path: config/system-maps/runtime-family.taskflow

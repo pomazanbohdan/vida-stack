@@ -11092,6 +11092,17 @@ async fn run_taskflow_run_graph_dispatch_init_mutation(
 
 pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode {
     let state_dir = proxy_state_dir();
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("seed" | "advance" | "dispatch-init" | "init" | "update")
+    ) && !crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(&state_dir)
+    {
+        crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
+            "vida taskflow run-graph",
+            crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,
+        ));
+        return ExitCode::from(1);
+    }
     match args {
         [head, subcommand, run_id, flag]
             if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>

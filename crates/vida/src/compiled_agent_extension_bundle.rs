@@ -161,6 +161,7 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         .cloned()
         .unwrap_or(serde_yaml::Value::Null);
     let dev_team_json = serde_json::to_value(dev_team_value).unwrap_or(serde_json::Value::Null);
+    let taskflow_dispatch_enabled = crate::taskflow_runtime::taskflow_dispatch_enabled(config);
     let agent_system_value = serde_json::to_value(
         crate::yaml_lookup(config, &["agent_system"])
             .cloned()
@@ -220,6 +221,13 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "pack_catalog": pack_catalog,
         "command_catalog": command_catalog,
         "team_flow_authority": team_flow_authority,
+        "taskflow": {
+            "management_runtime": "always_on",
+            "dispatch": {
+                "enabled": taskflow_dispatch_enabled,
+                "runtime": "task_dispatch",
+            },
+        },
         "hook_templates": hook_templates,
         "hook_template_registry": {
             "configured_path": hook_template_projection.hook_templates_path,

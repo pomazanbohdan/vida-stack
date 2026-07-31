@@ -563,6 +563,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("final" | "continue" | "advance")
+    ) && !crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(
+        &super::taskflow_task_bridge::proxy_state_dir(),
+    ) {
+        crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
+            "vida taskflow consume",
+            crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,
+        ));
+        return ExitCode::from(1);
+    }
+
     if let Some(exit) = super::taskflow_consume_bundle::run_taskflow_consume_bundle(args).await {
         return exit;
     }

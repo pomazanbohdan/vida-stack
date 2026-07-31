@@ -13,10 +13,12 @@ Compression note: this revision is a quality-preserving refactor. Legacy heading
 ## 1) Layer Model
 
 1. `Intent Layer`: user request, constraints, acceptance.
-2. `Work Layer`: DB-backed `vida taskflow task` lifecycle (`open/in_progress/closed`).
-3. `Execution Layer`: TaskFlow steps/tracks for implementation.
+2. `Task Management Runtime`: DB-backed `vida taskflow task` lifecycle (`open/in_progress/closed`), graph links, and management closure.
+3. `Task Dispatch Runtime`: opt-in scheduler/worker/run-graph/receipt execution over execution-bound tasks.
 
-Rule: the DB-backed task surface tracks "what"; TaskFlow tracks "how".
+Rule: management owns canonical task rows and lifecycle API; dispatch owns execution-driven transitions only when `taskflow.dispatch.enabled` is true.
+
+Default rule: `taskflow.dispatch.enabled` is false. Management operations, including close, must not require worker, dispatch receipt, or run-graph reconciliation evidence.
 
 Task-state truth rule: if lifecycle state and execution telemetry disagree, use `runtime-instructions/work.task-state-reconciliation-protocol` before closing, reopening, or declaring stale.
 
