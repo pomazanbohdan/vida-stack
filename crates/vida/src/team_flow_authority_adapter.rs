@@ -122,6 +122,7 @@ pub(crate) const TEAM_FLOW_AUTHORITY_UNAVAILABLE_BLOCKER: &str =
 pub(crate) enum TeamFlowAuthorityAvailabilityStatus {
     Unavailable,
     Blocked,
+    Disabled,
     Ready,
 }
 
@@ -159,6 +160,13 @@ impl TeamFlowExecutionAuthority {
         flow_ref: Option<&str>,
         profile: Option<&str>,
     ) -> Result<Self, TeamFlowResolutionBlocker> {
+        if team_flow_is_disabled(compiled_bundle) {
+            return Err(TeamFlowResolutionBlocker::new(
+                "team_flow_disabled",
+                flow_ref.unwrap_or("team_flow"),
+                Vec::new(),
+            ));
+        }
         compile_persisted(compiled_bundle, flow_ref, profile).map(|projection| Self { projection })
     }
 
@@ -2491,6 +2499,13 @@ pub(crate) fn team_flow_authority_availability(
             projection: None,
         };
     }
+    if authority.get("status").and_then(Value::as_str) == Some("disabled") {
+        return TeamFlowAuthorityAvailability {
+            status: TeamFlowAuthorityAvailabilityStatus::Disabled,
+            blocker: None,
+            projection: None,
+        };
+    }
     match compile_persisted(compiled_bundle, flow_ref, profile) {
         Ok(projection) => TeamFlowAuthorityAvailability {
             status: TeamFlowAuthorityAvailabilityStatus::Ready,
@@ -2510,6 +2525,9 @@ pub(crate) fn require_team_flow_authority(
     flow_ref: Option<&str>,
     profile: Option<&str>,
 ) -> Result<TeamFlowAuthorityProjection, String> {
+    if team_flow_is_disabled(compiled_bundle) {
+        return Err("team_flow_disabled".to_string());
+    }
     compile_persisted(compiled_bundle, flow_ref, profile).map_err(|error| error.to_string())
 }
 
@@ -2519,6 +2537,14 @@ pub(crate) fn require_team_flow_execution_authority(
     profile: Option<&str>,
 ) -> Result<TeamFlowExecutionAuthority, TeamFlowResolutionBlocker> {
     TeamFlowExecutionAuthority::require(compiled_bundle, flow_ref, profile)
+}
+
+fn team_flow_is_disabled(compiled_bundle: &Value) -> bool {
+    compiled_bundle
+        .get("team_flow_authority")
+        .and_then(|authority| authority.get("status"))
+        .and_then(Value::as_str)
+        == Some("disabled")
 }
 
 pub(crate) fn resolve_team_flow_node(
@@ -2635,8 +2661,10 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::{
-        TeamFlowAuthorityProjection, compile_persisted, deterministic_flow_identity_id,
-        resolve_team_flow_node, test_support::canonical_compiled_bundle,
+        TeamFlowAuthorityAvailabilityStatus, TeamFlowAuthorityProjection,
+        compile_persisted, deterministic_flow_identity_id, require_team_flow_authority,
+        team_flow_authority_availability, resolve_team_flow_node,
+        test_support::canonical_compiled_bundle,
     };
     use serde_json::json;
 
@@ -2676,6 +2704,28 @@ mod tests {
         let authority_hash = taskflow_authority::team_flow_transition::hash_json(&authority_seed);
         authority["content_blake3"] = json!(authority_hash.clone());
         authority["authority_id"] = json!(format!("team-flow-authority:{authority_hash}"));
+    }
+
+    #[test]
+    fn disabled_team_flow_is_non_blocking_for_availability() {
+        let bundle = json!({
+            "team_flow_authority": {
+                "status": "disabled",
+                "enabled": false,
+                "reason": "dev_team_disabled"
+            }
+        });
+        let availability = team_flow_authority_availability(&bundle, None, None);
+        assert_eq!(
+            availability.status,
+            TeamFlowAuthorityAvailabilityStatus::Disabled
+        );
+        assert!(availability.blocker.is_none());
+        assert!(availability.projection.is_none());
+        assert!(matches!(
+            require_team_flow_authority(&bundle, None, None),
+            Err(error) if error == "team_flow_disabled"
+        ));
     }
 
     fn persisted_lane_mut<'a>(

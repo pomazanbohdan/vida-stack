@@ -20,8 +20,8 @@ pub(crate) async fn run_taskflow_dispatch(args: &[String]) -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Some("status") => run_status(&state_dir, mode, args),
-        Some("adopt") => run_adopt(&state_dir, mode, args),
+        Some("status") => run_status(&state_dir, mode, args).await,
+        Some("adopt") => run_adopt(&state_dir, mode, args).await,
         Some(_) => {
             eprintln!("Usage: vida taskflow dispatch status [--json]\n       vida taskflow dispatch adopt [--dry-run|--apply] [--run-id <id>] [--task-id <id>] [--json]");
             ExitCode::from(2)
@@ -35,7 +35,7 @@ fn print_help() {
     );
 }
 
-fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCode {
+async fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCode {
     let as_json = args.iter().any(|arg| arg == "--json");
     let enabled = taskflow_dispatch_enabled_for_state_root(state_dir);
     let adoption_path = state_dir.join(ADOPTION_FILE);
@@ -43,6 +43,16 @@ fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitC
         .ok()
         .map(|body| body.lines().filter(|line| !line.trim().is_empty()).count())
         .unwrap_or(0);
+    let execution_bound_count =
+        match crate::StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
+            Ok(store) => store
+                .task_store_summary()
+                .await
+                .map(|summary| summary.execution_bound_count)
+                .unwrap_or(0),
+            Err(_) => 0,
+        };
+    let unadopted_count = execution_bound_count.saturating_sub(adopted_count);
     if !enabled {
         let mut payload = dispatch_runtime_disabled_payload(
             "vida taskflow dispatch status",
@@ -59,6 +69,14 @@ fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitC
                 serde_json::Value::from(adopted_count),
             );
             object.insert(
+                "execution_bound_count".to_string(),
+                serde_json::Value::from(execution_bound_count),
+            );
+            object.insert(
+                "unadopted_run_count".to_string(),
+                serde_json::Value::from(0),
+            );
+            object.insert(
                 "artifact_refs".to_string(),
                 serde_json::json!({"adoption_path": adoption_path}),
             );
@@ -73,9 +91,9 @@ fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitC
         "mode": mode,
         "enabled": enabled,
         "management_runtime": "always_on",
-        "execution_bound_count": 0,
+        "execution_bound_count": execution_bound_count,
         "adopted_run_count": adopted_count,
-        "unadopted_run_count": 0,
+        "unadopted_run_count": unadopted_count,
         "blocker_codes": [],
         "next_actions": if enabled { vec!["Dispatch runtime is enabled; use `vida taskflow dispatch adopt --dry-run` before adding existing runs."] } else { vec!["Management runtime remains available; set taskflow.dispatch.enabled: true to enable worker dispatch."] },
         "artifact_refs": {"adoption_path": adoption_path},
@@ -84,7 +102,7 @@ fn run_status(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitC
     ExitCode::SUCCESS
 }
 
-fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCode {
+async fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCode {
     let as_json = args.iter().any(|arg| arg == "--json");
     let apply = args.iter().any(|arg| arg == "--apply");
     let dry_run = args.iter().any(|arg| arg == "--dry-run") || !apply;
@@ -111,6 +129,127 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
         return ExitCode::from(1);
     }
 
+    let validated_receipt_id = if let (Some(run_id), Some(task_id)) =
+        (run_id.as_deref(), task_id.as_deref())
+    {
+        let store = match crate::StateStore::open_existing_read_only(state_dir.to_path_buf()).await
+        {
+            Ok(store) => store,
+            Err(error) => {
+                let payload = serde_json::json!({
+                    "surface": "vida taskflow dispatch adopt",
+                    "status": "blocked",
+                    "runtime": "task_dispatch",
+                    "mode": mode,
+                    "blocker_codes": ["dispatch_adoption_state_store_unavailable"],
+                    "next_actions": [error.to_string()],
+                    "run_id": run_id,
+                    "task_id": task_id,
+                });
+                emit_payload(&payload, as_json);
+                return ExitCode::from(1);
+            }
+        };
+        let status = match store.run_graph_status(run_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                let payload = serde_json::json!({
+                    "surface": "vida taskflow dispatch adopt",
+                    "status": "blocked",
+                    "runtime": "task_dispatch",
+                    "mode": mode,
+                    "blocker_codes": ["dispatch_adoption_run_unavailable"],
+                    "next_actions": [error.to_string()],
+                    "run_id": run_id,
+                    "task_id": task_id,
+                });
+                emit_payload(&payload, as_json);
+                return ExitCode::from(1);
+            }
+        };
+        if status.task_id != task_id {
+            let payload = serde_json::json!({
+                "surface": "vida taskflow dispatch adopt",
+                "status": "blocked",
+                "runtime": "task_dispatch",
+                "mode": mode,
+                "blocker_codes": ["dispatch_adoption_binding_mismatch"],
+                "next_actions": ["Use the task id bound to the run, then rerun adoption."],
+                "run_id": run_id,
+                "task_id": task_id,
+                "bound_task_id": status.task_id,
+            });
+            emit_payload(&payload, as_json);
+            return ExitCode::from(1);
+        }
+        if let Err(error) = store.show_task(task_id).await {
+            let payload = serde_json::json!({
+                "surface": "vida taskflow dispatch adopt",
+                "status": "blocked",
+                "runtime": "task_dispatch",
+                "mode": mode,
+                "blocker_codes": ["dispatch_adoption_task_unavailable"],
+                "next_actions": [error.to_string()],
+                "run_id": run_id,
+                "task_id": task_id,
+            });
+            emit_payload(&payload, as_json);
+            return ExitCode::from(1);
+        }
+        let receipt = match store.run_graph_dispatch_receipt(run_id).await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                let payload = serde_json::json!({
+                    "surface": "vida taskflow dispatch adopt",
+                    "status": "blocked",
+                    "runtime": "task_dispatch",
+                    "mode": mode,
+                    "blocker_codes": ["dispatch_adoption_receipt_required"],
+                    "next_actions": ["Record a validated dispatch receipt for the run before adoption."],
+                    "run_id": run_id,
+                    "task_id": task_id,
+                });
+                emit_payload(&payload, as_json);
+                return ExitCode::from(1);
+            }
+            Err(error) => {
+                let payload = serde_json::json!({
+                    "surface": "vida taskflow dispatch adopt",
+                    "status": "blocked",
+                    "runtime": "task_dispatch",
+                    "mode": mode,
+                    "blocker_codes": ["dispatch_adoption_receipt_unavailable"],
+                    "next_actions": [error.to_string()],
+                    "run_id": run_id,
+                    "task_id": task_id,
+                });
+                emit_payload(&payload, as_json);
+                return ExitCode::from(1);
+            }
+        };
+        let receipt_id = receipt
+            .exception_path_receipt_id
+            .or(receipt.supersedes_receipt_id)
+            .unwrap_or(receipt.run_id);
+        if receipt_id.trim().is_empty() {
+            let payload = serde_json::json!({
+                "surface": "vida taskflow dispatch adopt",
+                "status": "blocked",
+                "runtime": "task_dispatch",
+                "mode": mode,
+                "blocker_codes": ["dispatch_adoption_receipt_required"],
+                "next_actions": ["Use a dispatch receipt with a non-empty identity."],
+                "run_id": run_id,
+                "task_id": task_id,
+            });
+            emit_payload(&payload, as_json);
+            return ExitCode::from(1);
+        }
+        Some(receipt_id)
+    } else {
+        None
+    };
+
     if dry_run {
         let payload = serde_json::json!({
             "surface": "vida taskflow dispatch adopt",
@@ -118,7 +257,7 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
             "runtime": "task_dispatch",
             "mode": mode,
             "adoption_status": "dry_run",
-            "would_adopt": run_id.as_ref().zip(task_id.as_ref()).map(|(run_id, task_id)| serde_json::json!({"run_id": run_id, "task_id": task_id, "binding_status": "adopted"})),
+            "would_adopt": run_id.as_ref().zip(task_id.as_ref()).map(|(run_id, task_id)| serde_json::json!({"run_id": run_id, "task_id": task_id, "receipt_id": validated_receipt_id, "binding_status": "adopted"})),
             "unadopted_run_count": if run_id.is_some() { 1 } else { 0 },
             "blocker_codes": [],
             "next_actions": ["Rerun with --apply and explicit --run-id/--task-id to persist the adoption binding."],
@@ -129,12 +268,13 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
 
     let run_id = run_id.expect("validated run id");
     let task_id = task_id.expect("validated task id");
+    let receipt_id = validated_receipt_id.expect("validated dispatch receipt id");
     if let Err(reason) = TaskLifecycleService::authorize(
         mode,
         TaskExecutionBinding::ExecutionBound,
         &TaskLifecycleMutationSource::DispatchReceipt {
             run_id: run_id.clone(),
-            receipt_id: format!("adoption-{run_id}"),
+            receipt_id: receipt_id.clone(),
         },
     ) {
         let payload = serde_json::json!({
@@ -158,7 +298,19 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
                     || (row["task_id"] == task_id && row["run_id"] != run_id)
             })
     });
-    if mismatched_binding {
+    let mismatched_receipt = existing.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .is_some_and(|row| {
+                row["run_id"] == run_id
+                    && row["task_id"] == task_id
+                    && row
+                        .get("receipt_id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|existing_receipt| existing_receipt != receipt_id)
+            })
+    });
+    if mismatched_binding || mismatched_receipt {
         let payload = serde_json::json!({
             "surface": "vida taskflow dispatch adopt",
             "status": "blocked",
@@ -198,6 +350,7 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
             "schema_version": 1,
             "run_id": run_id,
             "task_id": task_id,
+            "receipt_id": receipt_id,
             "binding_status": "adopted",
             "authority": "task_dispatch",
         });
@@ -213,6 +366,7 @@ fn run_adopt(state_dir: &Path, mode: TaskRuntimeMode, args: &[String]) -> ExitCo
         "adoption_status": if already_adopted { "idempotent" } else { "adopted" },
         "run_id": run_id,
         "task_id": task_id,
+        "receipt_id": receipt_id,
         "binding_status": "adopted",
         "artifact_refs": {"adoption_path": path},
         "blocker_codes": [],

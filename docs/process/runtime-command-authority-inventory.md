@@ -73,6 +73,10 @@ All `vida task` subcommands are owned by the TaskFlow authoritative state store.
 | `vida taskflow dispatch status|adopt` | Task Dispatch Runtime | Returns `dispatch_runtime_disabled` when `taskflow.dispatch.enabled` is false; `adopt --apply` never writes in that mode. |
 | `vida taskflow scheduler dispatch`, `consume`, run-graph mutation aliases | Task Dispatch Runtime | Compatibility aliases fail closed with `dispatch_runtime_disabled`. |
 
+Management close authority is shared by `vida task close` and `vida task update --status closed`. In management-only mode it ignores proof-target presence but still enforces graph, child, and reopen guards; it does not touch dispatch receipts, run graphs, continuation bindings, or closure artifacts. With dispatch enabled, execution-bound lifecycle transitions require the dispatch runtime and a validated `{run_id, receipt_id}` source.
+
+TeamFlow bootstrap is independent of dispatch: `dev_team.enabled: false` is a stable `team_flow_disabled` execution-surface result and does not require `authority_catalog`; `enabled: true` keeps strict catalog validation.
+
 | Task subcommand | State access | Authority/role | Recommended proof |
 | --- | --- | --- | --- |
 | `help` | HelpOnly | TaskFlow help topics and aliases | help snapshot |

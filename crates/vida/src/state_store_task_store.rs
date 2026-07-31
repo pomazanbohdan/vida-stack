@@ -268,31 +268,6 @@ impl StateStore {
         Ok(())
     }
 
-    fn task_update_close_authority_required(
-        task: &TaskRecord,
-        requested_planner_metadata: Option<&TaskPlannerMetadata>,
-    ) -> bool {
-        !task.planner_metadata.proof_targets.is_empty()
-            || requested_planner_metadata.is_some_and(|metadata| !metadata.proof_targets.is_empty())
-    }
-
-    fn ensure_task_update_close_authority(
-        task: &TaskRecord,
-        requested_planner_metadata: Option<&TaskPlannerMetadata>,
-    ) -> Result<(), StateStoreError> {
-        if Self::task_update_close_authority_required(task, requested_planner_metadata) {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "{}{}{}",
-                    Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_PREFIX,
-                    task.id,
-                    Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_SUFFIX
-                ),
-            });
-        }
-        Ok(())
-    }
-
     fn non_closed_child_status_evidence_for_task(
         tasks: &[TaskRecord],
         task_id: &str,
@@ -3247,9 +3222,12 @@ impl StateStore {
             planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
-        let dispatch_enabled = crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
+        let dispatch_enabled =
+            crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
         let has_active_run = if dispatch_enabled {
-            self.latest_run_graph_run_id_for_task(task_id).await?.is_some()
+            self.latest_run_graph_run_id_for_task(task_id)
+                .await?
+                .is_some()
         } else {
             false
         };
@@ -3278,16 +3256,16 @@ impl StateStore {
             let requested_status_is_closed =
                 requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
-                if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize(
+                if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize_close(
                     crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
                     crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
                     &crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+                    false,
                 ) {
                     return Err(StateStoreError::InvalidTaskRecord {
                         reason: reason.to_string(),
                     });
                 }
-                Self::ensure_task_update_close_authority(&task, planner_metadata.as_ref())?;
                 let non_closed_children = self
                     .non_closed_child_status_evidence_for_task_live(task_id)
                     .await?;
@@ -3303,6 +3281,15 @@ impl StateStore {
                     &non_closed_children,
                 )?;
             } else {
+                if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize(
+                    crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
+                    crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
+                    &crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+                ) {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: reason.to_string(),
+                    });
+                }
                 Self::ensure_task_lifecycle_admitted(
                     task_id,
                     Self::admit_task_lifecycle_for_store(
@@ -4261,28 +4248,62 @@ impl StateStore {
         task_id: &str,
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
+        self.close_task_with_source(
+            task_id,
+            reason,
+            crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+        )
+        .await
+    }
+
+    pub(crate) async fn close_task_with_source(
+        &self,
+        task_id: &str,
+        reason: &str,
+        source: crate::taskflow_runtime::TaskLifecycleMutationSource,
+    ) -> Result<TaskRecord, StateStoreError> {
         let non_closed_children = self
             .non_closed_child_status_evidence_for_task_live(task_id)
             .await?;
         let tasks = self.all_tasks().await?;
 
         let mut task = self.show_task(task_id).await?;
-        let dispatch_enabled = crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
+        let dispatch_enabled =
+            crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
         let has_active_run = if dispatch_enabled {
-            self.latest_run_graph_run_id_for_task(task_id).await?.is_some()
+            self.latest_run_graph_run_id_for_task(task_id)
+                .await?
+                .is_some()
         } else {
             false
         };
-        if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize(
+        let dispatch_receipt_source = matches!(
+            &source,
+            crate::taskflow_runtime::TaskLifecycleMutationSource::DispatchReceipt { .. }
+        );
+        if let crate::taskflow_runtime::TaskLifecycleMutationSource::DispatchReceipt {
+            run_id,
+            receipt_id,
+        } = &source
+        {
+            self.ensure_dispatch_receipt_binding(task_id, run_id, receipt_id)
+                .await?;
+        }
+        let proof_admitted = dispatch_receipt_source
+            && Self::task_missing_structured_proof_targets(&task, &tasks).is_empty();
+        if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize_close(
             crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
             crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
-            &crate::taskflow_runtime::TaskLifecycleMutationSource::Management,
+            &source,
+            proof_admitted,
         ) {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: reason.to_string(),
             });
         }
-        Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
+        if dispatch_receipt_source {
+            Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
+        }
         let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
         Self::ensure_task_lifecycle_admitted(
             task_id,
@@ -4398,6 +4419,53 @@ impl StateStore {
         Ok(task)
     }
 
+    async fn ensure_dispatch_receipt_binding(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        receipt_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let status = self.run_graph_status(run_id).await?;
+        if status.task_id != task_id {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "dispatch_receipt_task_mismatch".to_string(),
+            });
+        }
+        let receipt = self
+            .run_graph_dispatch_receipt(run_id)
+            .await?
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: "dispatch_receipt_required".to_string(),
+            })?;
+        let recorded_receipt_id = receipt
+            .exception_path_receipt_id
+            .or(receipt.supersedes_receipt_id)
+            .unwrap_or(receipt.run_id);
+        if recorded_receipt_id != receipt_id {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "dispatch_receipt_identity_mismatch".to_string(),
+            });
+        }
+        let adoption_path = self.root().join("taskflow-dispatch-adoptions.jsonl");
+        let adopted = fs::read_to_string(adoption_path).ok().is_some_and(|body| {
+            body.lines().any(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .is_some_and(|row| {
+                        row["run_id"] == run_id
+                            && row["task_id"] == task_id
+                            && row["receipt_id"] == receipt_id
+                    })
+            })
+        });
+        if !adopted {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "dispatch_adoption_required".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) async fn persist_task_record(
         &self,
         task: TaskRecord,
@@ -4509,6 +4577,18 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    fn enable_dispatch_for_test_root(root: &Path) {
+        fs::create_dir_all(root.join(".vida/config")).expect("create test config directory");
+        fs::create_dir_all(root.join(".vida/db")).expect("create test db directory");
+        fs::create_dir_all(root.join(".vida/project")).expect("create test project directory");
+        fs::write(root.join("AGENTS.md"), "test project\n").expect("write test agents file");
+        fs::write(
+            root.join("vida.config.yaml"),
+            "taskflow:\n  dispatch:\n    enabled: true\n",
+        )
+        .expect("write dispatch-enabled test config");
     }
 
     async fn close_store_and_remove_root(store: StateStore, root: PathBuf) {
@@ -5241,7 +5321,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_gate_parent_auto_close_requires_structured_proof() {
+    async fn management_close_parent_auto_close_does_not_require_structured_proof() {
         let root = unique_task_store_temp_root("vida-close-gate-parent-auto-close");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let target = "cargo test -p vida close_gate_parent_auto_close";
@@ -5320,7 +5400,7 @@ mod tests {
                 .await
                 .expect("missing-proof parent should load")
                 .status,
-            "open"
+            "closed"
         );
 
         store
@@ -5984,7 +6064,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_task_status_closed_rejects_proof_protected_task_close_authority() {
+    async fn update_task_status_closed_allows_management_only_proof_target() {
         let root = unique_task_store_temp_root("vida-update-close-proof-authority");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
@@ -6028,43 +6108,32 @@ mod tests {
             .await
             .expect("create proof child");
 
-        for requested_status in ["closed", "done"] {
-            let error = store
-                .update_task(UpdateTaskRequest {
-                    task_id: "proof-child",
-                    title: None,
-                    status: Some(requested_status),
-                    priority: None,
-                    notes: None,
-                    description: None,
-                    parent_id: None,
-                    add_labels: &[],
-                    remove_labels: &[],
-                    set_labels: None,
-                    execution_mode: None,
-                    order_bucket: None,
-                    parallel_group: None,
-                    conflict_domain: None,
-                    planner_metadata: None,
-                })
-                .await
-                .expect_err("generic update close should require close authority");
-
-            match error {
-                StateStoreError::InvalidTaskRecord { reason } => {
-                    assert_eq!(
-                        StateStore::task_update_close_authority_task_id_from_reason(&reason),
-                        Some("proof-child")
-                    );
-                    assert!(reason.contains("configured proof targets require `vida task close`"));
-                }
-                other => panic!("expected InvalidTaskRecord, got {other}"),
-            }
-            let child = store.show_task("proof-child").await.expect("show child");
-            assert_eq!(child.status, "open");
-            assert!(child.closed_at.is_none());
-            assert!(child.close_reason.is_none());
-        }
+        let closed = store
+            .update_task(UpdateTaskRequest {
+                task_id: "proof-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("management-only close should not require execution proof");
+        assert_eq!(closed.status, "closed");
+        assert!(closed.closed_at.is_some());
+        assert!(closed
+            .planner_metadata
+            .proof_targets
+            .contains(&"cargo test proof-child".to_string()));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6220,7 +6289,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_task_status_closed_keeps_parent_open_with_blocked_run_graph() {
+    async fn management_only_update_close_auto_closes_parent_with_blocked_run_graph() {
         let root = unique_task_store_temp_root("vida-update-child-blocked-run-graph");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
@@ -6295,14 +6364,14 @@ mod tests {
             .show_task("run-graph-parent")
             .await
             .expect("load parent");
-        assert_eq!(parent.status, "open");
-        assert!(parent.closed_at.is_none());
-        assert!(parent.close_reason.is_none());
+        assert_eq!(parent.status, "closed");
+        assert!(parent.closed_at.is_some());
+        assert!(parent.close_reason.is_some());
         close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
-    async fn close_task_keeps_parent_open_with_blocked_run_graph() {
+    async fn management_only_close_auto_closes_parent_with_blocked_run_graph() {
         let root = unique_task_store_temp_root("vida-close-child-blocked-run-graph");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
@@ -6366,9 +6435,9 @@ mod tests {
             .show_task("close-run-graph-parent")
             .await
             .expect("load parent");
-        assert_eq!(parent.status, "open");
-        assert!(parent.closed_at.is_none());
-        assert!(parent.close_reason.is_none());
+        assert_eq!(parent.status, "closed");
+        assert!(parent.closed_at.is_some());
+        assert!(parent.close_reason.is_some());
         close_store_and_remove_root(store, root).await;
     }
 
@@ -6650,6 +6719,7 @@ mod tests {
     #[tokio::test]
     async fn tracked_flow_spec_close_clears_stale_design_and_spec_recovery_blockers() {
         let root = unique_task_store_temp_root("vida-tracked-flow-spec-close-clears-recovery");
+        enable_dispatch_for_test_root(&root);
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
@@ -6794,6 +6864,7 @@ mod tests {
     #[tokio::test]
     async fn tracked_flow_feature_run_reconciles_closed_spec_and_stale_parent_on_recovery_read() {
         let root = unique_task_store_temp_root("vida-tracked-flow-feature-run-clears-recovery");
+        enable_dispatch_for_test_root(&root);
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
@@ -7141,6 +7212,7 @@ mod tests {
             std::process::id(),
             nanos
         ));
+        enable_dispatch_for_test_root(&root);
         let _state_override = TestProxyStateDirOverrideGuard::install(root.clone());
         let store = StateStore::open(root.clone()).await.expect("open store");
 
@@ -7453,6 +7525,7 @@ mod tests {
             std::process::id(),
             nanos
         ));
+        enable_dispatch_for_test_root(&root);
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
@@ -7567,6 +7640,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_closed_runs_uses_completed_receipt_authority() {
         let root = unique_task_store_temp_root("vida-reconcile-closed-run-receipt-authority");
+        enable_dispatch_for_test_root(&root);
         let store = StateStore::open(root.clone()).await.expect("open store");
         let parent_id = "closed-receipt-parent";
         let task_id = "closed-receipt-task";

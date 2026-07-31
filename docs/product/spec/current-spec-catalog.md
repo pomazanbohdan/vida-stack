@@ -198,6 +198,9 @@ Companion rule:
 42. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
     Config families: `VidaCommandEnvelope`, `VidaCommandResponse`, service-client execution, command pipeline middleware order, operation metadata admission, idempotency, and runtime dispatch receipt boundaries for LDRK `ldr-040`
     Registered path: `docs/product/spec/tower-based-canonical-command-pipeline-phase-design.md`
+43. [taskflow-management-dispatch-runtime-split.md](taskflow-management-dispatch-runtime-split.md)
+     Config families: `taskflow.dispatch.enabled`, Task Management/Dispatch runtime authority, lifecycle close policy, deterministic execution binding, adoption receipts, and TeamFlow-disabled bootstrap behavior
+     Registered path: `docs/product/spec/taskflow-management-dispatch-runtime-split.md`
 
 ### Project And Packaging
 

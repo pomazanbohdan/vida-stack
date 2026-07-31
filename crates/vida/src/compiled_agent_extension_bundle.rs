@@ -168,7 +168,18 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
-    let materialized_team_flow_authority =
+    let team_flow_enabled = dev_team_json
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let team_flow_authority = if !team_flow_enabled {
+        serde_json::json!({
+            "status": "disabled",
+            "enabled": false,
+            "reason": "dev_team_disabled",
+            "selected_config": {"team_flow_enabled": false},
+        })
+    } else {
         crate::team_flow_authority_projection::materialize_team_flow_authority(
             crate::team_flow_authority_projection::SourceInputs {
                 dev_team: dev_team_json,
@@ -183,7 +194,6 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
                     "project_role_catalog": &project_role_map,
                     "project_skill_catalog": &project_skill_map,
                     "project_profile_catalog": &project_profile_map,
-                    "project_flow_catalog": &project_flow_map,
                     "authority_catalog": serde_json::to_value(
                         crate::yaml_lookup(config, &["dev_team", "authority_catalog"])
                             .cloned()
@@ -198,8 +208,9 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
                 "team_flow_authority_materialization_blocked:{}:{}",
                 blocker.code, blocker.path
             )
-        })?;
-    let team_flow_authority = materialized_team_flow_authority.authority;
+        })?
+        .authority
+    };
 
     let bundle = serde_json::json!({
         "ok": true,
@@ -223,6 +234,10 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "team_flow_authority": team_flow_authority,
         "taskflow": {
             "management_runtime": "always_on",
+            "management_status": crate::taskflow_runtime::management_status_projection(),
+            "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(
+                &root.join(crate::state_store::default_state_dir()),
+            ),
             "dispatch": {
                 "enabled": taskflow_dispatch_enabled,
                 "runtime": "task_dispatch",
@@ -307,8 +322,12 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         ));
     }
 
-    crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
-        .map_err(|error| format!("team_flow_authority_persisted_self_validation_failed:{error}"))?;
+    if team_flow_enabled {
+        crate::team_flow_authority_adapter::compile_team_flow_authority(&bundle, None, None)
+            .map_err(|error| {
+                format!("team_flow_authority_persisted_self_validation_failed:{error}")
+            })?;
+    }
 
     Ok(bundle)
 }
@@ -1027,6 +1046,29 @@ mod tests {
         assert_ne!(
             disabled_bundle["team_flow_authority"]["authority_id"],
             explicit_bundle["team_flow_authority"]["authority_id"]
+        );
+
+        let mut disabled_without_catalog = config.clone();
+        disabled_without_catalog
+            .as_mapping_mut()
+            .and_then(|root| root.get_mut(key("dev_team")))
+            .map(|dev_team| {
+                *dev_team = serde_yaml::from_str("enabled: false\n")
+                    .expect("minimal disabled TeamFlow config")
+            })
+            .expect("dev_team should be present");
+        let disabled_without_catalog_bundle = build_compiled_agent_extension_bundle_for_root(
+            &disabled_without_catalog,
+            repository_root,
+        )
+        .expect("disabled TeamFlow should not require the authority catalog");
+        assert_eq!(
+            disabled_without_catalog_bundle["team_flow_authority"]["status"],
+            "disabled"
+        );
+        assert_eq!(
+            disabled_without_catalog_bundle["team_flow_authority"]["reason"],
+            "dev_team_disabled"
         );
 
         let mut invalid = config;

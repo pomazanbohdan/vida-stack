@@ -1689,8 +1689,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             "next_step": boot_compatibility.next_step,
                         },
                         "runtime_consumption": runtime_consumption,
-                        "management_status": crate::taskflow_runtime::management_status_projection(),
-                        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(&state_dir),
+                        "management_status": crate::taskflow_runtime::management_status_projection_with_counts(
+                            task_store.execution_bound_count,
+                        ),
+                        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection_with_counts(
+                            &state_dir,
+                            task_store.execution_bound_count,
+                        ),
                         "root_session_write_guard": root_session_write_guard,
                         "protocol_binding": protocol_binding,
                         "trace_evidence": trace_evidence.clone(),
@@ -1737,9 +1742,15 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             "closed_count": task_store.closed_count,
                             "epic_count": task_store.epic_count,
                             "ready_count": task_store.ready_count,
+                            "execution_bound_count": task_store.execution_bound_count,
                         },
-                        "management_status": crate::taskflow_runtime::management_status_projection(),
-                        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(&state_dir),
+                        "management_status": crate::taskflow_runtime::management_status_projection_with_counts(
+                            task_store.execution_bound_count,
+                        ),
+                        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection_with_counts(
+                            &state_dir,
+                            task_store.execution_bound_count,
+                        ),
                         "run_graph": {
                             "execution_plan_count": run_graph.execution_plan_count,
                             "routed_run_count": run_graph.routed_run_count,

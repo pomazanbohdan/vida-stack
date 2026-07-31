@@ -121,8 +121,13 @@ pub(crate) fn build_status_json_report(
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "taskflow_counts": taskflow_counts.clone(),
-            "management_status": crate::taskflow_runtime::management_status_projection(),
-            "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(inputs.state_dir),
+        "management_status": crate::taskflow_runtime::management_status_projection_with_counts(
+            inputs.task_store.execution_bound_count,
+        ),
+        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection_with_counts(
+            inputs.state_dir,
+            inputs.task_store.execution_bound_count,
+        ),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -174,8 +179,13 @@ pub(crate) fn build_status_json_report(
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "taskflow_counts": taskflow_counts.clone(),
-            "management_status": crate::taskflow_runtime::management_status_projection(),
-            "dispatch_status": crate::taskflow_runtime::dispatch_status_projection(inputs.state_dir),
+        "management_status": crate::taskflow_runtime::management_status_projection_with_counts(
+            inputs.task_store.execution_bound_count,
+        ),
+        "dispatch_status": crate::taskflow_runtime::dispatch_status_projection_with_counts(
+            inputs.state_dir,
+            inputs.task_store.execution_bound_count,
+        ),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -290,6 +300,7 @@ fn taskflow_counts_value(task_store: &crate::state_store::TaskStoreSummary) -> s
         "closed_count": task_store.closed_count,
         "epic_count": task_store.epic_count,
         "ready_count": task_store.ready_count,
+        "execution_bound_count": task_store.execution_bound_count,
     })
 }
 
@@ -601,6 +612,7 @@ mod tests {
             closed_count: 2,
             epic_count: 1,
             ready_count: 1,
+            execution_bound_count: 1,
         };
         let run_status = crate::state_store::RunGraphStatus {
             run_id: "run-1".to_string(),
@@ -964,6 +976,7 @@ mod tests {
             closed_count: 0,
             epic_count: 1,
             ready_count: 1,
+            execution_bound_count: 0,
         };
         let run_status = crate::state_store::RunGraphStatus {
             run_id: "run-2".to_string(),

@@ -955,18 +955,20 @@ pub struct TaskStoreSummary {
     pub closed_count: usize,
     pub epic_count: usize,
     pub ready_count: usize,
+    pub execution_bound_count: usize,
 }
 
 impl TaskStoreSummary {
     pub fn as_display(&self) -> String {
         format!(
-            "{} total, {} open, {} in_progress, {} closed, {} epics, {} ready",
+            "{} total, {} open, {} in_progress, {} closed, {} epics, {} ready, {} execution-bound",
             self.total_count,
             self.open_count,
             self.in_progress_count,
             self.closed_count,
             self.epic_count,
-            self.ready_count
+            self.ready_count,
+            self.execution_bound_count
         )
     }
 }

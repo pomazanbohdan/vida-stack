@@ -16749,65 +16749,93 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     };
                     let inheritance_rows = store.list_tasks(None, true).await.ok();
-                    if let Some(project_root) = project_root.as_deref() {
-                        let zombie_d_result = crate::zombie_d_gate::evaluate_from_project_root(
-                            Some(project_root),
-                            &preclose_task,
-                            "closure",
+                    let dispatch_enabled =
+                        crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(
+                            &state_dir,
                         );
-                        if let Some(payload) = crate::zombie_d_gate::close_block_payload(
-                            &preclose_task,
-                            &zombie_d_result,
-                        ) {
-                            if command.json {
-                                crate::print_json_pretty(&payload);
-                            } else {
-                                print_surface_header(command.render, "vida task close");
-                                print_surface_line(command.render, "status", "blocked");
-                                print_surface_line(command.render, "task", &preclose_task.id);
-                                for blocker in payload["blocker_codes"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(serde_json::Value::as_str)
-                                {
-                                    print_surface_line(command.render, "blocker", blocker);
-                                }
-                                for action in payload["next_actions"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(serde_json::Value::as_str)
-                                {
-                                    print_surface_line(command.render, "next", action);
-                                }
+                    let execution_bound = if dispatch_enabled {
+                        let has_active_run = match store
+                            .latest_run_graph_run_id_for_task(&preclose_task.id)
+                            .await
+                        {
+                            Ok(run_id) => run_id.is_some(),
+                            Err(error) => {
+                                eprintln!("Failed to resolve task execution binding: {error}");
+                                return ExitCode::from(1);
                             }
-                            return ExitCode::from(1);
+                        };
+                        crate::taskflow_runtime::task_execution_binding(
+                            &preclose_task,
+                            has_active_run,
+                        ) == crate::taskflow_runtime::TaskExecutionBinding::ExecutionBound
+                    } else {
+                        false
+                    };
+                    if execution_bound {
+                        if let Some(project_root) = project_root.as_deref() {
+                            let zombie_d_result = crate::zombie_d_gate::evaluate_from_project_root(
+                                Some(project_root),
+                                &preclose_task,
+                                "closure",
+                            );
+                            if let Some(payload) = crate::zombie_d_gate::close_block_payload(
+                                &preclose_task,
+                                &zombie_d_result,
+                            ) {
+                                if command.json {
+                                    crate::print_json_pretty(&payload);
+                                } else {
+                                    print_surface_header(command.render, "vida task close");
+                                    print_surface_line(command.render, "status", "blocked");
+                                    print_surface_line(command.render, "task", &preclose_task.id);
+                                    for blocker in payload["blocker_codes"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(serde_json::Value::as_str)
+                                    {
+                                        print_surface_line(command.render, "blocker", blocker);
+                                    }
+                                    for action in payload["next_actions"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(serde_json::Value::as_str)
+                                    {
+                                        print_surface_line(command.render, "next", action);
+                                    }
+                                }
+                                return ExitCode::from(1);
+                            }
                         }
                     }
-                    if let Some(payload) = task_close_structured_proof_gate_payload(
-                        &preclose_task,
-                        inheritance_rows.as_deref(),
-                    ) {
-                        print_task_close_structured_proof_gate_block(
-                            command.render,
-                            &payload,
-                            command.json,
-                        );
-                        return ExitCode::from(1);
+                    if execution_bound {
+                        if let Some(payload) = task_close_structured_proof_gate_payload(
+                            &preclose_task,
+                            inheritance_rows.as_deref(),
+                        ) {
+                            print_task_close_structured_proof_gate_block(
+                                command.render,
+                                &payload,
+                                command.json,
+                            );
+                            return ExitCode::from(1);
+                        }
                     }
                     // Close authorization is decided only by structured gates above. Close-reason
                     // classification remains post-close diagnostics and cannot deny closure.
                     match store.close_task(&command.task_id, &close_reason).await {
                         Ok(_task) => {
-                            if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
-                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
-                            return ExitCode::from(1);
-                        }
-                            if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
-                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
-                            return ExitCode::from(1);
-                        }
+                            if execution_bound {
+                                if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
+                                    eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                                    return ExitCode::from(1);
+                                }
+                                if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
+                                    eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
                             let task = match store.show_task(&command.task_id).await {
                                 Ok(task) if task.status == "closed" => task,
                                 Ok(task) => {

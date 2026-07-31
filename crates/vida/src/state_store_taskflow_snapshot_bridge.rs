@@ -84,6 +84,21 @@ impl StateStore {
             .filter(|task| work_item_is_program_container(&task.issue_type))
             .count();
         let ready_count = self.ready_tasks().await?.len();
+        let dispatch_enabled =
+            crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root());
+        let mut execution_bound_count = 0;
+        for task in &reportable_tasks {
+            let explicit_execution_plan =
+                task.execution_semantics != TaskExecutionSemantics::default();
+            let active_run = dispatch_enabled
+                && self
+                    .latest_run_graph_run_id_for_task(&task.id)
+                    .await?
+                    .is_some();
+            if explicit_execution_plan || active_run {
+                execution_bound_count += 1;
+            }
+        }
 
         Ok(TaskStoreSummary {
             total_count: reportable_tasks.len(),
@@ -92,6 +107,7 @@ impl StateStore {
             closed_count,
             epic_count,
             ready_count,
+            execution_bound_count,
         })
     }
 

@@ -660,7 +660,16 @@ fn current_team_flow_binding_diagnostics(
             }
         };
     let readiness = build_dev_team_readiness(&source_config_path, &compiled_bundle);
-    let binding_policy_audit = audit_team_flow_binding_policies(&compiled_bundle);
+    let team_flow_disabled = compiled_bundle["team_flow_authority"]["status"] == "disabled";
+    let binding_policy_audit = if team_flow_disabled {
+        serde_json::json!({
+            "status": "disabled",
+            "blockers": [],
+            "context": {"bindings": []},
+        })
+    } else {
+        audit_team_flow_binding_policies(&compiled_bundle)
+    };
     let mut blockers = readiness["blockers"]
         .as_array()
         .into_iter()
@@ -668,6 +677,9 @@ fn current_team_flow_binding_diagnostics(
         .filter_map(serde_json::Value::as_str)
         .map(str::to_string)
         .collect::<Vec<_>>();
+    if team_flow_disabled {
+        push_unique_string(&mut blockers, "dev_team_disabled");
+    }
     merge_team_flow_binding_diagnostics(&mut blockers, &binding_policy_audit);
     let mut context = team_flow_binding_context(
         &overlay_json,
@@ -1119,21 +1131,29 @@ pub(crate) fn build_dev_team_readiness(
                 "unavailable",
             crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Blocked =>
                 "blocked",
+            crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Disabled =>
+                "disabled",
             crate::team_flow_authority_adapter::TeamFlowAuthorityAvailabilityStatus::Ready =>
                 "blocked",
         };
-        let blocker = authority_availability
+        let mut blockers = authority_availability
             .blocker
-            .unwrap_or_else(|| "team_flow_authority_blocked".to_string());
-        let blocker = if status == "unavailable" {
-            format!("team_flow_authority_unavailable:{blocker}")
-        } else {
-            format!("team_flow_authority_invalid:{blocker}")
-        };
+            .map(|blocker| {
+                if status == "unavailable" {
+                    format!("team_flow_authority_unavailable:{blocker}")
+                } else {
+                    format!("team_flow_authority_invalid:{blocker}")
+                }
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        if status == "disabled" {
+            blockers.push("dev_team_disabled".to_string());
+        }
         return serde_json::json!({
             "status": status,
-            "configured": false,
-            "enabled": serde_json::Value::Null,
+            "configured": status == "disabled",
+            "enabled": if status == "disabled" { serde_json::Value::Bool(false) } else { serde_json::Value::Null },
             "default_flow_id": serde_json::Value::Null,
             "orchestrator_command_contract": serde_json::Value::Null,
             "work_item_flow_bindings": {},
@@ -1147,7 +1167,7 @@ pub(crate) fn build_dev_team_readiness(
                 .cloned()
                 .unwrap_or_else(default_lane_work_context_contract),
             "zombie_d_gate": serde_json::Value::Null,
-            "blockers": [blocker],
+            "blockers": blockers,
             "source_paths": source_paths,
         });
     }

@@ -19,6 +19,8 @@ kernel_rules:
         - task_in_progress_or_deferred
         - no_open_management_blockers
         - graph_and_child_guards_satisfied
+    proof_targets_are_not_dispatch_authority: true
+    dispatch_artifacts_untouched: true
   dispatch_runtime:
     enabled_by_config: taskflow.dispatch.enabled
     execution_bound_tasks_only: true
@@ -31,6 +33,8 @@ kernel_rules:
         - no_open_blockers
         - no_reconciliation_blocker
         - required_proof_categories_present
+    management_lifecycle_mutation_for_execution_bound_tasks: forbidden
+    receipt_binding_required: [run_id, receipt_id]
 
   approval_required_when:
     any_of:

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use serde::Serialize;
 
@@ -62,6 +62,20 @@ impl TaskLifecycleService {
             _ => Ok(()),
         }
     }
+
+    pub(crate) fn authorize_close(
+        mode: TaskRuntimeMode,
+        binding: TaskExecutionBinding,
+        source: &TaskLifecycleMutationSource,
+        proof_admitted: bool,
+    ) -> Result<(), &'static str> {
+        Self::authorize(mode, binding, source)?;
+        if matches!(source, TaskLifecycleMutationSource::DispatchReceipt { .. }) && !proof_admitted
+        {
+            return Err("dispatch_receipt_proof_required");
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn taskflow_dispatch_enabled(config: &serde_yaml::Value) -> bool {
@@ -74,9 +88,9 @@ pub(crate) fn taskflow_dispatch_enabled_for_state_root(state_root: &Path) -> boo
     let Some(project_root) =
         crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
     else {
-        // Isolated StateStore fixtures have no project overlay; keep their legacy dispatch
-        // behavior while production project roots remain explicitly config-gated.
-        return true;
+        // An isolated state store has no explicit project configuration. Never infer
+        // execution authority from the absence of that configuration.
+        return false;
     };
     let config_path = project_root.join("vida.config.yaml");
     if !config_path.exists() {
@@ -99,10 +113,7 @@ pub(crate) fn task_execution_binding(
     task: &TaskRecord,
     has_active_run: bool,
 ) -> TaskExecutionBinding {
-    let explicit_execution_plan = task.execution_semantics.execution_mode.is_some()
-        || !task.planner_metadata.owned_paths.is_empty()
-        || !task.planner_metadata.acceptance_targets.is_empty()
-        || !task.planner_metadata.proof_targets.is_empty();
+    let explicit_execution_plan = task.execution_semantics != Default::default();
     if has_active_run || explicit_execution_plan {
         TaskExecutionBinding::ExecutionBound
     } else {
@@ -135,12 +146,18 @@ pub(crate) fn dispatch_runtime_disabled_payload(
 }
 
 pub(crate) fn management_status_projection() -> serde_json::Value {
+    management_status_projection_with_counts(0)
+}
+
+pub(crate) fn management_status_projection_with_counts(
+    execution_bound_count: usize,
+) -> serde_json::Value {
     serde_json::json!({
         "mode": "management",
         "enabled": true,
         "status": "always_on",
         "authority": "task_lifecycle",
-        "execution_bound_count": 0,
+        "execution_bound_count": execution_bound_count,
         "adopted_count": 0,
         "unadopted_count": 0,
         "blocker_codes": [],
@@ -150,7 +167,19 @@ pub(crate) fn management_status_projection() -> serde_json::Value {
 }
 
 pub(crate) fn dispatch_status_projection(state_root: &Path) -> serde_json::Value {
+    dispatch_status_projection_with_counts(state_root, 0)
+}
+
+pub(crate) fn dispatch_status_projection_with_counts(
+    state_root: &Path,
+    execution_bound_count: usize,
+) -> serde_json::Value {
     let enabled = taskflow_dispatch_enabled_for_state_root(state_root);
+    let adoption_path = state_root.join("taskflow-dispatch-adoptions.jsonl");
+    let adopted_count = fs::read_to_string(&adoption_path)
+        .ok()
+        .map(|body| body.lines().filter(|line| !line.trim().is_empty()).count())
+        .unwrap_or(0);
     if !enabled {
         let mut payload =
             dispatch_runtime_disabled_payload("taskflow.dispatch", TaskRuntimeMode::ManagementOnly);
@@ -162,10 +191,14 @@ pub(crate) fn dispatch_status_projection(state_root: &Path) -> serde_json::Value
             );
             object.insert(
                 "execution_bound_count".to_string(),
-                serde_json::Value::from(0),
+                serde_json::Value::from(execution_bound_count),
             );
             object.insert("adopted_count".to_string(), serde_json::Value::from(0));
             object.insert("unadopted_count".to_string(), serde_json::Value::from(0));
+            object.insert(
+                "artifact_refs".to_string(),
+                serde_json::json!({"adoption_path": adoption_path}),
+            );
         }
         return payload;
     }
@@ -174,12 +207,12 @@ pub(crate) fn dispatch_status_projection(state_root: &Path) -> serde_json::Value
         "enabled": true,
         "status": "ready",
         "authority": "execution_bound_transitions",
-        "execution_bound_count": 0,
-        "adopted_count": 0,
-        "unadopted_count": 0,
+        "execution_bound_count": execution_bound_count,
+        "adopted_count": adopted_count,
+        "unadopted_count": execution_bound_count.saturating_sub(adopted_count),
         "blocker_codes": [],
         "next_actions": ["Run `vida taskflow dispatch adopt --dry-run` before dispatching existing runs."],
-        "artifact_refs": {},
+        "artifact_refs": {"adoption_path": adoption_path},
     })
 }
 
@@ -207,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_binding_uses_explicit_plan_fields_or_active_run() {
+    fn execution_binding_uses_explicit_execution_semantics_or_active_run() {
         let mut task = crate::state_store::TaskRecord {
             id: "task".to_string(),
             display_id: None,
@@ -245,6 +278,11 @@ mod tests {
             task_execution_binding(&task, true),
             TaskExecutionBinding::ExecutionBound
         );
+        task.planner_metadata.proof_targets = vec!["proof".to_string()];
+        assert_eq!(
+            task_execution_binding(&task, false),
+            TaskExecutionBinding::ManagementOnly
+        );
     }
 
     #[test]
@@ -256,6 +294,36 @@ mod tests {
                 &TaskLifecycleMutationSource::Management,
             ),
             Ok(())
+        );
+        assert_eq!(
+            TaskLifecycleService::authorize_close(
+                TaskRuntimeMode::ManagementOnly,
+                TaskExecutionBinding::ExecutionBound,
+                &TaskLifecycleMutationSource::Management,
+                false,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            TaskLifecycleService::authorize_close(
+                TaskRuntimeMode::DispatchEnabled,
+                TaskExecutionBinding::ManagementOnly,
+                &TaskLifecycleMutationSource::Management,
+                false,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            TaskLifecycleService::authorize_close(
+                TaskRuntimeMode::DispatchEnabled,
+                TaskExecutionBinding::ExecutionBound,
+                &TaskLifecycleMutationSource::DispatchReceipt {
+                    run_id: "run".to_string(),
+                    receipt_id: "receipt".to_string(),
+                },
+                false,
+            ),
+            Err("dispatch_receipt_proof_required")
         );
         assert_eq!(
             TaskLifecycleService::authorize(
