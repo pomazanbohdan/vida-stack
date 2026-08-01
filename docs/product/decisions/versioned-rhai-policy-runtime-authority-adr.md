@@ -96,6 +96,18 @@ receipt identity. The decision carries a deterministic digest, typed
 recommendation (`no_change`, `additive_profile`, or `block`), additive profiles,
 blockers, and evidence references.
 
+Typed-field contract: `schema_version` is `u16` and equals `1`; task, policy,
+profile, mode, recommendation, blocker, and evidence IDs are bounded enums or
+non-empty UTF-8 strings (maximum 128 bytes); versions and limits are bounded
+unsigned integers; digests are exactly 64 lowercase hexadecimal characters;
+capability snapshots and limits are bounded typed maps; pins are optional but
+immutable when present; `receipt_id` is a non-empty bounded identifier.
+Unknown fields, enum values, oversized strings/maps, invalid digest shape, or
+type mismatch fail closed before evaluation. Rust computes and validates
+`effective_profiles = Rust_required ∪ explicit_profiles ∪ Rhai_additions`;
+Rhai additions are additive-only and may never remove `Rust_required` or
+`explicit_profiles`.
+
 | Profile ID | Rhai may do | Rust must do |
 |---|---|---|
 | `contract` | recommend additive checks | own schema and final verdict |

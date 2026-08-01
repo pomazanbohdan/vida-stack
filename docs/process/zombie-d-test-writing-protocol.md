@@ -292,6 +292,18 @@ typed `QualityGateContextV1` and `QualityGateDecisionV1` reference. The decision
 may recommend only `no_change`, `additive_profile`, or `block`; Rhai cannot mark
 evidence passed, remove a required profile, or authorize an effect.
 
+Typed-field contract: `schema_version` is `u16` and equals `1`; task, policy,
+profile, mode, recommendation, blocker, and evidence IDs are bounded enums or
+non-empty UTF-8 strings (maximum 128 bytes); versions and limits are bounded
+unsigned integers; digests are exactly 64 lowercase hexadecimal characters;
+capability snapshots and limits are bounded typed maps; pins are optional but
+immutable when present; `receipt_id` is a non-empty bounded identifier.
+Unknown fields, enum values, oversized strings/maps, invalid digest shape, or
+type mismatch fail closed before evaluation. Rust computes and validates
+`effective_profiles = Rust_required ∪ explicit_profiles ∪ Rhai_additions`;
+Rhai additions are additive-only and may never remove `Rust_required` or
+`explicit_profiles`.
+
 | Profile | Required evidence focus | Rust-owned gate | Rhai role |
 |---|---|---|---|
 | `contract` | schema and compatibility | final contract verdict | additive recommendation |
