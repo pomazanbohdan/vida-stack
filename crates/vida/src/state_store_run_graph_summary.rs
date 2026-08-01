@@ -3139,13 +3139,6 @@ impl StateStore {
                 reason: "host_bridge_receipt_binding_identity_mismatch:run_or_target".to_string(),
             });
         }
-        let receipt_value =
-            serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
-                reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
-            })?;
-        identity
-            .validate_precursor_receipt(&receipt_value)
-            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
         let compact = normalize_legacy_downstream_preview_drift(compact);
         let (compact, _) = normalize_repairable_in_flight_receipt_lane_status_drift(compact);
