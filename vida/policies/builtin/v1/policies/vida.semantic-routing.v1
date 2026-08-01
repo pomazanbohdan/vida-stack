@@ -1,0 +1,26 @@
+// Bounded semantic-routing shadow policy.
+// Rust owns token facts, redaction, catalogs, hard constraints, and authority.
+// This policy only calculates advisory domain/complexity weights in shadow.
+let high_risk = ctx.domain == "security"
+    || ctx.complexity_band == "medium_high"
+    || ctx.complexity_band == "complex";
+let complex = ctx.complexity_band == "medium_high" || ctx.complexity_band == "complex";
+let recommendation = if high_risk || complex { "quality_first" } else { "balanced_cost_quality" };
+let weights = if ctx.complexity_band == "simple" {
+    #{cost: 45, speed: 20, quality: 20, reasoning: 5, reliability: 10}
+} else if ctx.complexity_band == "medium" {
+    #{cost: 25, speed: 15, quality: 30, reasoning: 15, reliability: 15}
+} else {
+    #{cost: 15, speed: 10, quality: 35, reasoning: 25, reliability: 15}
+};
+#{
+    schema_version: 1,
+    policy_id: "rhai.runtime.semantic-routing",
+    version: 1,
+    mode: "shadow",
+    domain: ctx.domain,
+    complexity_band: ctx.complexity_band,
+    advisory_weights: weights,
+    recommendation: recommendation,
+    native_effective: true
+}
