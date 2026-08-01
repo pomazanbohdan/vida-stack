@@ -449,6 +449,29 @@ mod tests {
         std::env::temp_dir().join(format!("taskflow-state-fs-{nanos}.json"))
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn file_journal_create_rejects_symlink_parent_without_writing_target() {
+        use std::os::unix::fs::symlink;
+
+        let path = temp_snapshot_path();
+        let root = path.with_extension("root");
+        let outside = path.with_extension("outside");
+        let linked_parent = root.join("state-link");
+        let journal_path = linked_parent.join("journal.json");
+        let outside_journal = outside.join("journal.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, &linked_parent).unwrap();
+
+        let error = FileOperationalJournal::create(&journal_path).unwrap_err();
+
+        assert!(error.to_string().contains("symlink"));
+        assert!(!outside_journal.exists());
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
     #[test]
     fn snapshot_round_trips_to_disk() {
         let path = temp_snapshot_path();
