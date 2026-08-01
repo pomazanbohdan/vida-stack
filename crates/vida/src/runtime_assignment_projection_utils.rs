@@ -216,11 +216,7 @@ mod tests {
         let assignment = serde_json::json!({"policy_bundle_ref": null});
 
         assert_eq!(
-            super::validate_policy_bundle_ref(
-                &execution_plan,
-                &serde_json::json!({}),
-                &assignment,
-            ),
+            super::validate_policy_bundle_ref(&execution_plan, &serde_json::json!({}), &assignment,),
             Ok(serde_json::Value::Null)
         );
     }

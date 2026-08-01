@@ -1,6 +1,6 @@
+use super::state_store_run_graph_state::RunGraphPolicyPin;
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
-use super::state_store_run_graph_state::RunGraphPolicyPin;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
 };
@@ -2957,8 +2957,21 @@ impl StateStore {
             serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
                 reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
             })?;
+        let canonical_receipt = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
+            .iter()
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    value
+                        .get(*field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect();
         taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
-            request_id, &value,
+            request_id,
+            &serde_json::Value::Object(canonical_receipt),
         )
         .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
     }
@@ -3150,8 +3163,20 @@ impl StateStore {
             serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
                 reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
             })?;
+        let canonical_receipt = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
+            .iter()
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    receipt_value
+                        .get(*field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect();
         identity
-            .validate_precursor_receipt(&receipt_value)
+            .validate_precursor_receipt(&serde_json::Value::Object(canonical_receipt))
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
         let compact = normalize_legacy_downstream_preview_drift(compact);
@@ -7137,10 +7162,24 @@ mod tests {
         .to_hex()
         .to_string();
         let request_id = format!("request-{run_id}");
+        let receipt_value =
+            serde_json::to_value(receipt).expect("test dispatch receipt should serialize");
+        let canonical_receipt = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
+            .iter()
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    receipt_value
+                        .get(*field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect();
         let precursor_fingerprint =
             taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
                 &request_id,
-                &serde_json::to_value(receipt).expect("test dispatch receipt should serialize"),
+                &serde_json::Value::Object(canonical_receipt),
             )
             .expect("test precursor fingerprint should build");
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
@@ -7189,6 +7228,8 @@ mod tests {
         let packet_path = "/tmp/host-bridge-binding.json";
         let mut receipt = sample_dispatch_receipt(run_id);
         receipt.dispatch_packet_path = Some(packet_path.to_string());
+        receipt.dispatch_status = "executing".to_string();
+        receipt.lane_status = "lane_running".to_string();
         let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
 
         store
@@ -7210,12 +7251,8 @@ mod tests {
         let mut competing_identity = identity.clone();
         competing_identity.request_id = format!("{}-competing", identity.request_id);
         competing_identity.precursor_fingerprint = Some(
-            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
-                &competing_identity.request_id,
-                &serde_json::to_value(&receipt)
-                    .expect("competing dispatch receipt should serialize"),
-            )
-            .expect("competing precursor fingerprint should build"),
+            StateStore::host_bridge_precursor_fingerprint(&competing_identity.request_id, &receipt)
+                .expect("competing precursor fingerprint should build"),
         );
         let error = store
             .record_host_bridge_receipt_binding(&competing_identity, &progressed)
@@ -7258,12 +7295,11 @@ mod tests {
         in_flight.dispatch_packet_path = Some(packet_path.to_string());
         in_flight.dispatch_status = "executing".to_string();
         in_flight.lane_status = "lane_running".to_string();
-        store
-            .record_run_graph_dispatch_receipt(&in_flight)
-            .await
-            .expect("in-flight dispatch receipt should persist");
-
         let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        store
+            .record_host_bridge_receipt_binding(&identity, &in_flight)
+            .await
+            .expect("in-flight dispatch binding should persist");
         let mut pending = in_flight.clone();
         pending.dispatch_status = "bridge_request_pending".to_string();
         pending.dispatch_result_path = Some(identity.result_path.clone());
@@ -7303,12 +7339,11 @@ mod tests {
         in_flight.dispatch_packet_path = Some(packet_path.to_string());
         in_flight.dispatch_status = "executing".to_string();
         in_flight.lane_status = "lane_running".to_string();
-        store
-            .record_run_graph_dispatch_receipt(&in_flight)
-            .await
-            .expect("in-flight dispatch receipt should persist");
-
         let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        store
+            .record_host_bridge_receipt_binding(&identity, &in_flight)
+            .await
+            .expect("in-flight dispatch binding should persist");
         let mut mismatched = in_flight.clone();
         mismatched.dispatch_status = "bridge_request_pending".to_string();
         mismatched.dispatch_command = Some("different-command".to_string());
@@ -7336,12 +7371,11 @@ mod tests {
         in_flight.dispatch_packet_path = Some(packet_path.to_string());
         in_flight.dispatch_status = "executing".to_string();
         in_flight.lane_status = "lane_running".to_string();
-        store
-            .record_run_graph_dispatch_receipt(&in_flight)
-            .await
-            .expect("in-flight dispatch receipt should persist");
-
         let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        store
+            .record_host_bridge_receipt_binding(&identity, &in_flight)
+            .await
+            .expect("in-flight dispatch binding should persist");
         let mut terminal = in_flight.clone();
         terminal.dispatch_status = "executed".to_string();
         terminal.lane_status = "lane_completed".to_string();
@@ -7383,7 +7417,7 @@ mod tests {
             )
             .await
             .expect("identity lookup should succeed")
-            .is_none());
+            .is_some());
 
         close_store_and_remove_root(store, root).await;
     }

@@ -6204,11 +6204,9 @@ mod tests {
                 })
                 .await
                 .expect_err("missing structured proof must block generic close updates");
-            assert!(
-                error
-                    .to_string()
-                    .contains("configured proof targets without matching structured pass evidence")
-            );
+            assert!(error
+                .to_string()
+                .contains("configured proof targets without matching structured pass evidence"));
         }
 
         let child = store.show_task("proof-child").await.expect("load child");

@@ -244,9 +244,8 @@ fn verified_test_receipt(
             ),
         ));
     }
-    let fixtures = read_bounded_fixture(fixtures_path).map_err(|error| {
-        PolicyFailure::new("policy_activation_fixture_invalid", error.detail)
-    })?;
+    let fixtures = read_bounded_fixture(fixtures_path)
+        .map_err(|error| PolicyFailure::new("policy_activation_fixture_invalid", error.detail))?;
     let engine = build_policy_engine(Limits::default());
     let report = run_fixture_jsonl(&engine, &checked.bundle, &fixtures).map_err(|error| {
         PolicyFailure::new("policy_activation_fixture_failed", error.to_string())
