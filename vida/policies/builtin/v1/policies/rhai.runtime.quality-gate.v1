@@ -1,0 +1,13 @@
+// Pure quality-gate shadow output. Rust validates identity, limits, baseline
+// profiles, evidence, and final verdict; this bundle can only add suggestions.
+let additive_profiles = [];
+let check_ids = [];
+let rationale = "shadow comparison only";
+let risk = "low";
+#{
+    schema_version: 1,
+    additive_profiles: additive_profiles,
+    check_ids: check_ids,
+    rationale: rationale,
+    risk: risk
+}

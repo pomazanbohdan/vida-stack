@@ -8,6 +8,35 @@ use vida_policy_rhai::PolicyBundle;
 pub mod runtime;
 
 pub const POLICY_LIFECYCLE_SCHEMA_VERSION: u16 = 1;
+const MAX_POLICY_RECEIPT_ID_BYTES: usize = 128;
+const MAX_POLICY_RECEIPT_CODE_BYTES: usize = 128;
+
+fn valid_policy_receipt_id(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= MAX_POLICY_RECEIPT_ID_BYTES
+        && !value.to_ascii_lowercase().contains("context")
+        && !value.to_ascii_lowercase().contains("source")
+        && !value.to_ascii_lowercase().contains("secret")
+}
+
+fn valid_policy_receipt_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_policy_receipt_code(value: Option<&str>) -> bool {
+    value
+        .map(|value| {
+            !value.trim().is_empty()
+                && value.len() <= MAX_POLICY_RECEIPT_CODE_BYTES
+                && !value.to_ascii_lowercase().contains("context")
+                && !value.to_ascii_lowercase().contains("source")
+                && !value.to_ascii_lowercase().contains("secret")
+        })
+        .unwrap_or(true)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,7 +144,27 @@ pub struct PolicyShadowReceipt {
     pub fallback_code: Option<String>,
 }
 
+impl PolicyShadowReceipt {
+    fn validate(&self) -> bool {
+        valid_policy_receipt_id(&self.receipt_id)
+            && valid_policy_receipt_id(&self.run_id)
+            && valid_policy_receipt_id(&self.bundle_id)
+            && valid_policy_receipt_id(&self.policy_id)
+            && valid_policy_receipt_digest(&self.content_digest)
+            && valid_policy_receipt_digest(&self.input_digest)
+            && self
+                .output_digest
+                .as_deref()
+                .map(valid_policy_receipt_digest)
+                .unwrap_or(true)
+            && valid_policy_receipt_code(self.diff_code.as_deref())
+            && valid_policy_receipt_code(self.error_code.as_deref())
+            && valid_policy_receipt_code(self.fallback_code.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyLifecycleStoreSnapshot {
     pub schema_version: u16,
     pub bundles: Vec<PolicyBundleRecord>,
@@ -403,13 +452,7 @@ impl PolicyLifecycleStore {
         &mut self,
         receipt: PolicyShadowReceipt,
     ) -> Result<(), PolicyLifecycleStoreError> {
-        if receipt.receipt_id.trim().is_empty()
-            || receipt.run_id.trim().is_empty()
-            || receipt.input_digest.trim().is_empty()
-            || receipt.content_digest.trim().is_empty()
-            || receipt.bundle_id.trim().is_empty()
-            || receipt.policy_id.trim().is_empty()
-        {
+        if !receipt.validate() {
             return Err(PolicyLifecycleStoreError::ShadowReceiptInvalid {
                 receipt_id: receipt.receipt_id,
             });
@@ -428,13 +471,10 @@ impl PolicyLifecycleStore {
             });
         }
         let receipt_id = receipt.receipt_id.clone();
-        if self
-            .shadow_receipts
-            .insert(receipt_id.clone(), receipt)
-            .is_some()
-        {
+        if self.shadow_receipts.contains_key(&receipt_id) {
             return Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { receipt_id });
         }
+        self.shadow_receipts.insert(receipt_id, receipt);
         Ok(())
     }
 
@@ -561,51 +601,61 @@ impl PolicyLifecycleStore {
                 snapshot.schema_version,
             ));
         }
-        Ok(Self {
-            bundles: snapshot
-                .bundles
+        let PolicyLifecycleStoreSnapshot {
+            bundles,
+            test_receipts,
+            evaluation_receipts,
+            shadow_diffs,
+            active_pointer,
+            last_known_good,
+            modes,
+            run_pins,
+            shadow_receipts,
+            ..
+        } = snapshot;
+        let mut store = Self {
+            bundles: bundles
                 .into_iter()
                 .map(|bundle| (bundle.bundle_id.clone(), bundle))
                 .collect(),
-            test_receipts: snapshot
-                .test_receipts
+            test_receipts: test_receipts
                 .into_iter()
                 .map(|receipt| (receipt.bundle_id.clone(), receipt))
                 .collect(),
-            evaluation_receipts: snapshot
-                .evaluation_receipts
+            evaluation_receipts: evaluation_receipts
                 .into_iter()
                 .map(|receipt| (receipt.evaluation_id.clone(), receipt))
                 .collect(),
-            shadow_diffs: snapshot
-                .shadow_diffs
+            shadow_diffs: shadow_diffs
                 .into_iter()
                 .map(|diff| (diff.bundle_id.clone(), diff))
                 .collect(),
-            active_pointer: snapshot.active_pointer,
-            last_known_good: snapshot.last_known_good,
-            modes: snapshot
-                .modes
+            active_pointer,
+            last_known_good,
+            modes: modes
                 .into_iter()
                 .map(|record| (record.bundle_id, record.mode))
                 .collect(),
-            run_pins: snapshot
-                .run_pins
+            run_pins: run_pins
                 .into_iter()
                 .map(|pin| (pin.run_id.clone(), pin))
                 .collect(),
-            shadow_receipts: snapshot
-                .shadow_receipts
-                .into_iter()
-                .map(|receipt| (receipt.receipt_id.clone(), receipt))
-                .collect(),
-        })
+            shadow_receipts: BTreeMap::new(),
+        };
+        for receipt in shadow_receipts {
+            store.record_shadow_receipt(receipt)?;
+        }
+        Ok(store)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn digest(id: &str) -> String {
+        blake3::hash(id.as_bytes()).to_hex().to_string()
+    }
 
     fn bundle(id: &str) -> PolicyBundleRecord {
         PolicyBundleRecord {
@@ -614,7 +664,7 @@ mod tests {
             version: 1,
             engine_abi: "rhai-policy-engine-v1".to_string(),
             source: "1".to_string(),
-            content_digest: format!("digest-{id}"),
+            content_digest: digest(id),
             lifecycle: PolicyLifecycle::Candidate,
         }
     }
@@ -623,8 +673,26 @@ mod tests {
         PolicyTestReceipt {
             bundle_id: id.to_string(),
             test_id: format!("test-{id}"),
-            content_digest: format!("digest-{id}"),
+            content_digest: digest(id),
             passed: true,
+        }
+    }
+
+    fn shadow_receipt(bundle_id: &str, receipt_id: &str) -> PolicyShadowReceipt {
+        PolicyShadowReceipt {
+            receipt_id: receipt_id.to_string(),
+            run_id: "run-one".to_string(),
+            bundle_id: bundle_id.to_string(),
+            policy_id: "policy".to_string(),
+            version: 1,
+            content_digest: digest(bundle_id),
+            input_digest: digest("input"),
+            output_digest: Some(digest("output")),
+            duration_ms: 4,
+            agreed: Some(true),
+            diff_code: None,
+            error_code: None,
+            fallback_code: None,
         }
     }
 
@@ -688,7 +756,7 @@ mod tests {
             bundle_id: "one".to_string(),
             policy_id: "policy".to_string(),
             version: 1,
-            content_digest: "digest-one".to_string(),
+            content_digest: digest("one"),
         };
         store.record_run_pin(pin.clone()).unwrap();
         assert_eq!(store.record_run_pin(pin.clone()), Ok(()));
@@ -706,9 +774,9 @@ mod tests {
                 bundle_id: "one".to_string(),
                 policy_id: "policy".to_string(),
                 version: 1,
-                content_digest: "digest-one".to_string(),
-                input_digest: "input-digest".to_string(),
-                output_digest: Some("output-digest".to_string()),
+                content_digest: digest("one"),
+                input_digest: digest("input"),
+                output_digest: Some(digest("output")),
                 duration_ms: 4,
                 agreed: Some(true),
                 diff_code: None,
@@ -720,5 +788,69 @@ mod tests {
         assert_eq!(restarted.mode("one"), Ok(PolicyMode::Shadow));
         assert_eq!(restarted.run_pin("run-one").unwrap().bundle_id, "one");
         assert_eq!(restarted.snapshot().shadow_receipts.len(), 1);
+    }
+
+    #[test]
+    fn shadow_receipt_round_trip_rejects_unknown_fields_and_preserves_restart_state() {
+        let mut store = PolicyLifecycleStore::default();
+        store.import_bundle(bundle("one")).unwrap();
+        let receipt = shadow_receipt("one", "receipt-round-trip");
+        store.record_shadow_receipt(receipt.clone()).unwrap();
+        let encoded = serde_json::to_string(&receipt).unwrap();
+        let decoded: PolicyShadowReceipt = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, receipt);
+        let restarted = PolicyLifecycleStore::from_snapshot(store.snapshot()).unwrap();
+        assert_eq!(restarted.snapshot().shadow_receipts, vec![receipt]);
+
+        let mut unknown = serde_json::to_value(decoded).unwrap();
+        unknown["raw_context"] = serde_json::json!({"secret": "never"});
+        assert!(serde_json::from_value::<PolicyShadowReceipt>(unknown).is_err());
+    }
+
+    #[test]
+    fn shadow_receipt_digest_identity_and_duplicate_validation_fail_closed() {
+        let mut store = PolicyLifecycleStore::default();
+        store.import_bundle(bundle("one")).unwrap();
+        let receipt = shadow_receipt("one", "receipt-duplicate");
+        store.record_shadow_receipt(receipt.clone()).unwrap();
+        assert!(matches!(
+            store.record_shadow_receipt(receipt.clone()),
+            Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { .. })
+        ));
+        assert_eq!(store.snapshot().shadow_receipts.len(), 1);
+
+        let mut mismatch = shadow_receipt("one", "receipt-mismatch");
+        mismatch.content_digest = digest("different");
+        assert!(matches!(
+            store.record_shadow_receipt(mismatch),
+            Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { .. })
+        ));
+
+        let mut duplicate_snapshot = store.snapshot();
+        duplicate_snapshot
+            .shadow_receipts
+            .push(duplicate_snapshot.shadow_receipts[0].clone());
+        assert!(matches!(
+            PolicyLifecycleStore::from_snapshot(duplicate_snapshot),
+            Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn shadow_receipt_digest_shape_and_raw_source_fields_are_rejected() {
+        let mut store = PolicyLifecycleStore::default();
+        store.import_bundle(bundle("one")).unwrap();
+        let mut malformed = shadow_receipt("one", "receipt-malformed");
+        malformed.input_digest = "not-a-digest".to_string();
+        assert!(matches!(
+            store.record_shadow_receipt(malformed),
+            Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { .. })
+        ));
+        let mut raw_code = shadow_receipt("one", "receipt-raw");
+        raw_code.error_code = Some("raw source context".to_string());
+        assert!(matches!(
+            store.record_shadow_receipt(raw_code),
+            Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { .. })
+        ));
     }
 }

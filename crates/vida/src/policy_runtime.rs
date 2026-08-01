@@ -12,6 +12,7 @@ use vida_policy_rhai::{build_policy_engine, Limits, PolicyBundle};
 
 pub const POLICY_RUNTIME_SCHEMA_VERSION: u16 = 1;
 pub const POLICY_RUNTIME_BASELINE_DIGEST: &str = "rust-baseline-v1";
+const QUALITY_GATE_POLICY_ID: &str = "rhai.runtime.quality-gate";
 const SUPPORTED_POLICY_IDS: [&str; 7] = [
     "rhai.runtime.authority",
     "rhai.runtime.lifecycle",
@@ -58,6 +59,171 @@ pub(crate) struct QualityGateProfileResolution {
     pub(crate) limits: BTreeMap<String, u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QualityGateContextV1 {
+    pub(crate) schema_version: u16,
+    pub(crate) baseline_verdict: String,
+    pub(crate) hard_profiles: Vec<String>,
+    pub(crate) config_profiles: Vec<String>,
+    pub(crate) task_profiles: Vec<String>,
+    pub(crate) path_profiles: Vec<String>,
+    pub(crate) explicit_profiles: Vec<String>,
+    pub(crate) explicit_check_ids: Vec<String>,
+    pub(crate) limits: BTreeMap<String, u64>,
+}
+
+impl QualityGateContextV1 {
+    pub(crate) fn baseline_request(&self) -> QualityGateBaselineRequest {
+        QualityGateBaselineRequest {
+            schema_version: self.schema_version,
+            hard_profiles: self.hard_profiles.clone(),
+            config_profiles: self.config_profiles.clone(),
+            task_profiles: self.task_profiles.clone(),
+            path_profiles: self.path_profiles.clone(),
+            explicit_profiles: self.explicit_profiles.clone(),
+            explicit_check_ids: self.explicit_check_ids.clone(),
+            limits: self.limits.clone(),
+        }
+    }
+
+    pub(crate) fn redacted_input(&self) -> Result<Value, PolicyRuntimeError> {
+        if self.baseline_verdict != "pass" && self.baseline_verdict != "blocked" {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_baseline_verdict_invalid".to_string(),
+            ));
+        }
+        let request = self.baseline_request();
+        validate_quality_gate_baseline_request(&request)?;
+        let value = serde_json::to_value(self)
+            .map_err(|error| PolicyRuntimeError::InvalidDecision(error.to_string()))?;
+        let bytes = serde_json::to_vec(&value)
+            .map_err(|error| PolicyRuntimeError::InvalidDecision(error.to_string()))?;
+        if bytes.len() > QUALITY_GATE_MAX_CONTEXT_BYTES as usize {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_context_limit".to_string(),
+            ));
+        }
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QualityGateShadowDecision {
+    pub(crate) schema_version: u16,
+    pub(crate) additive_profiles: Vec<String>,
+    pub(crate) check_ids: Vec<String>,
+    pub(crate) rationale: String,
+    pub(crate) risk: String,
+}
+
+impl QualityGateShadowDecision {
+    fn from_value(value: &Value) -> Result<Self, PolicyRuntimeError> {
+        let object = value.as_object().ok_or_else(|| {
+            PolicyRuntimeError::InvalidDecision("quality_gate_output_not_object".to_string())
+        })?;
+        let allowed_fields = [
+            "schema_version",
+            "additive_profiles",
+            "check_ids",
+            "rationale",
+            "risk",
+        ];
+        if object
+            .keys()
+            .any(|key| !allowed_fields.contains(&key.as_str()))
+        {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_output_unknown_field".to_string(),
+            ));
+        }
+        if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_output_schema_invalid".to_string(),
+            ));
+        }
+        let additive_profiles =
+            quality_gate_string_array(object.get("additive_profiles"), "profiles")?;
+        let check_ids = quality_gate_string_array(object.get("check_ids"), "check_ids")?;
+        for profile in &additive_profiles {
+            validate_quality_gate_id(profile, &QUALITY_GATE_PROFILE_IDS, "profile")?;
+        }
+        for check in &check_ids {
+            validate_quality_gate_id(check, &QUALITY_GATE_CHECK_IDS, "check")?;
+        }
+        let rationale = object
+            .get("rationale")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PolicyRuntimeError::InvalidDecision("quality_gate_rationale_invalid".to_string())
+            })?
+            .to_string();
+        if rationale.trim().is_empty() || rationale.len() > 512 {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_rationale_limit".to_string(),
+            ));
+        }
+        let risk = object
+            .get("risk")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PolicyRuntimeError::InvalidDecision("quality_gate_risk_invalid".to_string())
+            })?
+            .to_string();
+        if !matches!(risk.as_str(), "low" | "medium" | "high") {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_risk_unknown".to_string(),
+            ));
+        }
+        Ok(Self {
+            schema_version: 1,
+            additive_profiles,
+            check_ids,
+            rationale,
+            risk,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QualityGateShadowRequest {
+    pub(crate) run_id: String,
+    pub(crate) bundle_id: String,
+    pub(crate) context: QualityGateContextV1,
+    pub(crate) pinned: Option<PolicyPin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QualityGateShadowOutcome {
+    pub(crate) decision: Option<QualityGateShadowDecision>,
+    pub(crate) resolution: QualityGateProfileResolution,
+    pub(crate) receipt: PolicyReceipt,
+}
+
+impl QualityGateShadowOutcome {
+    pub(crate) fn shadow_receipt(
+        &self,
+        bundle_id: impl Into<String>,
+    ) -> crate::state_store::policy::PolicyShadowReceipt {
+        crate::state_store::policy::PolicyShadowReceipt {
+            receipt_id: self.receipt.receipt_id.clone(),
+            run_id: self.receipt.run_id.clone(),
+            bundle_id: bundle_id.into(),
+            policy_id: self.receipt.policy_id.clone(),
+            version: self.receipt.version,
+            content_digest: self.receipt.content_digest.clone(),
+            input_digest: self.receipt.input_digest.clone(),
+            output_digest: self.receipt.output_digest.clone(),
+            duration_ms: self.receipt.duration_ms,
+            agreed: self.receipt.agreed,
+            diff_code: self.receipt.diff_code.clone(),
+            error_code: self.receipt.error_code.clone(),
+            fallback_code: self.receipt.fallback_code.clone(),
+        }
+    }
+}
+
 pub(crate) fn quality_gate_baseline_profiles(
     request: &QualityGateBaselineRequest,
 ) -> Result<Vec<String>, PolicyRuntimeError> {
@@ -98,7 +264,13 @@ pub(crate) fn quality_gate_final_profiles(
     let object = rhai_output.as_object().ok_or_else(|| {
         PolicyRuntimeError::InvalidDecision("quality_gate_output_not_object".to_string())
     })?;
-    let allowed_fields = ["schema_version", "additive_profiles", "check_ids"];
+    let allowed_fields = [
+        "schema_version",
+        "additive_profiles",
+        "check_ids",
+        "rationale",
+        "risk",
+    ];
     if object
         .keys()
         .any(|key| !allowed_fields.contains(&key.as_str()))
@@ -111,6 +283,26 @@ pub(crate) fn quality_gate_final_profiles(
         return Err(PolicyRuntimeError::InvalidDecision(
             "quality_gate_output_schema_invalid".to_string(),
         ));
+    }
+    if let Some(rationale) = object.get("rationale") {
+        let rationale = rationale.as_str().ok_or_else(|| {
+            PolicyRuntimeError::InvalidDecision("quality_gate_rationale_invalid".to_string())
+        })?;
+        if rationale.trim().is_empty() || rationale.len() > 512 {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_rationale_limit".to_string(),
+            ));
+        }
+    }
+    if let Some(risk) = object.get("risk") {
+        let risk = risk.as_str().ok_or_else(|| {
+            PolicyRuntimeError::InvalidDecision("quality_gate_risk_invalid".to_string())
+        })?;
+        if !matches!(risk, "low" | "medium" | "high") {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_risk_unknown".to_string(),
+            ));
+        }
     }
     let additions = quality_gate_string_array(object.get("additive_profiles"), "profiles")?;
     let rhai_checks = quality_gate_string_array(object.get("check_ids"), "check_ids")?;
@@ -678,6 +870,98 @@ impl PolicyModeFacade {
         })
     }
 
+    pub(crate) fn evaluate_quality_gate_shadow(
+        &mut self,
+        request: QualityGateShadowRequest,
+    ) -> Result<QualityGateShadowOutcome, PolicyRuntimeError> {
+        if request.run_id.trim().is_empty() || request.bundle_id.trim().is_empty() {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_shadow_identity_invalid".to_string(),
+            ));
+        }
+        let input = request.context.redacted_input()?;
+        let baseline_request = request.context.baseline_request();
+        let baseline = quality_gate_baseline_resolution(&baseline_request)?;
+        let pin = self.begin_run(
+            request.run_id.clone(),
+            request.pinned,
+            QUALITY_GATE_POLICY_ID,
+        )?;
+        let mode = self
+            .policies
+            .get(&pin)
+            .map(|registered| registered.mode)
+            .unwrap_or(PolicyMode::Off);
+        let input_digest = digest_json(&input)?;
+        let started = std::time::Instant::now();
+        if mode != PolicyMode::Shadow {
+            let receipt = self.quality_gate_receipt(
+                &request.run_id,
+                &pin,
+                mode,
+                input_digest,
+                None,
+                started.elapsed().as_millis() as u64,
+                None,
+                None,
+                Some("shadow_mode_required"),
+                Some(&FallbackTarget::RustBaseline),
+            );
+            return Ok(QualityGateShadowOutcome {
+                decision: None,
+                resolution: baseline,
+                receipt,
+            });
+        }
+        let registered = self
+            .policies
+            .get(&pin)
+            .ok_or_else(|| PolicyRuntimeError::BundleNotFound(pin.clone()))?;
+        let engine = build_policy_engine(self.limits);
+        let value = match engine.evaluate(&registered.bundle.source, input) {
+            Ok(value) => value,
+            Err(error) => {
+                let receipt = self.quality_gate_receipt(
+                    &request.run_id,
+                    &pin,
+                    PolicyMode::Shadow,
+                    input_digest,
+                    None,
+                    started.elapsed().as_millis() as u64,
+                    None,
+                    None,
+                    Some(error.code().as_str()),
+                    Some(&FallbackTarget::RustBaseline),
+                );
+                return Ok(QualityGateShadowOutcome {
+                    decision: None,
+                    resolution: baseline,
+                    receipt,
+                });
+            }
+        };
+        let decision = QualityGateShadowDecision::from_value(&value)?;
+        let resolution = quality_gate_final_profiles(&baseline_request, &value)?;
+        let agreed = resolution == baseline;
+        let receipt = self.quality_gate_receipt(
+            &request.run_id,
+            &pin,
+            PolicyMode::Shadow,
+            input_digest,
+            Some(digest_json(&value)?),
+            started.elapsed().as_millis() as u64,
+            Some(agreed),
+            (!agreed).then_some("quality_gate_additive_diff"),
+            None,
+            None,
+        );
+        Ok(QualityGateShadowOutcome {
+            decision: Some(decision),
+            resolution,
+            receipt,
+        })
+    }
+
     pub fn evaluate(
         &mut self,
         request: PolicyEvaluationRequest,
@@ -864,6 +1148,46 @@ impl PolicyModeFacade {
             authorizes_effects,
         }
     }
+
+    fn quality_gate_receipt(
+        &mut self,
+        run_id: &str,
+        pin: &PolicyPin,
+        mode: PolicyMode,
+        input_digest: String,
+        output_digest: Option<String>,
+        duration_ms: u64,
+        agreed: Option<bool>,
+        diff_code: Option<&str>,
+        error_code: Option<&str>,
+        fallback: Option<&FallbackTarget>,
+    ) -> PolicyReceipt {
+        self.receipt_sequence = self.receipt_sequence.saturating_add(1);
+        PolicyReceipt {
+            schema_version: POLICY_RUNTIME_SCHEMA_VERSION,
+            receipt_id: format!("policy-receipt-{}", self.receipt_sequence),
+            run_id: run_id.to_string(),
+            policy_id: pin.policy_id.clone(),
+            version: pin.version,
+            content_digest: pin.content_digest.clone(),
+            mode,
+            input_digest,
+            output_digest,
+            duration_ms,
+            agreed,
+            diff_code: diff_code.map(str::to_string),
+            error_code: error_code.map(str::to_string),
+            fallback_code: fallback.map(|target| {
+                match target {
+                    FallbackTarget::LastKnownGood => "last_known_good",
+                    FallbackTarget::RustBaseline => "rust_baseline",
+                    FallbackTarget::Block => "block",
+                }
+                .to_string()
+            }),
+            authorizes_effects: false,
+        }
+    }
 }
 
 fn digest_json(value: &Value) -> Result<String, PolicyRuntimeError> {
@@ -914,6 +1238,37 @@ mod tests {
             explicit_check_ids: vec!["contract".to_string()],
             limits: BTreeMap::from([(String::from("max_profiles"), 8)]),
         }
+    }
+
+    fn quality_gate_context(verdict: &str) -> QualityGateContextV1 {
+        let request = quality_gate_request();
+        QualityGateContextV1 {
+            schema_version: request.schema_version,
+            baseline_verdict: verdict.to_string(),
+            hard_profiles: request.hard_profiles,
+            config_profiles: request.config_profiles,
+            task_profiles: request.task_profiles,
+            path_profiles: request.path_profiles,
+            explicit_profiles: request.explicit_profiles,
+            explicit_check_ids: request.explicit_check_ids,
+            limits: request.limits,
+        }
+    }
+
+    fn quality_gate_shadow(source: &str, run_id: &str) -> QualityGateShadowOutcome {
+        let mut facade = PolicyModeFacade::default();
+        let policy = bundle(QUALITY_GATE_POLICY_ID, 1, source);
+        let digest = policy.digest().unwrap();
+        let pin = facade.register(policy, digest, PolicyMode::Off).unwrap();
+        facade.set_mode(&pin, PolicyMode::Shadow).unwrap();
+        facade
+            .evaluate_quality_gate_shadow(QualityGateShadowRequest {
+                run_id: run_id.to_string(),
+                bundle_id: "bundle-quality-gate".to_string(),
+                context: quality_gate_context("pass"),
+                pinned: Some(pin),
+            })
+            .unwrap()
     }
 
     #[test]
@@ -981,6 +1336,75 @@ mod tests {
             quality_gate_baseline_profiles(&oversized),
             Err(PolicyRuntimeError::InvalidDecision(_))
         ));
+    }
+
+    #[test]
+    fn quality_gate_shadow_records_agreement_and_additive_diff_without_authority() {
+        let source = r#"#{schema_version: 1, additive_profiles: [], check_ids: ["contract"], rationale: "baseline", risk: "low"}"#;
+        let agreed = quality_gate_shadow(source, "quality-agreement");
+        assert_eq!(agreed.receipt.agreed, Some(true));
+        assert!(!agreed.receipt.authorizes_effects);
+        assert!(agreed.receipt.output_digest.is_some());
+
+        let source = r#"#{schema_version: 1, additive_profiles: ["resilience"], check_ids: ["contract"], rationale: "add resilience", risk: "medium"}"#;
+        let diff = quality_gate_shadow(source, "quality-diff");
+        assert_eq!(diff.receipt.agreed, Some(false));
+        assert_eq!(
+            diff.receipt.diff_code.as_deref(),
+            Some("quality_gate_additive_diff")
+        );
+        assert_eq!(
+            diff.resolution
+                .effective_profiles
+                .last()
+                .map(String::as_str),
+            Some("observability")
+        );
+        assert!(!diff.receipt.authorizes_effects);
+    }
+
+    #[test]
+    fn quality_gate_shadow_rejects_subtraction_unknown_ids_and_schema() {
+        for source in [
+            r#"#{schema_version: 1, additive_profiles: [], check_ids: ["contract"], rationale: "x", risk: "low", remove_profiles: ["security"]}"#,
+            r#"#{schema_version: 1, additive_profiles: ["unknown"], check_ids: ["contract"], rationale: "x", risk: "low"}"#,
+            r#"#{schema_version: 2, additive_profiles: [], check_ids: ["contract"], rationale: "x", risk: "low"}"#,
+        ] {
+            let mut facade = PolicyModeFacade::default();
+            let policy = bundle(QUALITY_GATE_POLICY_ID, 1, source);
+            let digest = policy.digest().unwrap();
+            let pin = facade.register(policy, digest, PolicyMode::Off).unwrap();
+            facade.set_mode(&pin, PolicyMode::Shadow).unwrap();
+            assert!(matches!(
+                facade.evaluate_quality_gate_shadow(QualityGateShadowRequest {
+                    run_id: format!("quality-invalid-{}", facade.receipt_sequence),
+                    bundle_id: "bundle-quality-gate".to_string(),
+                    context: quality_gate_context("pass"),
+                    pinned: Some(pin),
+                }),
+                Err(PolicyRuntimeError::InvalidDecision(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn quality_gate_shadow_falls_back_on_evaluator_error_and_receipt_is_redacted() {
+        let outcome = quality_gate_shadow(r#"eval("forbidden")"#, "quality-error");
+        assert_eq!(
+            outcome.receipt.fallback_code.as_deref(),
+            Some("rust_baseline")
+        );
+        assert!(outcome.receipt.error_code.is_some());
+        assert!(!outcome.receipt.authorizes_effects);
+        assert!(outcome.receipt.is_redacted());
+        let serialized = serde_json::to_string(&outcome.receipt).unwrap();
+        assert!(!serialized.contains("baseline_verdict"));
+        assert!(!serialized.contains("forbidden"));
+        let shadow = outcome.shadow_receipt("bundle-quality-gate");
+        assert_eq!(shadow.policy_id, QUALITY_GATE_POLICY_ID);
+        assert!(!serde_json::to_string(&shadow)
+            .unwrap()
+            .contains("baseline_verdict"));
     }
 
     #[test]
