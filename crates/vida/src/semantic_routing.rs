@@ -12,6 +12,8 @@ pub const POLICY_VERSION: u32 = 1;
 pub const MAX_TOKEN_COUNT: usize = 64;
 pub const MAX_REDACTED_TOKEN_COUNT: usize = MAX_TOKEN_COUNT;
 pub const MAX_HARD_CONSTRAINTS: usize = 8;
+pub const VIDA_STACK_REPOSITORY_ALLOWLIST: &str = "pomazanbohdan/vida-stack";
+pub const MAX_REPOSITORY_ID_CHARS: usize = 128;
 
 /// The exact Rhai source staged beside this module.
 pub const SHADOW_POLICY_SOURCE: &str =
@@ -136,6 +138,16 @@ pub struct AdvisoryWeights {
 }
 
 impl AdvisoryWeights {
+    pub const fn zero() -> Self {
+        Self {
+            cost: 0,
+            speed: 0,
+            quality: 0,
+            reasoning: 0,
+            reliability: 0,
+        }
+    }
+
     pub const fn for_band(band: ComplexityBand) -> Self {
         match band {
             ComplexityBand::Simple => Self {
@@ -274,7 +286,104 @@ pub struct ReplayReceipt {
     pub native_effective: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveRoutingPath {
+    VidaStackCanary,
+    NativeFallback,
+}
+
+impl ActiveRoutingPath {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::VidaStackCanary => "vida_stack_canary",
+            Self::NativeFallback => "native_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackReason {
+    RepositoryNotAllowlisted,
+    RuntimeUncertain,
+}
+
+impl FallbackReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RepositoryNotAllowlisted => "repository_not_allowlisted",
+            Self::RuntimeUncertain => "runtime_uncertain",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveRoutingDecision {
+    pub decision: RoutingDecision,
+    pub path: ActiveRoutingPath,
+    pub fallback_reason: Option<FallbackReason>,
+    pub native_effective: bool,
+    pub advisory_adjustment_percent: i8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveReplayReceipt {
+    pub case_id: usize,
+    pub facts_digest: String,
+    pub decision_digest: String,
+    pub path: ActiveRoutingPath,
+    pub fallback_reason: Option<FallbackReason>,
+    pub native_effective: bool,
+}
+
+/// Normalize only common GitHub repository spellings before applying the
+/// exact VIDA repository allowlist. Unknown hosts and paths remain rejected.
+pub fn repository_is_allowlisted(repository: &str) -> bool {
+    let mut normalized = repository.trim().to_ascii_lowercase();
+    if normalized.len() > MAX_REPOSITORY_ID_CHARS {
+        return false;
+    }
+    for prefix in [
+        "https://github.com/",
+        "http://github.com/",
+        "github.com/",
+        "git@github.com:",
+    ] {
+        if let Some(value) = normalized.strip_prefix(prefix) {
+            normalized = value.to_string();
+            break;
+        }
+    }
+    while normalized.starts_with('/') {
+        normalized.remove(0);
+    }
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if normalized.ends_with(".git") {
+        normalized.truncate(normalized.len() - 4);
+    }
+    normalized == VIDA_STACK_REPOSITORY_ALLOWLIST
+}
+
+/// Native authority fallback: preserve native facts but apply no advisory
+/// score or recommendation adjustment when canary activation is unsafe.
+pub fn native_fallback_decision(facts: &SemanticRoutingFacts) -> RoutingDecision {
+    RoutingDecision {
+        domain: facts.domain,
+        complexity_band: facts.complexity_band,
+        advisory_weights: AdvisoryWeights::zero(),
+        recommendation: "native_authority",
+    }
+}
+
+/// Active native decision surface. It intentionally has no scoring formula;
+/// the native router remains authoritative without advisory adjustment.
 pub fn native_decision(facts: &SemanticRoutingFacts) -> RoutingDecision {
+    native_fallback_decision(facts)
+}
+
+/// Legacy native formula retained only as a shadow-replay comparator.
+fn native_shadow_reference_decision(facts: &SemanticRoutingFacts) -> RoutingDecision {
     let high_risk = facts.domain == RoutingDomain::Security
         || facts
             .hard_constraints
@@ -322,6 +431,90 @@ pub fn shadow_decision(facts: &SemanticRoutingFacts) -> RoutingDecision {
     }
 }
 
+/// Select the only active canary path. The Rhai-equivalent advisory decision
+/// is admitted solely for the canonical VIDA repository and certain runtime;
+/// every other case stays under native authority with zero adjustment.
+pub fn active_canary_decision(
+    facts: &SemanticRoutingFacts,
+    repository: &str,
+    runtime_certain: bool,
+) -> ActiveRoutingDecision {
+    let fallback_reason = if !runtime_certain {
+        Some(FallbackReason::RuntimeUncertain)
+    } else if !repository_is_allowlisted(repository) {
+        Some(FallbackReason::RepositoryNotAllowlisted)
+    } else {
+        None
+    };
+    match fallback_reason {
+        Some(reason) => ActiveRoutingDecision {
+            decision: native_fallback_decision(facts),
+            path: ActiveRoutingPath::NativeFallback,
+            fallback_reason: Some(reason),
+            native_effective: true,
+            advisory_adjustment_percent: 0,
+        },
+        None => ActiveRoutingDecision {
+            decision: shadow_decision(facts),
+            path: ActiveRoutingPath::VidaStackCanary,
+            fallback_reason: None,
+            native_effective: true,
+            advisory_adjustment_percent: 0,
+        },
+    }
+}
+
+pub fn active_decision_digest(
+    facts: &SemanticRoutingFacts,
+    repository: &str,
+    runtime_certain: bool,
+) -> String {
+    let active = active_canary_decision(facts, repository, runtime_certain);
+    let decision = active.decision;
+    stable_digest_fields(&format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        stable_digest(facts),
+        active.path.as_str(),
+        active
+            .fallback_reason
+            .map(FallbackReason::as_str)
+            .unwrap_or(""),
+        active.native_effective,
+        active.advisory_adjustment_percent,
+        decision.domain,
+        decision.complexity_band,
+        decision.advisory_weights.cost,
+        decision.advisory_weights.speed,
+        decision.advisory_weights.quality,
+        decision.advisory_weights.reasoning,
+        decision.advisory_weights.reliability,
+        decision.recommendation,
+    ))
+}
+
+pub fn replay_active_canary_cases(
+    cases: &[NativeRoutingObservation],
+    repository: &str,
+    runtime_certain: bool,
+) -> Vec<ActiveReplayReceipt> {
+    cases
+        .iter()
+        .enumerate()
+        .map(|(case_id, observation)| {
+            let facts = SemanticRoutingFacts::from_native(observation.clone());
+            let active = active_canary_decision(&facts, repository, runtime_certain);
+            ActiveReplayReceipt {
+                case_id,
+                facts_digest: stable_digest(&facts),
+                decision_digest: active_decision_digest(&facts, repository, runtime_certain),
+                path: active.path,
+                fallback_reason: active.fallback_reason,
+                native_effective: active.native_effective,
+            }
+        })
+        .collect()
+}
+
 pub fn classify_diff(native: RoutingDecision, shadow: RoutingDecision) -> DiffClass {
     let domain = native.domain != shadow.domain;
     let complexity = native.complexity_band != shadow.complexity_band;
@@ -347,7 +540,7 @@ pub fn replay_parity_cases(cases: &[NativeRoutingObservation]) -> Vec<ReplayRece
         .enumerate()
         .map(|(case_id, observation)| {
             let facts = SemanticRoutingFacts::from_native(observation.clone());
-            let native = native_decision(&facts);
+            let native = native_shadow_reference_decision(&facts);
             let shadow = shadow_decision(&facts);
             ReplayReceipt {
                 case_id,
@@ -360,7 +553,6 @@ pub fn replay_parity_cases(cases: &[NativeRoutingObservation]) -> Vec<ReplayRece
 }
 
 fn stable_digest(facts: &SemanticRoutingFacts) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
     let bytes = format!(
         "{}|{}|{}|{}|{}|{}|{}|{}",
         facts.schema_version,
@@ -377,6 +569,11 @@ fn stable_digest(facts: &SemanticRoutingFacts) -> String {
             .collect::<Vec<_>>()
             .join(",")
     );
+    stable_digest_fields(&bytes)
+}
+
+fn stable_digest_fields(bytes: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
@@ -453,10 +650,13 @@ mod tests {
         assert_eq!(shadow.domain, facts.domain);
         assert_eq!(shadow.complexity_band, facts.complexity_band);
         assert_eq!(
-            classify_diff(native_decision(&facts), shadow),
+            classify_diff(native_shadow_reference_decision(&facts), shadow),
             DiffClass::RecommendationDifference
         );
-        assert_eq!(SHADOW_POLICY_SOURCE.contains("mode: \"shadow\""), true);
+        assert_eq!(
+            SHADOW_POLICY_SOURCE.contains("mode: \"active_canary\""),
+            true
+        );
     }
 
     #[test]
@@ -530,5 +730,85 @@ mod tests {
         assert!(first
             .iter()
             .any(|receipt| receipt.diff_class == DiffClass::RecommendationDifference));
+    }
+
+    #[test]
+    fn vida_stack_allowlist_normalizes_only_canonical_github_spellings() {
+        assert!(repository_is_allowlisted(VIDA_STACK_REPOSITORY_ALLOWLIST));
+        assert!(repository_is_allowlisted(
+            "https://github.com/pomazanbohdan/vida-stack.git/"
+        ));
+        assert!(repository_is_allowlisted(
+            "git@github.com:pomazanbohdan/vida-stack.git"
+        ));
+        assert!(!repository_is_allowlisted("pomazanbohdan/other-repo"));
+        assert!(!repository_is_allowlisted(
+            "https://example.com/pomazanbohdan/vida-stack"
+        ));
+        assert!(!repository_is_allowlisted(&format!(
+            "{}-suffix",
+            "pomazanbohdan/vida-stack"
+        )));
+    }
+
+    #[test]
+    fn active_path_canaries_only_allowlisted_certain_runtime() {
+        let facts = SemanticRoutingFacts::from_native(observation(3));
+        let canary = active_canary_decision(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        assert_eq!(canary.path, ActiveRoutingPath::VidaStackCanary);
+        assert_eq!(canary.fallback_reason, None);
+        assert!(canary.native_effective);
+        assert_eq!(canary.advisory_adjustment_percent, 0);
+        assert_eq!(canary.decision, shadow_decision(&facts));
+
+        for (repository, runtime_certain, reason) in [
+            (
+                "other-owner/other-repo",
+                true,
+                FallbackReason::RepositoryNotAllowlisted,
+            ),
+            (
+                VIDA_STACK_REPOSITORY_ALLOWLIST,
+                false,
+                FallbackReason::RuntimeUncertain,
+            ),
+        ] {
+            let fallback = active_canary_decision(&facts, repository, runtime_certain);
+            assert_eq!(fallback.path, ActiveRoutingPath::NativeFallback);
+            assert_eq!(fallback.fallback_reason, Some(reason));
+            assert!(fallback.native_effective);
+            assert_eq!(fallback.advisory_adjustment_percent, 0);
+            assert_eq!(fallback.decision, native_fallback_decision(&facts));
+            assert_eq!(fallback.decision.advisory_weights, AdvisoryWeights::zero());
+            assert_eq!(fallback.decision.recommendation, "native_authority");
+        }
+    }
+
+    #[test]
+    fn sixty_four_allowlisted_canaries_have_stable_receipts() {
+        let cases = (0..64).map(observation).collect::<Vec<_>>();
+        let first = replay_active_canary_cases(&cases, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        let second = replay_active_canary_cases(&cases, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert!(first
+            .iter()
+            .all(|receipt| receipt.path == ActiveRoutingPath::VidaStackCanary));
+        assert!(first.iter().all(|receipt| receipt.native_effective));
+        assert!(first
+            .iter()
+            .all(|receipt| receipt.fallback_reason.is_none()));
+    }
+
+    #[test]
+    fn ten_thousand_repeated_active_evaluation_digests_are_deterministic() {
+        let facts = SemanticRoutingFacts::from_native(observation(51));
+        let expected = active_decision_digest(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        for _ in 0..10_000 {
+            assert_eq!(
+                active_decision_digest(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true),
+                expected
+            );
+        }
     }
 }

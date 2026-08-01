@@ -1,6 +1,7 @@
-// Bounded semantic-routing shadow policy.
+// Bounded semantic-routing active-canary policy.
 // Rust owns token facts, redaction, catalogs, hard constraints, and authority.
-// This policy only calculates advisory domain/complexity weights in shadow.
+// This policy only calculates advisory domain/complexity weights for the
+// vida-stack allowlisted canary. Rust bypasses this policy on fallback paths.
 let high_risk = ctx.domain == "security"
     || ctx.complexity_band == "medium_high"
     || ctx.complexity_band == "complex";
@@ -17,7 +18,7 @@ let weights = if ctx.complexity_band == "simple" {
     schema_version: 1,
     policy_id: "rhai.runtime.semantic-routing",
     version: 1,
-    mode: "shadow",
+    mode: "active_canary",
     domain: ctx.domain,
     complexity_band: ctx.complexity_band,
     advisory_weights: weights,
