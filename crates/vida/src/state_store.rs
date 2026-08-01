@@ -16,6 +16,8 @@ mod state_store_instruction_bundle;
 mod state_store_launcher_activation;
 #[path = "state_store_open.rs"]
 mod state_store_open;
+#[path = "state_store_policy.rs"]
+pub(crate) mod policy;
 pub(crate) use state_store_open::state_root_lifecycle_guard_path;
 #[path = "state_store_orchestrator_claim.rs"]
 mod state_store_orchestrator_claim;

@@ -75,20 +75,6 @@ fn write_fixtures(path: &Path, expected: i64) {
     .expect("fixture corpus should be written");
 }
 
-fn write_receipt(path: &Path, bundle_id: &str, digest: &str, test_id: &str) {
-    fs::write(
-        path,
-        serde_json::to_vec(&json!({
-            "bundle_id": bundle_id,
-            "test_id": test_id,
-            "content_digest": digest,
-            "passed": true,
-        }))
-        .expect("receipt JSON should serialize"),
-    )
-    .expect("receipt should be written");
-}
-
 #[test]
 fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
     let root = unique_root();
@@ -98,8 +84,6 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
     let bundle_v2 = root.join("bundle-v2.json");
     let fixtures_v1 = root.join("fixtures-v1.jsonl");
     let fixtures_v2 = root.join("fixtures-v2.jsonl");
-    let receipt_v1 = root.join("receipt-v1.json");
-    let receipt_v2 = root.join("receipt-v2.json");
     fs::create_dir_all(&state_dir).expect("isolated state root should be created");
     write_bundle(&bundle_v1, 1, "ctx.value");
     write_bundle(&bundle_v2, 2, "ctx.value + 1");
@@ -111,8 +95,6 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
     let fixtures_v1_arg = fixtures_v1.to_string_lossy().into_owned();
     let fixtures_v2_arg = fixtures_v2.to_string_lossy().into_owned();
     let store_arg = store.to_string_lossy().into_owned();
-    let receipt_v1_arg = receipt_v1.to_string_lossy().into_owned();
-    let receipt_v2_arg = receipt_v2.to_string_lossy().into_owned();
 
     let check_v1 = run_json(
         &["policy", "check", "--bundle", &bundle_v1_arg, "--json"],
@@ -147,13 +129,6 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
     );
     assert_eq!(test_v1["status"], "pass");
     assert_eq!(test_v1["fixture_execution"]["report"]["passed"], 1);
-    write_receipt(
-        &receipt_v1,
-        "rhai.runtime.quality-gate@1",
-        &digest_v1,
-        "quality-gate-v1",
-    );
-
     let import_v1 = run_json(
         &[
             "policy",
@@ -185,8 +160,10 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
             &store_arg,
             "--bundle-id",
             "rhai.runtime.quality-gate@1",
-            "--test-receipt",
-            &receipt_v1_arg,
+            "--bundle",
+            &bundle_v1_arg,
+            "--fixtures",
+            &fixtures_v1_arg,
             "--json",
         ],
         &state_dir,
@@ -225,12 +202,6 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
         &state_dir,
     );
     assert_eq!(test_v2["status"], "pass");
-    write_receipt(
-        &receipt_v2,
-        "rhai.runtime.quality-gate@2",
-        &digest_v2,
-        "quality-gate-v2",
-    );
     let import_v2 = run_json(
         &[
             "policy",
@@ -252,8 +223,10 @@ fn policy_lifecycle_cli_round_trip_survives_restart_and_rolls_back_lkg() {
             &store_arg,
             "--bundle-id",
             "rhai.runtime.quality-gate@2",
-            "--test-receipt",
-            &receipt_v2_arg,
+            "--bundle",
+            &bundle_v2_arg,
+            "--fixtures",
+            &fixtures_v2_arg,
             "--json",
         ],
         &state_dir,
