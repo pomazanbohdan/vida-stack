@@ -1031,14 +1031,18 @@ impl PolicyModeFacade {
                         }
                         Err(_error) => {
                             error_code = Some("typed_decision_invalid".to_string());
-                            fallback = Some(self.fallback_for(&pin));
-                            request.rust_decision.clone()
+                            let target = self.fallback_for(&pin);
+                            let decision = fallback_decision(&request.rust_decision, &target);
+                            fallback = Some(target);
+                            decision
                         }
                     },
                     Err(error) => {
                         error_code = Some(error.code().as_str().to_string());
-                        fallback = Some(self.fallback_for(&pin));
-                        request.rust_decision.clone()
+                        let target = self.fallback_for(&pin);
+                        let decision = fallback_decision(&request.rust_decision, &target);
+                        fallback = Some(target);
+                        decision
                     }
                 }
             }
@@ -1213,6 +1217,20 @@ fn digest_json(value: &Value) -> Result<String, PolicyRuntimeError> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| PolicyRuntimeError::Evaluation(error.to_string()))?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn fallback_decision(
+    rust_decision: &TypedPolicyDecision,
+    target: &FallbackTarget,
+) -> TypedPolicyDecision {
+    let mut decision = rust_decision.clone();
+    if target == &FallbackTarget::Block {
+        decision.allowed = false;
+        decision.score = 0;
+        decision.recommendation = "block".to_string();
+        decision.additive_profiles.clear();
+    }
+    decision
 }
 
 #[cfg(test)]
@@ -1612,7 +1630,42 @@ mod tests {
             })
             .unwrap();
         assert_eq!(outcome.fallback, Some(FallbackTarget::Block));
+        assert!(!outcome.decision.allowed);
+        assert_eq!(outcome.decision.score, 0);
+        assert_eq!(outcome.decision.recommendation, "block");
         assert!(!outcome.receipt.authorizes_effects);
+        assert_eq!(outcome.receipt.fallback_code.as_deref(), Some("block"));
+    }
+
+    #[test]
+    fn invalid_typed_decision_without_lkg_or_baseline_returns_block_decision() {
+        let mut facade = PolicyModeFacade::default();
+        facade.set_rust_baseline_available(false);
+        let policy = bundle(
+            "rhai.runtime.authority",
+            1,
+            r#"#{schema_version: 1, allowed: true, score: 100}"#,
+        );
+        let digest = policy.digest().unwrap();
+        let pin = facade.register(policy, digest, PolicyMode::Shadow).unwrap();
+        facade.set_mode(&pin, PolicyMode::Active).unwrap();
+        let outcome = facade
+            .evaluate(PolicyEvaluationRequest {
+                run_id: "run-invalid-decision".to_string(),
+                input: serde_json::json!({"claim":"x"}),
+                rust_decision: decision(),
+                pinned: Some(pin),
+            })
+            .unwrap();
+        assert_eq!(outcome.fallback, Some(FallbackTarget::Block));
+        assert!(!outcome.decision.allowed);
+        assert_eq!(outcome.decision.score, 0);
+        assert_eq!(outcome.decision.recommendation, "block");
+        assert!(!outcome.receipt.authorizes_effects);
+        assert_eq!(
+            outcome.receipt.error_code.as_deref(),
+            Some("typed_decision_invalid")
+        );
         assert_eq!(outcome.receipt.fallback_code.as_deref(), Some("block"));
     }
 }
