@@ -3671,6 +3671,102 @@ agent_system:
 #       internal_escalation_trigger: diagnostic_only_unresolved_conflict
 #       write_scope: diagnostic_only_none
 
+# BEGIN VIDA_POLICY_RUNTIME_DEFAULTS
+policy_runtime:
+  schema_version: 1
+  default_mode: shadow
+  authority:
+    rust: enforcement
+    rhai: bounded_decision_language
+    yaml: reviewed_declaration
+    db: selected_version_lifecycle_pins_and_receipts
+  capability_registry:
+    framework_authority: rust
+    project_override: stricter_only
+    minimum_write_scope_by_task_class:
+      analysis: read-only
+      architecture: read-only
+      specification: read-only
+      coach: read-only
+      verification: read-only
+      implementation: workspace-write
+      implementation_medium: workspace-write
+      delivery_task: workspace-write
+      test_authoring: workspace-write
+      regression_test: workspace-write
+      execution_block: guard_required
+  identity:
+    fields:
+      - policy_id
+      - version
+      - content_digest
+    digest_mismatch: reject
+  policy_ids:
+    - id: rhai.runtime.authority
+      responsibility: authority_and_claim_decision
+      shadow_behavior: compare_only
+      active_behavior: rust_validates_and_enforces
+    - id: rhai.runtime.lifecycle
+      responsibility: candidate_and_state_transition_rules
+      shadow_behavior: observe_transitions
+      active_behavior: rust_commits_allowed_transitions
+    - id: rhai.runtime.failover
+      responsibility: unavailable_or_error_fallback_choice
+      shadow_behavior: simulate_fallback
+      active_behavior: rust_selects_last_known_good_or_baseline
+    - id: rhai.runtime.promotion
+      responsibility: promotion_eligibility_verdict
+      shadow_behavior: calculate_gate_result
+      active_behavior: rust_admits_only_passed_gates
+    - id: rhai.runtime.rollback
+      responsibility: rollback_and_quarantine_recommendation
+      shadow_behavior: simulate_recovery
+      active_behavior: rust_atomically_changes_pointer
+    - id: rhai.runtime.pinned-resume
+      responsibility: resume_compatibility_decision
+      shadow_behavior: compare_against_pin
+      active_behavior: rust_requires_persisted_pin
+    - id: rhai.runtime.quality-gate
+      responsibility: additive_quality_profile_recommendation_and_final_verdict
+      shadow_behavior: compare_only_or_additive_recommendation
+      active_behavior: rust_owns_required_profiles_and_final_verdict
+  quality_gate:
+    default_mode: off
+    default_category_profile: legacy
+    category_profiles:
+      legacy: [Z, O, M, B, I, E, S]
+      canonical: [Z, O, M, B, I, E, S, R, P, C]
+    optional_categories: [R, P, C]
+  lifecycle:
+    progression:
+      - candidate
+      - shadow
+      - promotable
+      - active
+    terminal_states:
+      - retired
+      - rolled_back
+      - quarantined
+    shadow_and_active_are_mutually_explicit: true
+  rollout:
+    active_pointer_authority: db
+    last_known_good_authority: db
+    activation_requires_durable_receipt: true
+    existing_runs_require_persisted_pin: true
+  fail_closed:
+    unknown_policy_id: true
+    duplicate_version: true
+    invalid_manifest: true
+    missing_dependency: true
+    unsupported_abi: true
+    excessive_resource_declaration: true
+    nondeterministic_input: true
+    evaluator_failure: true
+    missing_receipt: true
+    parity_drift: true
+    missing_valid_fallback: true
+# END VIDA_POLICY_RUNTIME_DEFAULTS
+
 # -----
 # artifact_path: framework/templates/vida.config.yaml.template
 # artifact_type: framework_template

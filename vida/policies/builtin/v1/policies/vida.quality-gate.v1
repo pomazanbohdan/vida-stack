@@ -1,0 +1,18 @@
+// Bounded quality-gate policy family baseline.
+// Rust owns required profiles, Z/O/M/B/I/E/S and additive R/P/C applicability,
+// evidence validation, persistence, and the final verdict. This policy is off
+// by default and can only return a typed, additive recommendation.
+let recommendation = if ctx.baseline_verdict == "blocked" {
+    "block"
+} else {
+    "no_change"
+};
+#{
+    schema_version: 1,
+    policy_id: "rhai.runtime.quality-gate",
+    version: 1,
+    mode: "off",
+    recommendation: recommendation,
+    additive_profiles: [],
+    native_effective: true
+}

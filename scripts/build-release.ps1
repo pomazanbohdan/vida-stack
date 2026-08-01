@@ -7,6 +7,7 @@ param(
     [switch]$Install,
     [switch]$SkipBuild,
     [switch]$Windows,
+    [switch]$CheckPolicyRuntimeParity,
     [switch]$Json,
     [Alias("h")]
     [switch]$Help
@@ -29,6 +30,7 @@ Options:
   -Version <tag>        Release tag such as v0.9.7. Defaults to crates/vida/Cargo.toml.
   -SkipBuild            Package existing release binaries without running Cargo.
   -Windows              Build a Windows package shape and require .exe runtime binaries.
+  -CheckPolicyRuntimeParity  Check canonical policy-runtime YAML parity without building.
   -ReleaseBinDir <dir>  Directory containing existing release binaries for -SkipBuild.
   -ReleaseSuffix <id>   Artifact suffix. -Windows defaults this to windows-x86_64.
   -DistDir <dir>        Output directory. Defaults to ./dist.
@@ -430,9 +432,87 @@ function Test-ZipContainsBinaries {
     }
 }
 
+function Assert-PolicyRuntimeParity {
+    $defaultPath = Join-Path $RootDir "vida/config/policy-runtime/default.yaml"
+    $configPaths = @(
+        "vida.config.yaml",
+        "docs/framework/templates/vida.config.yaml.template",
+        "install/assets/vida.config.yaml.template"
+    ) | ForEach-Object { Join-Path $RootDir $_ }
+    $begin = "# BEGIN VIDA_POLICY_RUNTIME_DEFAULTS"
+    $end = "# END VIDA_POLICY_RUNTIME_DEFAULTS"
+    if (-not (Test-Path -LiteralPath $defaultPath -PathType Leaf)) {
+        Fail "Missing canonical policy-runtime fragment: $defaultPath"
+    }
+    $normalize = {
+        param([string]$Text)
+        return (($Text -replace "`r`n", "`n" -replace "`r", "`n").Trim())
+    }
+    $expected = & $normalize (Get-Content -LiteralPath $defaultPath -Raw)
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        Fail "Canonical policy-runtime fragment is empty: $defaultPath"
+    }
+    $qualityGateIdMatches = [regex]::Matches(
+        $expected,
+        '(?m)^\s+- id: rhai\.runtime\.quality-gate\s*$'
+    )
+    if ($qualityGateIdMatches.Count -ne 1) {
+        Fail "Canonical policy-runtime fragment must declare exactly one quality-gate policy ID"
+    }
+    if ($expected -notmatch '(?ms)^\s+quality_gate:\s*\n\s+default_mode:\s+off\s*$') {
+        Fail "Quality-gate policy mode must default to off"
+    }
+    foreach ($profile in @(
+        'legacy:\s*\[Z, O, M, B, I, E, S\]',
+        'canonical:\s*\[Z, O, M, B, I, E, S, R, P, C\]',
+        'optional_categories:\s*\[R, P, C\]'
+    )) {
+        if ($expected -notmatch "(?m)^\s+$profile\s*$") {
+            Fail "Quality-gate category semantics missing from canonical policy-runtime fragment: $profile"
+        }
+    }
+    $checked = New-Object System.Collections.Generic.List[string]
+    foreach ($path in $configPaths) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Fail "Missing policy-runtime parity projection: $path"
+        }
+        $text = & $normalize (Get-Content -LiteralPath $path -Raw)
+        $pattern = "(?ms)^# BEGIN VIDA_POLICY_RUNTIME_DEFAULTS`n(?<block>.*?)^# END VIDA_POLICY_RUNTIME_DEFAULTS$"
+        $match = [regex]::Match($text, $pattern)
+        if (-not $match.Success) {
+            Fail "Missing policy-runtime parity markers: $path"
+        }
+        $actual = & $normalize $match.Groups["block"].Value
+        if ($actual -cne $expected) {
+            Fail "Policy-runtime projection differs from canonical fragment: $path"
+        }
+        $checked.Add($path)
+    }
+    return [ordered]@{
+        status = "pass"
+        canonical_fragment = $defaultPath
+        checked_paths = @($checked.ToArray())
+    }
+}
+
 if ($Help) {
     Show-Help
     exit 0
+}
+
+if ($CheckPolicyRuntimeParity) {
+    try {
+        $result = Assert-PolicyRuntimeParity
+        if ($Json) { $result | ConvertTo-Json -Depth 4 } else { Write-Host "policy-runtime config parity: pass" }
+        exit 0
+    } catch {
+        if ($Json) {
+            [ordered]@{ status = "blocked"; error = $_.Exception.Message } | ConvertTo-Json -Depth 4
+        } else {
+            Write-Error $_.Exception.Message
+        }
+        exit 1
+    }
 }
 
 if ($Install) {
