@@ -4,7 +4,24 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use vida_policy_rhai::PolicyBundle;
 
+#[path = "policy_runtime.rs"]
+pub mod runtime;
+
 pub const POLICY_LIFECYCLE_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyMode {
+    Off,
+    Shadow,
+    Active,
+}
+
+impl Default for PolicyMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +81,41 @@ pub struct PolicyShadowDiff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyModeRecord {
+    pub bundle_id: String,
+    pub mode: PolicyMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRunPin {
+    pub run_id: String,
+    pub bundle_id: String,
+    pub policy_id: String,
+    pub version: u32,
+    pub content_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyShadowReceipt {
+    pub receipt_id: String,
+    pub run_id: String,
+    pub bundle_id: String,
+    pub policy_id: String,
+    pub version: u32,
+    pub content_digest: String,
+    pub input_digest: String,
+    pub output_digest: Option<String>,
+    pub duration_ms: u64,
+    pub agreed: Option<bool>,
+    pub diff_code: Option<String>,
+    pub error_code: Option<String>,
+    pub fallback_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyLifecycleStoreSnapshot {
     pub schema_version: u16,
     pub bundles: Vec<PolicyBundleRecord>,
@@ -72,6 +124,12 @@ pub struct PolicyLifecycleStoreSnapshot {
     pub shadow_diffs: Vec<PolicyShadowDiff>,
     pub active_pointer: Option<String>,
     pub last_known_good: Option<String>,
+    #[serde(default)]
+    pub modes: Vec<PolicyModeRecord>,
+    #[serde(default)]
+    pub run_pins: Vec<PolicyRunPin>,
+    #[serde(default)]
+    pub shadow_receipts: Vec<PolicyShadowReceipt>,
 }
 
 #[derive(Debug, Default)]
@@ -82,19 +140,53 @@ pub struct PolicyLifecycleStore {
     shadow_diffs: BTreeMap<String, PolicyShadowDiff>,
     active_pointer: Option<String>,
     last_known_good: Option<String>,
+    modes: BTreeMap<String, PolicyMode>,
+    run_pins: BTreeMap<String, PolicyRunPin>,
+    shadow_receipts: BTreeMap<String, PolicyShadowReceipt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyLifecycleStoreError {
     InvalidSnapshotSchema(u16),
-    DuplicateBundleImport { bundle_id: String },
-    BundleNotFound { bundle_id: String },
-    MissingTestReceipt { bundle_id: String },
-    TestReceiptFailed { bundle_id: String },
-    TestReceiptDigestMismatch { bundle_id: String },
-    ActivePointerMissing { bundle_id: String },
-    RollbackRequiresActive { bundle_id: String },
+    DuplicateBundleImport {
+        bundle_id: String,
+    },
+    BundleNotFound {
+        bundle_id: String,
+    },
+    MissingTestReceipt {
+        bundle_id: String,
+    },
+    TestReceiptFailed {
+        bundle_id: String,
+    },
+    TestReceiptDigestMismatch {
+        bundle_id: String,
+    },
+    ActivePointerMissing {
+        bundle_id: String,
+    },
+    RollbackRequiresActive {
+        bundle_id: String,
+    },
     MissingLastKnownGood,
+    InvalidModeTransition {
+        bundle_id: String,
+        from: PolicyMode,
+        to: PolicyMode,
+    },
+    RunPinMissing {
+        run_id: String,
+    },
+    RunPinConflict {
+        run_id: String,
+    },
+    RunPinDigestMismatch {
+        run_id: String,
+    },
+    ShadowReceiptInvalid {
+        receipt_id: String,
+    },
 }
 
 impl PolicyLifecycleStoreError {
@@ -109,6 +201,11 @@ impl PolicyLifecycleStoreError {
             Self::ActivePointerMissing { .. } => "policy_active_pointer_missing",
             Self::RollbackRequiresActive { .. } => "policy_rollback_requires_active",
             Self::MissingLastKnownGood => "policy_last_known_good_missing",
+            Self::InvalidModeTransition { .. } => "policy_mode_transition_invalid",
+            Self::RunPinMissing { .. } => "policy_run_pin_missing",
+            Self::RunPinConflict { .. } => "policy_run_pin_conflict",
+            Self::RunPinDigestMismatch { .. } => "policy_run_pin_digest_mismatch",
+            Self::ShadowReceiptInvalid { .. } => "policy_shadow_receipt_invalid",
         }
     }
 }
@@ -157,6 +254,28 @@ impl fmt::Display for PolicyLifecycleStoreError {
             }
             Self::MissingLastKnownGood => {
                 write!(formatter, "last-known-good policy pointer is missing")
+            }
+            Self::InvalidModeTransition {
+                bundle_id,
+                from,
+                to,
+            } => {
+                write!(
+                    formatter,
+                    "invalid policy mode transition for {bundle_id}: {from:?} -> {to:?}"
+                )
+            }
+            Self::RunPinMissing { run_id } => {
+                write!(formatter, "policy run pin missing for {run_id}")
+            }
+            Self::RunPinConflict { run_id } => {
+                write!(formatter, "policy run pin is immutable for {run_id}")
+            }
+            Self::RunPinDigestMismatch { run_id } => {
+                write!(formatter, "policy run pin digest mismatch for {run_id}")
+            }
+            Self::ShadowReceiptInvalid { receipt_id } => {
+                write!(formatter, "invalid redacted shadow receipt {receipt_id}")
             }
         }
     }
@@ -219,6 +338,106 @@ impl PolicyLifecycleStore {
         Ok(())
     }
 
+    pub fn mode(&self, bundle_id: &str) -> Result<PolicyMode, PolicyLifecycleStoreError> {
+        if !self.bundles.contains_key(bundle_id) {
+            return Err(PolicyLifecycleStoreError::BundleNotFound {
+                bundle_id: bundle_id.to_string(),
+            });
+        }
+        Ok(self.modes.get(bundle_id).copied().unwrap_or_default())
+    }
+
+    pub fn set_mode(
+        &mut self,
+        bundle_id: &str,
+        mode: PolicyMode,
+    ) -> Result<(), PolicyLifecycleStoreError> {
+        let current = self.mode(bundle_id)?;
+        if current != mode
+            && !matches!(
+                (current, mode),
+                (PolicyMode::Off, PolicyMode::Shadow) | (PolicyMode::Shadow, PolicyMode::Active)
+            )
+        {
+            return Err(PolicyLifecycleStoreError::InvalidModeTransition {
+                bundle_id: bundle_id.to_string(),
+                from: current,
+                to: mode,
+            });
+        }
+        self.modes.insert(bundle_id.to_string(), mode);
+        Ok(())
+    }
+
+    pub fn record_run_pin(&mut self, pin: PolicyRunPin) -> Result<(), PolicyLifecycleStoreError> {
+        let bundle = self.bundles.get(&pin.bundle_id).ok_or_else(|| {
+            PolicyLifecycleStoreError::BundleNotFound {
+                bundle_id: pin.bundle_id.clone(),
+            }
+        })?;
+        if bundle.policy_id != pin.policy_id
+            || bundle.version != pin.version
+            || bundle.content_digest != pin.content_digest
+        {
+            return Err(PolicyLifecycleStoreError::RunPinDigestMismatch { run_id: pin.run_id });
+        }
+        if let Some(existing) = self.run_pins.get(&pin.run_id) {
+            if existing != &pin {
+                return Err(PolicyLifecycleStoreError::RunPinConflict { run_id: pin.run_id });
+            }
+            return Ok(());
+        }
+        self.run_pins.insert(pin.run_id.clone(), pin);
+        Ok(())
+    }
+
+    pub fn run_pin(&self, run_id: &str) -> Result<&PolicyRunPin, PolicyLifecycleStoreError> {
+        self.run_pins
+            .get(run_id)
+            .ok_or_else(|| PolicyLifecycleStoreError::RunPinMissing {
+                run_id: run_id.to_string(),
+            })
+    }
+
+    pub fn record_shadow_receipt(
+        &mut self,
+        receipt: PolicyShadowReceipt,
+    ) -> Result<(), PolicyLifecycleStoreError> {
+        if receipt.receipt_id.trim().is_empty()
+            || receipt.run_id.trim().is_empty()
+            || receipt.input_digest.trim().is_empty()
+            || receipt.content_digest.trim().is_empty()
+            || receipt.bundle_id.trim().is_empty()
+            || receipt.policy_id.trim().is_empty()
+        {
+            return Err(PolicyLifecycleStoreError::ShadowReceiptInvalid {
+                receipt_id: receipt.receipt_id,
+            });
+        }
+        let bundle = self.bundles.get(&receipt.bundle_id).ok_or_else(|| {
+            PolicyLifecycleStoreError::BundleNotFound {
+                bundle_id: receipt.bundle_id.clone(),
+            }
+        })?;
+        if bundle.policy_id != receipt.policy_id
+            || bundle.version != receipt.version
+            || bundle.content_digest != receipt.content_digest
+        {
+            return Err(PolicyLifecycleStoreError::ShadowReceiptInvalid {
+                receipt_id: receipt.receipt_id,
+            });
+        }
+        let receipt_id = receipt.receipt_id.clone();
+        if self
+            .shadow_receipts
+            .insert(receipt_id.clone(), receipt)
+            .is_some()
+        {
+            return Err(PolicyLifecycleStoreError::ShadowReceiptInvalid { receipt_id });
+        }
+        Ok(())
+    }
+
     pub fn activate(&mut self, bundle_id: &str) -> Result<(), PolicyLifecycleStoreError> {
         let bundle = self
             .bundles
@@ -266,6 +485,7 @@ impl PolicyLifecycleStore {
             .expect("validated bundle")
             .lifecycle = PolicyLifecycle::Active;
         self.active_pointer = Some(bundle_id.to_string());
+        self.modes.insert(bundle_id.to_string(), PolicyMode::Active);
         Ok(())
     }
 
@@ -294,6 +514,8 @@ impl PolicyLifecycleStore {
             .expect("validated last-known-good pointer")
             .lifecycle = PolicyLifecycle::Active;
         self.active_pointer = Some(last_known_good);
+        self.modes
+            .insert(failed_bundle_id.to_string(), PolicyMode::Off);
         Ok(())
     }
 
@@ -318,6 +540,16 @@ impl PolicyLifecycleStore {
             shadow_diffs: self.shadow_diffs.values().cloned().collect(),
             active_pointer: self.active_pointer.clone(),
             last_known_good: self.last_known_good.clone(),
+            modes: self
+                .modes
+                .iter()
+                .map(|(bundle_id, mode)| PolicyModeRecord {
+                    bundle_id: bundle_id.clone(),
+                    mode: *mode,
+                })
+                .collect(),
+            run_pins: self.run_pins.values().cloned().collect(),
+            shadow_receipts: self.shadow_receipts.values().cloned().collect(),
         }
     }
 
@@ -352,6 +584,21 @@ impl PolicyLifecycleStore {
                 .collect(),
             active_pointer: snapshot.active_pointer,
             last_known_good: snapshot.last_known_good,
+            modes: snapshot
+                .modes
+                .into_iter()
+                .map(|record| (record.bundle_id, record.mode))
+                .collect(),
+            run_pins: snapshot
+                .run_pins
+                .into_iter()
+                .map(|pin| (pin.run_id.clone(), pin))
+                .collect(),
+            shadow_receipts: snapshot
+                .shadow_receipts
+                .into_iter()
+                .map(|receipt| (receipt.receipt_id.clone(), receipt))
+                .collect(),
         })
     }
 }
@@ -420,5 +667,58 @@ mod tests {
             store.activate("one"),
             Err(PolicyLifecycleStoreError::TestReceiptFailed { .. })
         ));
+    }
+
+    #[test]
+    fn mode_rollout_pins_and_redacted_shadow_receipts_survive_restart() {
+        let mut store = PolicyLifecycleStore::default();
+        store.import_bundle(bundle("one")).unwrap();
+        assert_eq!(store.mode("one"), Ok(PolicyMode::Off));
+        store.set_mode("one", PolicyMode::Shadow).unwrap();
+        assert_eq!(
+            store.set_mode("one", PolicyMode::Off),
+            Err(PolicyLifecycleStoreError::InvalidModeTransition {
+                bundle_id: "one".to_string(),
+                from: PolicyMode::Shadow,
+                to: PolicyMode::Off,
+            })
+        );
+        let pin = PolicyRunPin {
+            run_id: "run-one".to_string(),
+            bundle_id: "one".to_string(),
+            policy_id: "policy".to_string(),
+            version: 1,
+            content_digest: "digest-one".to_string(),
+        };
+        store.record_run_pin(pin.clone()).unwrap();
+        assert_eq!(store.record_run_pin(pin.clone()), Ok(()));
+        assert!(matches!(
+            store.record_run_pin(PolicyRunPin {
+                content_digest: "other".to_string(),
+                ..pin
+            }),
+            Err(PolicyLifecycleStoreError::RunPinDigestMismatch { .. })
+        ));
+        store
+            .record_shadow_receipt(PolicyShadowReceipt {
+                receipt_id: "receipt-one".to_string(),
+                run_id: "run-one".to_string(),
+                bundle_id: "one".to_string(),
+                policy_id: "policy".to_string(),
+                version: 1,
+                content_digest: "digest-one".to_string(),
+                input_digest: "input-digest".to_string(),
+                output_digest: Some("output-digest".to_string()),
+                duration_ms: 4,
+                agreed: Some(true),
+                diff_code: None,
+                error_code: None,
+                fallback_code: None,
+            })
+            .unwrap();
+        let restarted = PolicyLifecycleStore::from_snapshot(store.snapshot()).unwrap();
+        assert_eq!(restarted.mode("one"), Ok(PolicyMode::Shadow));
+        assert_eq!(restarted.run_pin("run-one").unwrap().bundle_id, "one");
+        assert_eq!(restarted.snapshot().shadow_receipts.len(), 1);
     }
 }
