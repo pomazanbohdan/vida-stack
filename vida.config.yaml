@@ -3028,6 +3028,28 @@ agent_system:
       internal_escalation_trigger: unresolved_verification_conflict
       independent_verification_required: no
 
+    verification_ensemble:
+      executor_backend: internal_subagents
+      subagents: internal_subagents
+      fanout_executor_backends:
+        - internal_subagents
+      profiles:
+        internal_subagents: codex_gpt56_luna_max_readonly
+      fanout_subagents: internal_subagents
+      fanout_min_results: 3
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: verification_summary
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      max_fallback_hops: 2
+      dispatch_required: internal_agent_lane
+      external_first_required: no
+      fallback_executor_backend: internal_subagents
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_verification_conflict
+      independent_verification_required: no
+
 # BEGIN VIDA_POLICY_RUNTIME_DEFAULTS
 policy_runtime:
   schema_version: 1
@@ -3123,24 +3145,3 @@ policy_runtime:
     parity_drift: true
     missing_valid_fallback: true
 # END VIDA_POLICY_RUNTIME_DEFAULTS
-    verification_ensemble:
-      executor_backend: internal_subagents
-      subagents: internal_subagents
-      fanout_executor_backends:
-        - internal_subagents
-      profiles:
-        internal_subagents: codex_gpt56_luna_max_readonly
-      fanout_subagents: internal_subagents
-      fanout_min_results: 3
-      merge_policy: consensus_with_conflict_flag
-      write_scope: none
-      verification_gate: verification_summary
-      max_runtime_seconds: 180
-      min_output_bytes: 260
-      max_fallback_hops: 2
-      dispatch_required: internal_agent_lane
-      external_first_required: no
-      fallback_executor_backend: internal_subagents
-      bridge_fallback_subagent: internal_subagents
-      internal_escalation_trigger: unresolved_verification_conflict
-      independent_verification_required: no
