@@ -418,6 +418,20 @@ fn validate_quality_gate_id(
     Ok(())
 }
 
+fn validate_quality_gate_typed_decision(
+    decision: &TypedPolicyDecision,
+) -> Result<(), PolicyRuntimeError> {
+    for profile in &decision.additive_profiles {
+        validate_quality_gate_id(profile, &QUALITY_GATE_PROFILE_IDS, "profile")?;
+    }
+    if decision.recommendation == "additive_profile" && decision.additive_profiles.is_empty() {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_additive_profile_missing".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn canonical_quality_gate_union<const N: usize>(sources: [&[String]; N]) -> Vec<String> {
     QUALITY_GATE_PROFILE_IDS
         .iter()
@@ -1004,6 +1018,9 @@ impl PolicyModeFacade {
                     Ok(value) => match serde_json::from_value::<TypedPolicyDecision>(value) {
                         Ok(candidate) => {
                             candidate.validate()?;
+                            if pin.policy_id == QUALITY_GATE_POLICY_ID {
+                                validate_quality_gate_typed_decision(&candidate)?;
+                            }
                             output_digest = Some(candidate.canonical_digest()?);
                             if mode == PolicyMode::Shadow {
                                 shadow_decision = Some(candidate);
@@ -1044,7 +1061,9 @@ impl PolicyModeFacade {
             },
             error_code,
             fallback.as_ref(),
-            mode == PolicyMode::Active && fallback.is_none(),
+            mode == PolicyMode::Active
+                && fallback.is_none()
+                && pin.policy_id != QUALITY_GATE_POLICY_ID,
         );
         Ok(PolicyEvaluationOutcome {
             decision,
@@ -1405,6 +1424,50 @@ mod tests {
         assert!(!serde_json::to_string(&shadow)
             .unwrap()
             .contains("baseline_verdict"));
+    }
+
+    #[test]
+    fn active_quality_gate_canary_is_additive_allowlisted_and_non_authorizing() {
+        let mut facade = PolicyModeFacade::default();
+        let policy = bundle(
+            QUALITY_GATE_POLICY_ID,
+            1,
+            r#"#{schema_version: 1, allowed: true, score: 100, recommendation: "no_change", additive_profiles: ["contract"]}"#,
+        );
+        let digest = policy.digest().unwrap();
+        let pin = facade.register(policy, digest, PolicyMode::Off).unwrap();
+        facade.set_mode(&pin, PolicyMode::Shadow).unwrap();
+        facade.set_mode(&pin, PolicyMode::Active).unwrap();
+        let outcome = facade
+            .evaluate(PolicyEvaluationRequest {
+                run_id: "quality-canary-active".to_string(),
+                input: serde_json::json!({"baseline": "pass"}),
+                rust_decision: decision(),
+                pinned: Some(pin),
+            })
+            .unwrap();
+        assert!(!outcome.receipt.authorizes_effects);
+
+        for source in [
+            r#"#{schema_version: 1, allowed: true, score: 100, recommendation: "additive_profile", additive_profiles: ["unknown"]}"#,
+            r#"#{schema_version: 1, allowed: true, score: 100, recommendation: "additive_profile", additive_profiles: []}"#,
+        ] {
+            let mut facade = PolicyModeFacade::default();
+            let policy = bundle(QUALITY_GATE_POLICY_ID, 1, source);
+            let digest = policy.digest().unwrap();
+            let pin = facade.register(policy, digest, PolicyMode::Off).unwrap();
+            facade.set_mode(&pin, PolicyMode::Shadow).unwrap();
+            facade.set_mode(&pin, PolicyMode::Active).unwrap();
+            assert!(matches!(
+                facade.evaluate(PolicyEvaluationRequest {
+                    run_id: "quality-canary-invalid".to_string(),
+                    input: serde_json::json!({}),
+                    rust_decision: decision(),
+                    pinned: Some(pin),
+                }),
+                Err(PolicyRuntimeError::InvalidDecision(_))
+            ));
+        }
     }
 
     #[test]
