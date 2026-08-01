@@ -869,6 +869,7 @@ fn requirement_analysis_cli_contract() {
             "operator request",
             "--json",
         ])
+        .env_remove("VIDA_REQUIREMENT_ANALYSIS_CLASS")
         .output()
         .expect("requirement analyze json should run");
     assert!(
@@ -913,6 +914,39 @@ fn requirement_analysis_cli_contract() {
     assert!(artifact["open_questions"]["critical"].is_array());
     assert!(artifact["open_questions"]["important"].is_array());
     assert!(artifact["open_questions"]["optional"].is_array());
+    assert_eq!(
+        artifact["requirement_classification"]["primary_class"],
+        "feature"
+    );
+
+    let fallback_output = vida()
+        .args([
+            "requirement",
+            "analyze",
+            "--request-id",
+            "native-fallback-classification",
+            "--input",
+            "Fix the login bug",
+            "--json",
+        ])
+        .env("VIDA_REQUIREMENT_ANALYSIS_CLASS", "bug")
+        .env_remove("VIDA_REQUIREMENT_ANALYSIS_REPOSITORY")
+        .env_remove("VIDA_REQUIREMENT_ANALYSIS_RUNTIME_CERTAIN")
+        .output()
+        .expect("requirement analyze native fallback should run");
+    assert!(
+        fallback_output.status.success(),
+        "native fallback should succeed: {}",
+        String::from_utf8_lossy(&fallback_output.stderr)
+    );
+    let fallback_value = parse_json_output(
+        &["requirement", "analyze", "--request-id", "--json"],
+        &fallback_output,
+    );
+    assert_eq!(
+        fallback_value["artifact"]["requirement_classification"]["primary_class"],
+        "bug"
+    );
     assert_eq!(
         artifact["output_contract"]["default"]["mode"],
         "compact_toon_plain"

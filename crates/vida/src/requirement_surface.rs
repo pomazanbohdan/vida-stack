@@ -8,7 +8,7 @@ use crate::config_value_utils::{
     load_project_overlay_yaml, yaml_bool, yaml_lookup, yaml_string, yaml_string_list,
 };
 use crate::requirement_analysis::{
-    active_canary_decision, ActiveRequirementPath, NativeRequirementObservation, RequirementSource,
+    active_canary_decision, NativeRequirementObservation, RequirementSource,
     VIDA_STACK_REPOSITORY_ALLOWLIST,
 };
 use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
@@ -365,7 +365,10 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         std::env::var("VIDA_REQUIREMENT_ANALYSIS_REPOSITORY").unwrap_or_default();
     let runtime_certain = std::env::var("VIDA_REQUIREMENT_ANALYSIS_RUNTIME_CERTAIN")
         .is_ok_and(|value| value.trim().eq_ignore_ascii_case("true"));
-    let requested_class = std::env::var("VIDA_REQUIREMENT_ANALYSIS_CLASS").unwrap_or_default();
+    let requested_class = std::env::var("VIDA_REQUIREMENT_ANALYSIS_CLASS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| requirement_primary_class(&combined_input).to_string());
     let canary_observation = NativeRequirementObservation {
         request_id: identity.to_string(),
         requirement_class: requested_class,
@@ -405,7 +408,6 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
             "primary_class": active_decision
                 .as_ref()
                 .ok()
-                .filter(|decision| decision.path == ActiveRequirementPath::VidaStackCanary)
                 .map(|decision| decision.decision.requirement_class.as_str())
                 .unwrap_or("unknown"),
             "allowed_classes": ["feature", "bug", "runtime_defect", "documentation", "research", "release", "cleanup"],
@@ -675,6 +677,19 @@ fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
         .collect()
 }
 
+fn requirement_primary_class(source: &str) -> &'static str {
+    let normalized = source.to_lowercase();
+    if normalized.contains("bug") || normalized.contains("fix") {
+        "bug"
+    } else if normalized.contains("doc") {
+        "documentation"
+    } else if normalized.contains("research") {
+        "research"
+    } else {
+        "feature"
+    }
+}
+
 fn detected_conflicts(source: &str) -> Vec<Value> {
     let normalized = source.to_lowercase();
     if normalized.contains("without tests") || normalized.contains("no tests") {
@@ -801,7 +816,7 @@ fn party_chat_trigger_matches(
 
 #[cfg(test)]
 mod tests {
-    use super::compact_terminal_field;
+    use super::{compact_terminal_field, requirement_primary_class};
 
     #[test]
     fn compact_terminal_field_escapes_control_characters() {
@@ -811,6 +826,20 @@ mod tests {
         assert!(!rendered.contains('\n'));
         assert!(!rendered.contains('\x1b'));
         assert!(!rendered.contains('\x07'));
+    }
+
+    #[test]
+    fn requirement_primary_class_preserves_content_based_routing() {
+        assert_eq!(requirement_primary_class("Fix the login bug"), "bug");
+        assert_eq!(
+            requirement_primary_class("Update the operator docs"),
+            "documentation"
+        );
+        assert_eq!(
+            requirement_primary_class("Research storage options"),
+            "research"
+        );
+        assert_eq!(requirement_primary_class("Add a login flow"), "feature");
     }
 }
 
