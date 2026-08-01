@@ -816,7 +816,15 @@ fn party_chat_trigger_matches(
 
 #[cfg(test)]
 mod tests {
+    use crate::requirement_analysis::{POLICY_ID, POLICY_SOURCE};
+
     use super::{compact_terminal_field, requirement_primary_class};
+
+    #[test]
+    fn requirement_analysis_shadow_policy_is_reachable_from_binary_surface() {
+        assert_eq!(POLICY_ID, "rhai.runtime.requirement-analysis");
+        assert!(POLICY_SOURCE.contains("policy_id: \"rhai.runtime.requirement-analysis\""));
+    }
 
     #[test]
     fn compact_terminal_field_escapes_control_characters() {
