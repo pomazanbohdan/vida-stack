@@ -40,7 +40,7 @@ pub(crate) fn expected_policy_bundle_ref(
 ) -> Result<serde_json::Value, String> {
     execution_plan
         .get("policy_bundle_ref")
-        .filter(|value| value.is_object())
+        .filter(|value| value.is_object() || value.is_null())
         .cloned()
         .ok_or_else(|| "policy_bundle_pin_missing".to_string())
 }
@@ -208,6 +208,34 @@ mod tests {
 
         assert_eq!(fields.get("runtime_assignment"), Some(&assignment));
         assert_eq!(fields.get("carrier_runtime_assignment"), Some(&assignment));
+    }
+
+    #[test]
+    fn policy_bundle_ref_accepts_explicit_unpinned_plan_and_assignment() {
+        let execution_plan = serde_json::json!({"policy_bundle_ref": null});
+        let assignment = serde_json::json!({"policy_bundle_ref": null});
+
+        assert_eq!(
+            super::validate_policy_bundle_ref(
+                &execution_plan,
+                &serde_json::json!({}),
+                &assignment,
+            ),
+            Ok(serde_json::Value::Null)
+        );
+    }
+
+    #[test]
+    fn policy_bundle_ref_rejects_absent_or_malformed_plan_reference() {
+        for execution_plan in [
+            serde_json::json!({}),
+            serde_json::json!({"policy_bundle_ref": "invalid"}),
+        ] {
+            assert_eq!(
+                super::expected_policy_bundle_ref(&execution_plan),
+                Err("policy_bundle_pin_missing".to_string())
+            );
+        }
     }
 
     #[test]
