@@ -41,6 +41,17 @@ const DEFAULT_PATH_TOKENS: [&str; 7] = [
     "integration",
 ];
 const DEFAULT_ENFORCEMENT_POINTS: [&str; 3] = ["dispatch", "handoff", "closure"];
+const QUALITY_GATE_PROFILE_IDS: [&str; 8] = [
+    "contract",
+    "security",
+    "a11y",
+    "visual",
+    "performance",
+    "resilience",
+    "property",
+    "observability",
+];
+const QUALITY_GATE_CHECK_IDS: [&str; 8] = QUALITY_GATE_PROFILE_IDS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ZombieDPolicy {
@@ -417,6 +428,7 @@ fn validate_matrix(
     if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
         blockers.push("zombie_d_matrix_schema_invalid".to_string());
     }
+    blockers.extend(validate_quality_gate(object.get("quality_gate")));
     let Some(categories) = object.get("categories").and_then(Value::as_object) else {
         blockers.push("zombie_d_categories_missing".to_string());
         next_actions.push("Add categories Z/O/M/B/I/E/S to the matrix.".to_string());
@@ -520,6 +532,125 @@ fn validate_matrix(
             next_actions,
             artifact_refs,
         )
+    }
+}
+
+fn validate_quality_gate(value: Option<&Value>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut blockers = Vec::new();
+    let Some(object) = value.as_object() else {
+        blockers.push("zombie_d_quality_gate_schema_invalid".to_string());
+        return blockers;
+    };
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "schema_version" | "profiles" | "checks" | "doubts"
+        ) {
+            if key == "passed" && object.get(key).and_then(Value::as_bool) == Some(true) {
+                blockers.push("zombie_d_quality_gate_passed_marker".to_string());
+            } else if key == "verdict" && object.get(key).and_then(Value::as_str) == Some("pass") {
+                blockers.push("zombie_d_quality_gate_verdict_marker".to_string());
+            } else {
+                blockers.push(format!("zombie_d_quality_gate_unknown_field:{key}"));
+            }
+        }
+    }
+    if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        blockers.push("zombie_d_quality_gate_schema_invalid".to_string());
+    }
+    validate_quality_gate_rows(
+        object.get("profiles"),
+        &QUALITY_GATE_PROFILE_IDS,
+        "profile",
+        &mut blockers,
+    );
+    validate_quality_gate_rows(
+        object.get("checks"),
+        &QUALITY_GATE_CHECK_IDS,
+        "check",
+        &mut blockers,
+    );
+    match object.get("doubts") {
+        Some(doubts) if !doubts.is_array() => {
+            blockers.push("zombie_d_quality_gate_doubts_invalid".to_string());
+        }
+        Some(doubts) if !doubts.as_array().is_some_and(|doubts| doubts.is_empty()) => {
+            blockers.push("zombie_d_quality_gate_doubt_unresolved".to_string());
+        }
+        _ => {}
+    }
+    blockers
+}
+
+fn validate_quality_gate_rows(
+    value: Option<&Value>,
+    allowed_ids: &[&str],
+    kind: &str,
+    blockers: &mut Vec<String>,
+) {
+    let Some(value) = value else {
+        blockers.push(format!("zombie_d_quality_gate_{kind}s_missing"));
+        return;
+    };
+    let Some(rows) = value.as_object() else {
+        blockers.push(format!("zombie_d_quality_gate_{kind}s_invalid"));
+        return;
+    };
+    for (id, row) in rows {
+        if !allowed_ids.contains(&id.as_str()) {
+            blockers.push(format!("zombie_d_quality_gate_{kind}_unknown:{id}"));
+            continue;
+        }
+        let Some(row) = row.as_object() else {
+            blockers.push(format!("zombie_d_quality_gate_{kind}_schema_invalid:{id}"));
+            continue;
+        };
+        for key in row.keys() {
+            if !matches!(key.as_str(), "status" | "evidence_refs" | "reason") {
+                if key == "passed" && row.get(key).and_then(Value::as_bool) == Some(true) {
+                    blockers.push(format!("zombie_d_quality_gate_passed_marker:{kind}:{id}"));
+                } else if key == "verdict" && row.get(key).and_then(Value::as_str) == Some("pass") {
+                    blockers.push(format!("zombie_d_quality_gate_verdict_marker:{kind}:{id}"));
+                } else {
+                    blockers.push(format!(
+                        "zombie_d_quality_gate_unknown_field:{kind}:{id}:{key}"
+                    ));
+                }
+            }
+        }
+        let status = row.get("status").and_then(Value::as_str);
+        match status {
+            Some("pass") => {
+                let refs = row.get("evidence_refs").and_then(Value::as_array);
+                if refs.map_or(true, |refs| {
+                    refs.is_empty()
+                        || refs.iter().any(|reference| {
+                            reference
+                                .as_str()
+                                .map_or(true, |reference| reference.trim().is_empty())
+                        })
+                }) {
+                    blockers.push(format!(
+                        "zombie_d_quality_gate_evidence_missing:{kind}:{id}"
+                    ));
+                }
+            }
+            Some("na") => {
+                if row
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map_or(true, |reason| reason.trim().is_empty())
+                {
+                    blockers.push(format!(
+                        "zombie_d_quality_gate_na_reason_missing:{kind}:{id}"
+                    ));
+                }
+            }
+            _ => blockers.push(format!("zombie_d_quality_gate_status_invalid:{kind}:{id}")),
+        }
     }
 }
 
@@ -861,6 +992,41 @@ mod tests {
         )
     }
 
+    fn quality_gate_fixture() -> Value {
+        json!({
+            "schema_version": 1,
+            "profiles": {
+                "contract": {"status": "pass", "evidence_refs": ["contract-test"]},
+                "visual": {"status": "na", "reason": "No visual artifact is in scope"}
+            },
+            "checks": {
+                "contract": {"status": "pass", "evidence_refs": ["contract-check"]},
+                "visual": {"status": "na", "reason": "No visual artifact is in scope"}
+            },
+            "doubts": []
+        })
+    }
+
+    fn quality_gate_matrix_note(quality_gate: Value) -> String {
+        let matrix = json!({
+            "schema_version": 1,
+            "categories": {
+                "Z": {"status": "pass", "evidence_refs": ["z"]},
+                "O": {"status": "pass", "evidence_refs": ["o"]},
+                "M": {"status": "na", "reason": "single fixture contract"},
+                "B": {"status": "pass", "evidence_refs": ["b"]},
+                "I": {"status": "pass", "evidence_refs": ["i"]},
+                "E": {"status": "pass", "evidence_refs": ["e"]},
+                "S": {"status": "pass", "evidence_refs": ["s"]}
+            },
+            "quality_gate": quality_gate,
+            "doubts": []
+        });
+        format!(
+            "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {matrix}"
+        )
+    }
+
     #[test]
     fn default_enabled_applicable_task_blocks_without_matrix() {
         let task = task(None, &[], &["crates/vida/tests/runtime.rs"]);
@@ -879,6 +1045,72 @@ mod tests {
         let result =
             evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
         assert_eq!(result["status"], "pass");
+    }
+
+    #[test]
+    fn quality_gate_profile_and_check_rows_accept_pass_and_na() {
+        let notes = quality_gate_matrix_note(quality_gate_fixture());
+        let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(
+            result["matrix"]["quality_gate"]["profiles"]["contract"]["status"],
+            "pass"
+        );
+    }
+
+    #[test]
+    fn quality_gate_profile_rows_require_evidence_refs_and_na_reasons() {
+        let mut quality_gate = quality_gate_fixture();
+        quality_gate["profiles"]["contract"]["evidence_refs"] = json!([]);
+        quality_gate["checks"]["visual"]["reason"] = json!(" ");
+        let notes = quality_gate_matrix_note(quality_gate);
+        let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
+        let blockers = string_array(result.get("blocker_codes"));
+        assert_eq!(result["status"], "blocked");
+        assert!(blockers
+            .iter()
+            .any(|code| code == "zombie_d_quality_gate_evidence_missing:profile:contract"));
+        assert!(blockers
+            .iter()
+            .any(|code| code == "zombie_d_quality_gate_na_reason_missing:check:visual"));
+    }
+
+    #[test]
+    fn quality_gate_unknown_ids_fields_and_rhai_pass_markers_fail_closed() {
+        let mut quality_gate = quality_gate_fixture();
+        quality_gate["profiles"]["backend"] = json!({
+            "status": "pass",
+            "evidence_refs": ["rhai"]
+        });
+        quality_gate["checks"]["unknown-check"] = json!({
+            "status": "na",
+            "reason": "not applicable"
+        });
+        quality_gate["profiles"]["contract"]["verdict"] = json!("pass");
+        quality_gate["passed"] = json!(true);
+        quality_gate["unexpected"] = json!("reject");
+        let notes = quality_gate_matrix_note(quality_gate);
+        let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
+        let blockers = string_array(result.get("blocker_codes"));
+        assert_eq!(result["status"], "blocked");
+        for expected in [
+            "zombie_d_quality_gate_profile_unknown:backend",
+            "zombie_d_quality_gate_check_unknown:unknown-check",
+            "zombie_d_quality_gate_verdict_marker:profile:contract",
+            "zombie_d_quality_gate_passed_marker",
+            "zombie_d_quality_gate_unknown_field:unexpected",
+        ] {
+            assert!(
+                blockers.iter().any(|code| code == expected),
+                "missing {expected}: {blockers:?}"
+            );
+        }
     }
 
     #[test]

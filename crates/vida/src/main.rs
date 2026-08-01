@@ -455,6 +455,7 @@ fn cli_parse_error_surface(args: &[OsString]) -> String {
         [] => "vida".to_string(),
         ["agent", subcommand, ..] => format!("vida agent {subcommand}"),
         ["lane", subcommand, ..] => format!("vida lane {subcommand}"),
+        ["task", "proof", subcommand, ..] => format!("vida task proof {subcommand}"),
         ["task", subcommand, ..] => format!("vida task {subcommand}"),
         ["taskflow", "run-graph", subcommand, ..] => {
             format!("vida taskflow run-graph {subcommand}")
@@ -833,5 +834,51 @@ mod tests {
             .map(OsString::from)
             .collect::<Vec<_>>();
         assert!(parse_cli_or_emit_error(args).is_ok());
+    }
+
+    #[test]
+    fn task_proof_attach_error_surface_is_specific_and_json_stable() {
+        let args = [
+            "vida",
+            "task",
+            "proof",
+            "attach-evidence",
+            "task-1",
+            "--json",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let error = parse_cli_or_emit_error(args.clone())
+            .expect_err("missing proof attach arguments should fail parsing");
+        assert_eq!(error, ExitCode::from(2));
+        let clap_error = Cli::try_parse_from(args.clone()).expect_err("args should be invalid");
+        let payload = cli_parse_error_payload(&args, &clap_error);
+        assert_eq!(payload["surface"], "vida task proof attach-evidence");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["cli_parse_error"])
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .is_some_and(|action| action.contains("vida task proof attach-evidence --help")));
+    }
+
+    #[test]
+    fn task_proof_attach_help_exposes_stable_evidence_output_inputs() {
+        let error = Cli::try_parse_from(["vida", "task", "proof", "attach-evidence", "--help"])
+            .expect_err("help should be a clap display error");
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        for option in [
+            "--proof-target",
+            "--result",
+            "--artifact-ref",
+            "--evidence",
+            "--json",
+        ] {
+            assert!(help.contains(option), "help missing {option}: {help}");
+        }
     }
 }
