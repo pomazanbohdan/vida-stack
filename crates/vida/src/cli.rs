@@ -42,7 +42,7 @@ const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive 
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
 
-const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path> --fixtures <path>\n  vida policy import --bundle <path> --store <path>\n  vida policy activate --store <path> --bundle-id <id> --test-receipt <path>\n  vida policy status --store <path>\n  vida policy explain --store <path> [--bundle-id <id>]\n  vida policy rollback --store <path> --bundle-id <id>\n  vida policy export --store <path>\n\nLifecycle options:\n  --store <path>       Policy lifecycle snapshot; only this policy file is written\n  --output <path>      Atomically write the canonical JSON response\n  --test-receipt <path>  Passing JSON test receipt required for activation\n  --json               Emit the canonical JSON response\n\n`check` and `test` retain their bounded read-only compiler/fixture behavior. Lifecycle responses never expose raw policy source in `status` or `explain`.";
+const POLICY_AFTER_HELP: &str = "Policy operations:\n  vida policy check --bundle <path>\n  vida policy test --bundle <path> --fixtures <path>\n  vida policy import --bundle <path> --store <path>\n  vida policy activate --store <path> --bundle-id <id> --bundle <path> --fixtures <path>\n  vida policy status --store <path>\n  vida policy explain --store <path> [--bundle-id <id>]\n  vida policy rollback --store <path> --bundle-id <id>\n  vida policy export --store <path>\n\nLifecycle options:\n  --store <path>       Policy lifecycle snapshot; only this policy file is written\n  --output <path>      Atomically write the canonical JSON response\n  --bundle <path>      Policy bundle tested during activation\n  --fixtures <path>    Bounded JSONL fixture corpus run during activation\n  --json               Emit the canonical JSON response\n\n`check` and `test` retain their bounded read-only compiler/fixture behavior. `activate` runs the fixture corpus itself and does not accept external test receipts. Lifecycle responses never expose raw policy source in `status` or `explain`.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -1311,11 +1311,17 @@ pub(crate) struct PolicyActivateArgs {
     )]
     pub(crate) bundle_id: String,
     #[arg(
-        long = "test-receipt",
+        long = "bundle",
         value_name = "PATH",
-        help = "Passing JSON test receipt matching the bundle digest"
+        help = "Policy bundle to test before activation"
     )]
-    pub(crate) test_receipt: PathBuf,
+    pub(crate) bundle: PathBuf,
+    #[arg(
+        long = "fixtures",
+        value_name = "PATH",
+        help = "Bounded JSONL fixture corpus to run before activation"
+    )]
+    pub(crate) fixtures: PathBuf,
     #[arg(
         long = "output",
         value_name = "PATH",

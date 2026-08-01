@@ -56,7 +56,8 @@ pub(crate) fn run_policy(args: crate::PolicyArgs) -> ExitCode {
         crate::PolicyCommand::Activate(args) => run_activate(
             &args.store,
             &args.bundle_id,
-            &args.test_receipt,
+            &args.bundle,
+            &args.fixtures,
             args.output.as_deref(),
             args.json,
         ),
@@ -121,13 +122,14 @@ fn run_import(
 fn run_activate(
     store_path: &Path,
     bundle_id: &str,
-    receipt_path: &Path,
+    bundle_path: &Path,
+    fixtures_path: &Path,
     output_path: Option<&Path>,
     as_json: bool,
 ) -> ExitCode {
     lifecycle_result(
         "vida policy activate",
-        activate_payload(store_path, bundle_id, receipt_path),
+        activate_payload(store_path, bundle_id, bundle_path, fixtures_path),
         output_path,
         as_json,
     )
@@ -205,10 +207,11 @@ fn import_payload(bundle_path: &Path, store_path: &Path) -> Result<Value, Policy
 fn activate_payload(
     store_path: &Path,
     bundle_id: &str,
-    receipt_path: &Path,
+    bundle_path: &Path,
+    fixtures_path: &Path,
 ) -> Result<Value, PolicyFailure> {
     let mut store = load_store(store_path, false)?;
-    let receipt = read_test_receipt(receipt_path)?;
+    let receipt = verified_test_receipt(bundle_id, bundle_path, fixtures_path)?;
     let test_id = receipt.test_id.clone();
     store.record_test_receipt(receipt).map_err(store_failure)?;
     store.activate(bundle_id).map_err(store_failure)?;
@@ -223,6 +226,47 @@ fn activate_payload(
             "store": store_path.display().to_string(),
         }),
     ))
+}
+
+fn verified_test_receipt(
+    bundle_id: &str,
+    bundle_path: &Path,
+    fixtures_path: &Path,
+) -> Result<PolicyTestReceipt, PolicyFailure> {
+    let checked = check_bundle(bundle_path)?;
+    let tested_bundle_id = format!("{}@{}", checked.bundle.policy_id, checked.bundle.version);
+    if tested_bundle_id != bundle_id {
+        return Err(PolicyFailure::new(
+            "policy_activation_bundle_id_mismatch",
+            format!(
+                "activation requested bundle `{bundle_id}`, but tested bundle is `{}`",
+                tested_bundle_id
+            ),
+        ));
+    }
+    let fixtures = read_bounded_fixture(fixtures_path).map_err(|error| {
+        PolicyFailure::new("policy_activation_fixture_invalid", error.detail)
+    })?;
+    let engine = build_policy_engine(Limits::default());
+    let report = run_fixture_jsonl(&engine, &checked.bundle, &fixtures).map_err(|error| {
+        PolicyFailure::new("policy_activation_fixture_failed", error.to_string())
+    })?;
+    if !report.is_pass() {
+        return Err(PolicyFailure::new(
+            "policy_activation_fixture_failed",
+            "the bounded fixture corpus did not pass",
+        ));
+    }
+    let test_id = format!(
+        "fixture-corpus:{}",
+        blake3::hash(fixtures.as_bytes()).to_hex()
+    );
+    Ok(PolicyTestReceipt {
+        bundle_id: bundle_id.to_string(),
+        test_id,
+        content_digest: checked.digest,
+        passed: true,
+    })
 }
 
 fn status_payload(store_path: &Path) -> Result<Value, PolicyFailure> {
@@ -314,17 +358,6 @@ fn save_store(path: &Path, store: &PolicyLifecycleStore) -> Result<(), PolicyFai
         AtomicReplaceLimit::new(MAX_POLICY_OUTPUT_BYTES),
     )
     .map_err(|error| PolicyFailure::new("policy_store_write_failed", error.to_string()))
-}
-
-fn read_test_receipt(path: &Path) -> Result<PolicyTestReceipt, PolicyFailure> {
-    let raw = read_bounded_text(
-        path,
-        MAX_POLICY_BUNDLE_BYTES,
-        "policy_test_receipt_too_large",
-    )
-    .map_err(|error| PolicyFailure::new("policy_test_receipt_read_failed", error.detail))?;
-    serde_json::from_str(&raw)
-        .map_err(|error| PolicyFailure::new("policy_test_receipt_json_invalid", error.to_string()))
 }
 
 fn bundle_metadata(bundle: &PolicyBundleRecord) -> Value {
@@ -906,27 +939,21 @@ mod tests {
     fn lifecycle_cli_persists_receipt_and_redacts_explain_source() {
         let (root, bundle_path) = bundle_path("ctx.value");
         let store_path = root.join("policy-store.json");
-        let receipt_path = root.join("test-receipt.json");
-        let checked = check_bundle(&bundle_path).expect("bundle check");
+        let fixtures_path = root.join("fixtures.jsonl");
         let bundle_id = "rhai.runtime.authority@1";
         std::fs::write(
-            &receipt_path,
-            serde_json::to_string(&PolicyTestReceipt {
-                bundle_id: bundle_id.to_string(),
-                test_id: "fixture-test".to_string(),
-                content_digest: checked.digest,
-                passed: true,
-            })
-            .expect("receipt JSON"),
+            &fixtures_path,
+            r#"{"fixture_id":"positive","context":{"value":42},"expected":42}"#,
         )
-        .expect("receipt");
+        .expect("fixtures");
 
         assert_eq!(
             import_payload(&bundle_path, &store_path).unwrap()["status"],
             "pass"
         );
         assert_eq!(
-            activate_payload(&store_path, bundle_id, &receipt_path).unwrap()["active_pointer"],
+            activate_payload(&store_path, bundle_id, &bundle_path, &fixtures_path).unwrap()
+                ["active_pointer"],
             bundle_id
         );
         let explained = explain_payload(&store_path, Some(bundle_id)).unwrap();
@@ -937,6 +964,22 @@ mod tests {
             export_payload(&store_path).unwrap()["snapshot"]["bundles"][0]["source"],
             "ctx.value"
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn policy_activate_rejects_failing_fixtures_before_creating_a_receipt() {
+        let (root, bundle_path) = bundle_path("ctx.value");
+        let fixtures_path = root.join("fixtures.jsonl");
+        let bundle_id = "rhai.runtime.authority@1";
+        std::fs::write(
+            &fixtures_path,
+            r#"{"fixture_id":"mismatch","context":{"value":41},"expected":42}"#,
+        )
+        .expect("fixtures");
+        let error = verified_test_receipt(bundle_id, &bundle_path, &fixtures_path)
+            .expect_err("failing fixtures must block activation");
+        assert_eq!(error.code, "policy_activation_fixture_failed");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
