@@ -21,6 +21,222 @@ const SUPPORTED_POLICY_IDS: [&str; 7] = [
     "rhai.runtime.pinned-resume",
     "rhai.runtime.quality-gate",
 ];
+const QUALITY_GATE_PROFILE_IDS: [&str; 8] = [
+    "contract",
+    "security",
+    "a11y",
+    "visual",
+    "performance",
+    "resilience",
+    "property",
+    "observability",
+];
+const QUALITY_GATE_CHECK_IDS: [&str; 8] = QUALITY_GATE_PROFILE_IDS;
+const QUALITY_GATE_HARD_PROFILES: [&str; 3] = ["contract", "security", "observability"];
+const QUALITY_GATE_MAX_ITEMS: usize = 64;
+const QUALITY_GATE_MAX_LIMITS: usize = 16;
+const QUALITY_GATE_MAX_CONTEXT_BYTES: u64 = 4 * 1024 * 1024;
+const QUALITY_GATE_MAX_EVALUATION_MS: u64 = 10_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QualityGateBaselineRequest {
+    pub(crate) schema_version: u16,
+    pub(crate) hard_profiles: Vec<String>,
+    pub(crate) config_profiles: Vec<String>,
+    pub(crate) task_profiles: Vec<String>,
+    pub(crate) path_profiles: Vec<String>,
+    pub(crate) explicit_profiles: Vec<String>,
+    pub(crate) explicit_check_ids: Vec<String>,
+    pub(crate) limits: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QualityGateProfileResolution {
+    pub(crate) baseline_profiles: Vec<String>,
+    pub(crate) effective_profiles: Vec<String>,
+    pub(crate) check_ids: Vec<String>,
+    pub(crate) limits: BTreeMap<String, u64>,
+}
+
+pub(crate) fn quality_gate_baseline_profiles(
+    request: &QualityGateBaselineRequest,
+) -> Result<Vec<String>, PolicyRuntimeError> {
+    validate_quality_gate_baseline_request(request)?;
+    let hard_profiles = QUALITY_GATE_HARD_PROFILES
+        .iter()
+        .map(|profile| (*profile).to_string())
+        .collect::<Vec<_>>();
+    Ok(canonical_quality_gate_union([
+        &hard_profiles,
+        &request.hard_profiles,
+        &request.config_profiles,
+        &request.task_profiles,
+        &request.path_profiles,
+        &request.explicit_profiles,
+    ]))
+}
+
+pub(crate) fn quality_gate_baseline_resolution(
+    request: &QualityGateBaselineRequest,
+) -> Result<QualityGateProfileResolution, PolicyRuntimeError> {
+    let baseline_profiles = quality_gate_baseline_profiles(request)?;
+    let check_ids = canonical_quality_gate_union([&request.explicit_check_ids]);
+    Ok(QualityGateProfileResolution {
+        baseline_profiles: baseline_profiles.clone(),
+        effective_profiles: baseline_profiles,
+        check_ids,
+        limits: request.limits.clone(),
+    })
+}
+
+pub(crate) fn quality_gate_final_profiles(
+    request: &QualityGateBaselineRequest,
+    rhai_output: &Value,
+) -> Result<QualityGateProfileResolution, PolicyRuntimeError> {
+    let baseline = quality_gate_baseline_resolution(request)?;
+    let baseline_profiles = baseline.baseline_profiles;
+    let object = rhai_output.as_object().ok_or_else(|| {
+        PolicyRuntimeError::InvalidDecision("quality_gate_output_not_object".to_string())
+    })?;
+    let allowed_fields = ["schema_version", "additive_profiles", "check_ids"];
+    if object
+        .keys()
+        .any(|key| !allowed_fields.contains(&key.as_str()))
+    {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_output_unknown_field".to_string(),
+        ));
+    }
+    if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_output_schema_invalid".to_string(),
+        ));
+    }
+    let additions = quality_gate_string_array(object.get("additive_profiles"), "profiles")?;
+    let rhai_checks = quality_gate_string_array(object.get("check_ids"), "check_ids")?;
+    for profile in &additions {
+        validate_quality_gate_id(profile, &QUALITY_GATE_PROFILE_IDS, "profile")?;
+    }
+    for check in &rhai_checks {
+        validate_quality_gate_id(check, &QUALITY_GATE_CHECK_IDS, "check")?;
+    }
+    let mut checks = baseline.check_ids;
+    checks.extend(rhai_checks);
+    checks = canonical_quality_gate_union([&checks]);
+    Ok(QualityGateProfileResolution {
+        baseline_profiles: baseline_profiles.clone(),
+        effective_profiles: canonical_quality_gate_union([&baseline_profiles, &additions]),
+        check_ids: checks,
+        limits: request.limits.clone(),
+    })
+}
+
+fn validate_quality_gate_baseline_request(
+    request: &QualityGateBaselineRequest,
+) -> Result<(), PolicyRuntimeError> {
+    if request.schema_version != 1 {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_schema_invalid".to_string(),
+        ));
+    }
+    for (kind, values) in [
+        ("hard", &request.hard_profiles),
+        ("config", &request.config_profiles),
+        ("task", &request.task_profiles),
+        ("path", &request.path_profiles),
+        ("explicit", &request.explicit_profiles),
+    ] {
+        if values.len() > QUALITY_GATE_MAX_ITEMS {
+            return Err(PolicyRuntimeError::InvalidDecision(format!(
+                "quality_gate_{kind}_profiles_limit"
+            )));
+        }
+        for profile in values {
+            validate_quality_gate_id(profile, &QUALITY_GATE_PROFILE_IDS, "profile")?;
+        }
+    }
+    if request.explicit_check_ids.len() > QUALITY_GATE_MAX_ITEMS {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_check_ids_limit".to_string(),
+        ));
+    }
+    for check in &request.explicit_check_ids {
+        validate_quality_gate_id(check, &QUALITY_GATE_CHECK_IDS, "check")?;
+    }
+    if request.limits.len() > QUALITY_GATE_MAX_LIMITS {
+        return Err(PolicyRuntimeError::InvalidDecision(
+            "quality_gate_limits_limit".to_string(),
+        ));
+    }
+    for (key, value) in &request.limits {
+        let max = match key.as_str() {
+            "max_profiles" | "max_checks" => QUALITY_GATE_MAX_ITEMS as u64,
+            "max_context_bytes" => QUALITY_GATE_MAX_CONTEXT_BYTES,
+            "max_evaluation_ms" => QUALITY_GATE_MAX_EVALUATION_MS,
+            _ => {
+                return Err(PolicyRuntimeError::InvalidDecision(
+                    "quality_gate_limit_unknown".to_string(),
+                ));
+            }
+        };
+        if *value == 0 || *value > max {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "quality_gate_limit_invalid".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn quality_gate_string_array(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Vec<String>, PolicyRuntimeError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or_else(|| {
+        PolicyRuntimeError::InvalidDecision(format!("quality_gate_{field}_not_array"))
+    })?;
+    if values.len() > QUALITY_GATE_MAX_ITEMS {
+        return Err(PolicyRuntimeError::InvalidDecision(format!(
+            "quality_gate_{field}_limit"
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                PolicyRuntimeError::InvalidDecision(format!("quality_gate_{field}_id_invalid"))
+            })
+        })
+        .collect()
+}
+
+fn validate_quality_gate_id(
+    value: &str,
+    allowed: &[&str],
+    kind: &str,
+) -> Result<(), PolicyRuntimeError> {
+    if value.trim().is_empty() || value.len() > 128 || !allowed.contains(&value) {
+        return Err(PolicyRuntimeError::InvalidDecision(format!(
+            "quality_gate_{kind}_id_unknown"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_quality_gate_union<const N: usize>(sources: [&[String]; N]) -> Vec<String> {
+    QUALITY_GATE_PROFILE_IDS
+        .iter()
+        .filter(|profile| {
+            sources
+                .iter()
+                .any(|source| source.iter().any(|value| value == *profile))
+        })
+        .map(|profile| profile.to_string())
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -685,6 +901,86 @@ mod tests {
             blockers: Vec::new(),
             evidence_refs: Vec::new(),
         }
+    }
+
+    fn quality_gate_request() -> QualityGateBaselineRequest {
+        QualityGateBaselineRequest {
+            schema_version: 1,
+            hard_profiles: vec!["security".to_string()],
+            config_profiles: vec!["visual".to_string()],
+            task_profiles: vec!["contract".to_string()],
+            path_profiles: vec!["a11y".to_string()],
+            explicit_profiles: vec!["visual".to_string()],
+            explicit_check_ids: vec!["contract".to_string()],
+            limits: BTreeMap::from([(String::from("max_profiles"), 8)]),
+        }
+    }
+
+    #[test]
+    fn quality_gate_baseline_unions_sources_and_retains_hard_profiles() {
+        let request = quality_gate_request();
+        assert_eq!(
+            quality_gate_baseline_profiles(&request).unwrap(),
+            vec!["contract", "security", "a11y", "visual", "observability"]
+        );
+        let resolution = quality_gate_baseline_resolution(&request).unwrap();
+        assert_eq!(resolution.effective_profiles, resolution.baseline_profiles);
+        assert_eq!(resolution.check_ids, vec!["contract"]);
+    }
+
+    #[test]
+    fn quality_gate_final_profiles_accepts_only_additive_rhai_changes() {
+        let request = quality_gate_request();
+        let output = serde_json::json!({
+            "schema_version": 1,
+            "additive_profiles": ["resilience"],
+            "check_ids": ["property"]
+        });
+        let resolution = quality_gate_final_profiles(&request, &output).unwrap();
+        assert_eq!(
+            resolution.effective_profiles,
+            vec![
+                "contract",
+                "security",
+                "a11y",
+                "visual",
+                "resilience",
+                "observability"
+            ]
+        );
+        assert_eq!(resolution.check_ids, vec!["contract", "property"]);
+        assert_eq!(resolution.limits["max_profiles"], 8);
+    }
+
+    #[test]
+    fn quality_gate_rejects_unknown_schema_fields_and_limits() {
+        let request = quality_gate_request();
+        for output in [
+            serde_json::json!({"schema_version": 2}),
+            serde_json::json!({"schema_version": 1, "remove_profiles": ["security"]}),
+            serde_json::json!({"schema_version": 1, "additive_profiles": ["unknown"]}),
+        ] {
+            assert!(matches!(
+                quality_gate_final_profiles(&request, &output),
+                Err(PolicyRuntimeError::InvalidDecision(_))
+            ));
+        }
+
+        let mut oversized = quality_gate_request();
+        oversized.task_profiles = vec!["contract".to_string(); QUALITY_GATE_MAX_ITEMS + 1];
+        assert!(matches!(
+            quality_gate_baseline_profiles(&oversized),
+            Err(PolicyRuntimeError::InvalidDecision(_))
+        ));
+        oversized = quality_gate_request();
+        oversized.limits.insert(
+            "max_context_bytes".to_string(),
+            QUALITY_GATE_MAX_CONTEXT_BYTES + 1,
+        );
+        assert!(matches!(
+            quality_gate_baseline_profiles(&oversized),
+            Err(PolicyRuntimeError::InvalidDecision(_))
+        ));
     }
 
     #[test]
