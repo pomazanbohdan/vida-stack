@@ -2,7 +2,11 @@
 
 //! Shared, versioned contracts for the bounded Rhai policy runtime.
 
-use std::{collections::HashSet, fmt, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -10,6 +14,9 @@ use thiserror::Error;
 pub const POLICY_CONTRACTS_SCHEMA_VERSION: &str = "vida-policy-contracts-v1";
 pub const POLICY_SCHEMA_VERSION: u16 = 1;
 pub const MAX_POLICY_ARRAY_ITEMS: usize = 64;
+pub const MAX_QUALITY_GATE_STRING_BYTES: usize = 128;
+pub const MAX_QUALITY_GATE_RATIONALE_BYTES: usize = 256;
+pub const MAX_QUALITY_GATE_RISK_BYTES: usize = 128;
 pub const MIN_POLICY_SCORE: i64 = 0;
 pub const MAX_POLICY_SCORE: i64 = 100;
 
@@ -27,16 +34,19 @@ pub enum PolicyId {
     Rollback,
     #[serde(rename = "rhai.runtime.pinned-resume")]
     PinnedResume,
+    #[serde(rename = "rhai.runtime.quality-gate")]
+    QualityGate,
 }
 
 impl PolicyId {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Authority,
         Self::Lifecycle,
         Self::Failover,
         Self::Promotion,
         Self::Rollback,
         Self::PinnedResume,
+        Self::QualityGate,
     ];
 
     #[must_use]
@@ -48,6 +58,7 @@ impl PolicyId {
             Self::Promotion => "rhai.runtime.promotion",
             Self::Rollback => "rhai.runtime.rollback",
             Self::PinnedResume => "rhai.runtime.pinned-resume",
+            Self::QualityGate => "rhai.runtime.quality-gate",
         }
     }
 
@@ -59,6 +70,7 @@ impl PolicyId {
             Self::Promotion => "promotion",
             Self::Rollback => "rollback",
             Self::PinnedResume => "pinned_resume",
+            Self::QualityGate => "quality_gate",
         }
     }
 }
@@ -91,12 +103,197 @@ pub enum PolicyMode {
     Active,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityGateProfileId {
+    Contract,
+    Security,
+    #[serde(rename = "a11y", alias = "accessibility")]
+    A11y,
+    Visual,
+    Performance,
+    Resilience,
+    Property,
+    Observability,
+}
+
+impl QualityGateProfileId {
+    pub const ALL: [Self; 8] = [
+        Self::Contract,
+        Self::Security,
+        Self::A11y,
+        Self::Visual,
+        Self::Performance,
+        Self::Resilience,
+        Self::Property,
+        Self::Observability,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Contract => "contract",
+            Self::Security => "security",
+            Self::A11y => "a11y",
+            Self::Visual => "visual",
+            Self::Performance => "performance",
+            Self::Resilience => "resilience",
+            Self::Property => "property",
+            Self::Observability => "observability",
+        }
+    }
+}
+
+impl fmt::Display for QualityGateProfileId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown quality-gate profile id '{0}'")]
+pub struct UnknownQualityGateProfileId(pub String);
+
+impl FromStr for QualityGateProfileId {
+    type Err = UnknownQualityGateProfileId;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|profile| profile.as_str() == value)
+            .ok_or_else(|| UnknownQualityGateProfileId(value.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityGateCheckId {
+    #[serde(alias = "schema_compatibility")]
+    Contract,
+    #[serde(alias = "capability_denial")]
+    Security,
+    #[serde(rename = "a11y", alias = "accessibility_fixtures")]
+    A11y,
+    #[serde(alias = "artifact_threshold")]
+    Visual,
+    #[serde(alias = "performance_budget")]
+    Performance,
+    #[serde(alias = "failure_recovery")]
+    Resilience,
+    #[serde(alias = "generated_cases")]
+    Property,
+    #[serde(alias = "receipt_telemetry")]
+    Observability,
+}
+
+impl QualityGateCheckId {
+    pub const ALL: [Self; 8] = [
+        Self::Contract,
+        Self::Security,
+        Self::A11y,
+        Self::Visual,
+        Self::Performance,
+        Self::Resilience,
+        Self::Property,
+        Self::Observability,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Contract => "contract",
+            Self::Security => "security",
+            Self::A11y => "a11y",
+            Self::Visual => "visual",
+            Self::Performance => "performance",
+            Self::Resilience => "resilience",
+            Self::Property => "property",
+            Self::Observability => "observability",
+        }
+    }
+}
+
+impl fmt::Display for QualityGateCheckId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown quality-gate check id '{0}'")]
+pub struct UnknownQualityGateCheckId(pub String);
+
+impl FromStr for QualityGateCheckId {
+    type Err = UnknownQualityGateCheckId;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|check| check.as_str() == value)
+            .ok_or_else(|| UnknownQualityGateCheckId(value.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityGateBaselineVerdict {
+    Pass,
+    Fail,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityGateRecommendation {
+    NoChange,
+    AdditiveProfile,
+    Block,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyPin {
     pub policy_id: PolicyId,
     pub version: u32,
     pub content_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualityGateContextV1 {
+    pub schema_version: u16,
+    pub task_id: String,
+    pub policy_id: PolicyId,
+    pub policy_version: u32,
+    pub content_digest: String,
+    pub profile_id: QualityGateProfileId,
+    pub mode: PolicyMode,
+    pub baseline_verdict: QualityGateBaselineVerdict,
+    pub inputs_digest: String,
+    pub capability_snapshot: BTreeMap<String, bool>,
+    pub limits: BTreeMap<String, u64>,
+    pub pin: Option<PolicyPin>,
+    pub receipt_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualityGateDecisionV1 {
+    pub schema_version: u16,
+    pub decision_id: String,
+    pub policy_id: PolicyId,
+    pub policy_version: u32,
+    pub content_digest: String,
+    pub profile_id: QualityGateProfileId,
+    pub recommendation: QualityGateRecommendation,
+    pub additive_profiles: Vec<QualityGateProfileId>,
+    pub check_ids: Vec<QualityGateCheckId>,
+    pub rationale: String,
+    pub risk: String,
+    pub blockers: Vec<String>,
+    pub evidence_refs: Vec<String>,
+    pub receipt_id: String,
+    pub deterministic_digest: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +377,8 @@ pub enum PolicyContext {
     Rollback(RollbackContext),
     #[serde(rename = "pinned_resume")]
     PinnedResume(PinnedResumeContext),
+    #[serde(rename = "quality_gate")]
+    QualityGate(QualityGateContextV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +453,8 @@ pub enum PolicyDecision {
     Rollback(RollbackDecision),
     #[serde(rename = "pinned_resume")]
     PinnedResume(PinnedResumeDecision),
+    #[serde(rename = "quality_gate")]
+    QualityGate(QualityGateDecisionV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +503,203 @@ pub enum PolicyValidationError {
     },
     #[error("catalog contains duplicate policy id {0}")]
     DuplicatePolicyId(PolicyId),
+    #[error("quality-gate field '{field}' is empty")]
+    QualityGateEmptyField { field: &'static str },
+    #[error("quality-gate field '{field}' has {actual} bytes; maximum is {max}")]
+    QualityGateStringTooLong {
+        field: &'static str,
+        actual: usize,
+        max: usize,
+    },
+    #[error("quality-gate map '{field}' has {actual} entries; maximum is {max}")]
+    QualityGateMapTooLarge {
+        field: &'static str,
+        actual: usize,
+        max: usize,
+    },
+    #[error("quality-gate digest '{field}' is not 64 lowercase hexadecimal characters")]
+    QualityGateInvalidDigest { field: &'static str },
+    #[error("quality-gate policy id must be rhai.runtime.quality-gate, got {0}")]
+    QualityGatePolicyIdMismatch(PolicyId),
+    #[error("quality-gate profile '{0}' is duplicated")]
+    DuplicateQualityGateProfile(QualityGateProfileId),
+    #[error("quality-gate check '{0}' is duplicated")]
+    DuplicateQualityGateCheck(QualityGateCheckId),
+}
+
+impl QualityGateContextV1 {
+    pub fn validate(&self) -> Result<(), PolicyValidationError> {
+        if self.schema_version != POLICY_SCHEMA_VERSION {
+            return Err(PolicyValidationError::UnsupportedSchemaVersion(
+                self.schema_version,
+            ));
+        }
+        if self.policy_id != PolicyId::QualityGate {
+            return Err(PolicyValidationError::QualityGatePolicyIdMismatch(
+                self.policy_id,
+            ));
+        }
+        validate_quality_gate_string("task_id", &self.task_id, true)?;
+        validate_quality_gate_digest("content_digest", &self.content_digest)?;
+        validate_quality_gate_digest("inputs_digest", &self.inputs_digest)?;
+        validate_quality_gate_map("capability_snapshot", &self.capability_snapshot)?;
+        validate_quality_gate_map("limits", &self.limits)?;
+        validate_quality_gate_string("receipt_id", &self.receipt_id, true)?;
+        if let Some(pin) = &self.pin {
+            if pin.policy_id != PolicyId::QualityGate {
+                return Err(PolicyValidationError::QualityGatePolicyIdMismatch(
+                    pin.policy_id,
+                ));
+            }
+            validate_quality_gate_digest("pin.content_digest", &pin.content_digest)?;
+        }
+        Ok(())
+    }
+}
+
+impl QualityGateDecisionV1 {
+    pub fn validate(&self) -> Result<(), PolicyValidationError> {
+        if self.schema_version != POLICY_SCHEMA_VERSION {
+            return Err(PolicyValidationError::UnsupportedSchemaVersion(
+                self.schema_version,
+            ));
+        }
+        if self.policy_id != PolicyId::QualityGate {
+            return Err(PolicyValidationError::QualityGatePolicyIdMismatch(
+                self.policy_id,
+            ));
+        }
+        validate_quality_gate_string("decision_id", &self.decision_id, true)?;
+        validate_quality_gate_digest("content_digest", &self.content_digest)?;
+        validate_quality_gate_string("rationale", &self.rationale, false)?;
+        validate_quality_gate_string("risk", &self.risk, false)?;
+        validate_quality_gate_string("receipt_id", &self.receipt_id, true)?;
+        validate_quality_gate_digest("deterministic_digest", &self.deterministic_digest)?;
+        validate_quality_gate_profiles(&self.additive_profiles)?;
+        validate_quality_gate_checks(&self.check_ids)?;
+        validate_quality_gate_strings("blockers", &self.blockers)?;
+        validate_quality_gate_strings("evidence_refs", &self.evidence_refs)?;
+        Ok(())
+    }
+
+    pub fn effective_profiles(
+        &self,
+        rust_required: &[QualityGateProfileId],
+        explicit_profiles: &[QualityGateProfileId],
+    ) -> Result<Vec<QualityGateProfileId>, PolicyValidationError> {
+        effective_profiles(rust_required, explicit_profiles, &self.additive_profiles)
+    }
+}
+
+pub fn effective_profiles(
+    rust_required: &[QualityGateProfileId],
+    explicit_profiles: &[QualityGateProfileId],
+    rhai_additions: &[QualityGateProfileId],
+) -> Result<Vec<QualityGateProfileId>, PolicyValidationError> {
+    validate_quality_gate_profiles(rust_required)?;
+    validate_quality_gate_profiles(explicit_profiles)?;
+    validate_quality_gate_profiles(rhai_additions)?;
+
+    let mut effective =
+        Vec::with_capacity(rust_required.len() + explicit_profiles.len() + rhai_additions.len());
+    for profile in rust_required
+        .iter()
+        .chain(explicit_profiles)
+        .chain(rhai_additions)
+    {
+        if !effective.contains(profile) {
+            effective.push(*profile);
+        }
+    }
+    Ok(effective)
+}
+
+fn validate_quality_gate_string(
+    field: &'static str,
+    value: &str,
+    required: bool,
+) -> Result<(), PolicyValidationError> {
+    if required && value.is_empty() {
+        return Err(PolicyValidationError::QualityGateEmptyField { field });
+    }
+    let actual = value.len();
+    let max = match field {
+        "rationale" => MAX_QUALITY_GATE_RATIONALE_BYTES,
+        "risk" => MAX_QUALITY_GATE_RISK_BYTES,
+        _ => MAX_QUALITY_GATE_STRING_BYTES,
+    };
+    if actual > max {
+        return Err(PolicyValidationError::QualityGateStringTooLong { field, actual, max });
+    }
+    Ok(())
+}
+
+fn validate_quality_gate_strings(
+    field: &'static str,
+    values: &[String],
+) -> Result<(), PolicyValidationError> {
+    validate_array_len(field, values.len())?;
+    for value in values {
+        validate_quality_gate_string(field, value, true)?;
+    }
+    Ok(())
+}
+
+fn validate_quality_gate_map<T>(
+    field: &'static str,
+    values: &BTreeMap<String, T>,
+) -> Result<(), PolicyValidationError> {
+    if values.len() > MAX_POLICY_ARRAY_ITEMS {
+        return Err(PolicyValidationError::QualityGateMapTooLarge {
+            field,
+            actual: values.len(),
+            max: MAX_POLICY_ARRAY_ITEMS,
+        });
+    }
+    for key in values.keys() {
+        validate_quality_gate_string(field, key, true)?;
+    }
+    Ok(())
+}
+
+fn validate_quality_gate_digest(
+    field: &'static str,
+    value: &str,
+) -> Result<(), PolicyValidationError> {
+    let valid = value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !valid {
+        return Err(PolicyValidationError::QualityGateInvalidDigest { field });
+    }
+    Ok(())
+}
+
+fn validate_quality_gate_profiles(
+    values: &[QualityGateProfileId],
+) -> Result<(), PolicyValidationError> {
+    validate_array_len("profiles", values.len())?;
+    let mut seen = HashSet::with_capacity(values.len());
+    for profile in values {
+        if !seen.insert(*profile) {
+            return Err(PolicyValidationError::DuplicateQualityGateProfile(*profile));
+        }
+    }
+    Ok(())
+}
+
+fn validate_quality_gate_checks(
+    values: &[QualityGateCheckId],
+) -> Result<(), PolicyValidationError> {
+    validate_array_len("check_ids", values.len())?;
+    let mut seen = HashSet::with_capacity(values.len());
+    for check in values {
+        if !seen.insert(*check) {
+            return Err(PolicyValidationError::DuplicateQualityGateCheck(*check));
+        }
+    }
+    Ok(())
 }
 
 impl PolicyContext {
@@ -313,6 +711,7 @@ impl PolicyContext {
             Self::Promotion(_) => "promotion",
             Self::Rollback(_) => "rollback",
             Self::PinnedResume(_) => "pinned_resume",
+            Self::QualityGate(_) => "quality_gate",
         }
     }
 
@@ -326,6 +725,7 @@ impl PolicyContext {
                 validate_array_len("dependency_ids", context.dependency_ids.len())
             }
             Self::Failover(_) | Self::Rollback(_) | Self::PinnedResume(_) => Ok(()),
+            Self::QualityGate(context) => context.validate(),
             Self::Promotion(context) => {
                 validate_gate_results(&context.gate_results, "gate_results")?;
                 validate_score("replay_score", context.replay_score)?;
@@ -344,6 +744,7 @@ impl PolicyDecision {
             Self::Promotion(_) => "promotion",
             Self::Rollback(_) => "rollback",
             Self::PinnedResume(_) => "pinned_resume",
+            Self::QualityGate(_) => "quality_gate",
         }
     }
 
@@ -358,6 +759,7 @@ impl PolicyDecision {
             }
             Self::Rollback(decision) => validate_score("score", decision.score),
             Self::PinnedResume(decision) => validate_score("score", decision.score),
+            Self::QualityGate(decision) => decision.validate(),
         }
     }
 }
@@ -458,6 +860,48 @@ fn validate_score(field: &'static str, value: i64) -> Result<(), PolicyValidatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quality_context() -> QualityGateContextV1 {
+        QualityGateContextV1 {
+            schema_version: POLICY_SCHEMA_VERSION,
+            task_id: "task-quality-gate".into(),
+            policy_id: PolicyId::QualityGate,
+            policy_version: 1,
+            content_digest: "a".repeat(64),
+            profile_id: QualityGateProfileId::Contract,
+            mode: PolicyMode::Shadow,
+            baseline_verdict: QualityGateBaselineVerdict::Pass,
+            inputs_digest: "b".repeat(64),
+            capability_snapshot: BTreeMap::from([(String::from("read_only"), true)]),
+            limits: BTreeMap::from([(String::from("max_instructions"), 1000)]),
+            pin: Some(PolicyPin {
+                policy_id: PolicyId::QualityGate,
+                version: 1,
+                content_digest: "c".repeat(64),
+            }),
+            receipt_id: "receipt-quality-gate".into(),
+        }
+    }
+
+    fn quality_decision() -> QualityGateDecisionV1 {
+        QualityGateDecisionV1 {
+            schema_version: POLICY_SCHEMA_VERSION,
+            decision_id: "decision-quality-gate".into(),
+            policy_id: PolicyId::QualityGate,
+            policy_version: 1,
+            content_digest: "a".repeat(64),
+            profile_id: QualityGateProfileId::Contract,
+            recommendation: QualityGateRecommendation::AdditiveProfile,
+            additive_profiles: vec![QualityGateProfileId::Security],
+            check_ids: vec![QualityGateCheckId::Contract],
+            rationale: "schema compatibility is required".into(),
+            risk: "medium".into(),
+            blockers: Vec::new(),
+            evidence_refs: vec!["receipt://quality-gate".into()],
+            receipt_id: "receipt-quality-gate".into(),
+            deterministic_digest: "d".repeat(64),
+        }
+    }
 
     fn authority_evaluation() -> PolicyEvaluationV1 {
         PolicyEvaluationV1 {
@@ -569,6 +1013,104 @@ mod tests {
                 field: "gate_results",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn quality_gate_contracts_round_trip_and_validate() {
+        let evaluation = PolicyEvaluationV1 {
+            schema_version: POLICY_SCHEMA_VERSION,
+            policy_id: PolicyId::QualityGate,
+            version: 1,
+            mode: PolicyMode::Shadow,
+            context: PolicyContext::QualityGate(quality_context()),
+            decision: PolicyDecision::QualityGate(quality_decision()),
+        };
+        evaluation
+            .validate()
+            .expect("valid quality-gate evaluation");
+        let encoded = serde_json::to_vec(&evaluation).expect("serialize quality-gate");
+        let decoded: PolicyEvaluationV1 =
+            serde_json::from_slice(&encoded).expect("deserialize quality-gate");
+        assert_eq!(evaluation, decoded);
+        assert_eq!(
+            PolicyId::QualityGate.to_string(),
+            "rhai.runtime.quality-gate"
+        );
+        assert_eq!(
+            "rhai.runtime.quality-gate".parse::<PolicyId>().unwrap(),
+            PolicyId::QualityGate
+        );
+    }
+
+    #[test]
+    fn quality_gate_rejects_unknown_profile_check_and_fields() {
+        let decision = quality_decision();
+        let mut value = serde_json::to_value(decision).expect("serialize decision");
+        value["additive_profiles"] = serde_json::json!(["unknown"]);
+        assert!(serde_json::from_value::<QualityGateDecisionV1>(value).is_err());
+
+        let mut value = serde_json::to_value(quality_decision()).expect("serialize decision");
+        value["check_ids"] = serde_json::json!(["unknown"]);
+        assert!(serde_json::from_value::<QualityGateDecisionV1>(value).is_err());
+
+        let mut value = serde_json::to_value(quality_context()).expect("serialize context");
+        value["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<QualityGateContextV1>(value).is_err());
+    }
+
+    #[test]
+    fn quality_gate_bounds_and_effective_profile_union_are_fail_closed() {
+        let mut decision = quality_decision();
+        decision.rationale = "x".repeat(MAX_QUALITY_GATE_RATIONALE_BYTES + 1);
+        assert!(matches!(
+            decision.validate(),
+            Err(PolicyValidationError::QualityGateStringTooLong {
+                field: "rationale",
+                ..
+            })
+        ));
+
+        let mut context = quality_context();
+        context.capability_snapshot = (0..=MAX_POLICY_ARRAY_ITEMS)
+            .map(|index| (format!("capability-{index}"), true))
+            .collect();
+        assert!(matches!(
+            context.validate(),
+            Err(PolicyValidationError::QualityGateMapTooLarge {
+                field: "capability_snapshot",
+                ..
+            })
+        ));
+
+        let decision = quality_decision();
+        assert_eq!(
+            decision
+                .effective_profiles(
+                    &[QualityGateProfileId::Contract],
+                    &[QualityGateProfileId::Visual],
+                )
+                .expect("effective profile union"),
+            vec![
+                QualityGateProfileId::Contract,
+                QualityGateProfileId::Visual,
+                QualityGateProfileId::Security,
+            ]
+        );
+
+        let duplicate = effective_profiles(
+            &[
+                QualityGateProfileId::Contract,
+                QualityGateProfileId::Contract,
+            ],
+            &[],
+            &[],
+        );
+        assert!(matches!(
+            duplicate,
+            Err(PolicyValidationError::DuplicateQualityGateProfile(
+                QualityGateProfileId::Contract
+            ))
         ));
     }
 }
