@@ -165,6 +165,8 @@ impl FromStr for QualityGateProfileId {
     }
 }
 
+pub type QualityGateProfile = QualityGateProfileId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityGateCheckId {
@@ -233,6 +235,8 @@ impl FromStr for QualityGateCheckId {
             .ok_or_else(|| UnknownQualityGateCheckId(value.to_owned()))
     }
 }
+
+pub type QualityGateCheck = QualityGateCheckId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
