@@ -3463,12 +3463,9 @@ impl StateStore {
                 Vec::new(),
             )
         };
-        let closed_parents = if dispatch_enabled {
-            self.filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
-                .await?
-        } else {
-            closed_parents
-        };
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
+            .await?;
         let mut touched_task_ids = reopened_parents
             .iter()
             .map(|parent| parent.id.clone())
@@ -4355,12 +4352,9 @@ impl StateStore {
                 ),
             });
         }
-        let closed_parents = if dispatch_enabled {
-            self.filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
-                .await?
-        } else {
-            closed_parents
-        };
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
+            .await?;
         let close_plan = plan_close_task(TaskCloseCommand {
             task: TaskAggregateTaskSnapshot {
                 id: task.id.clone(),
@@ -5321,7 +5315,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn management_close_parent_auto_close_does_not_require_structured_proof() {
+    async fn management_close_parent_auto_close_requires_structured_proof() {
         let root = unique_task_store_temp_root("vida-close-gate-parent-auto-close");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let target = "cargo test -p vida close_gate_parent_auto_close";
@@ -5330,6 +5324,7 @@ mod tests {
 
         for (parent_id, child_id) in [
             ("missing-proof-parent", "missing-proof-child"),
+            ("update-missing-proof-parent", "update-missing-proof-child"),
             ("inherited-proof-parent", "inherited-proof-child"),
         ] {
             store
@@ -5400,7 +5395,36 @@ mod tests {
                 .await
                 .expect("missing-proof parent should load")
                 .status,
-            "closed"
+            "open"
+        );
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "update-missing-proof-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("child should close independently through update");
+        assert_eq!(
+            store
+                .show_task("update-missing-proof-parent")
+                .await
+                .expect("update missing-proof parent should load")
+                .status,
+            "open"
         );
 
         store
