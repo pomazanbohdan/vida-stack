@@ -16809,18 +16809,16 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                         }
                     }
-                    if execution_bound {
-                        if let Some(payload) = task_close_structured_proof_gate_payload(
-                            &preclose_task,
-                            inheritance_rows.as_deref(),
-                        ) {
-                            print_task_close_structured_proof_gate_block(
-                                command.render,
-                                &payload,
-                                command.json,
-                            );
-                            return ExitCode::from(1);
-                        }
+                    if let Some(payload) = task_close_structured_proof_gate_payload(
+                        &preclose_task,
+                        inheritance_rows.as_deref(),
+                    ) {
+                        print_task_close_structured_proof_gate_block(
+                            command.render,
+                            &payload,
+                            command.json,
+                        );
+                        return ExitCode::from(1);
                     }
                     // Close authorization is decided only by structured gates above. Close-reason
                     // classification remains post-close diagnostics and cannot deny closure.
