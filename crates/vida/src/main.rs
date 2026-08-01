@@ -68,6 +68,7 @@ mod release1_contracts;
 mod release1_operator_output;
 mod release_contract_adapters;
 mod release_surface;
+mod requirement_analysis;
 mod requirement_surface;
 mod root_command_router;
 mod root_state_binding;

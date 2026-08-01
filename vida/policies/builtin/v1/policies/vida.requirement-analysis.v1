@@ -1,11 +1,16 @@
-// Bounded scalar requirement-analysis shadow policy.
+// Bounded scalar requirement-analysis active-canary policy.
 // Rust owns source paths, 4 MiB bounds, redaction, class validation, and iteration.
-// This policy emits one advisory atom/call result; TaskFlow and native runtime remain authoritative.
+// This policy emits one advisory atom/call result only for the canonical VIDA
+// repository and certain runtime; TaskFlow/native runtime remain authoritative.
+let canary_allowed = ctx.repository == "pomazanbohdan/vida-stack"
+    && ctx.runtime_certain == "true";
 let ambiguity = ctx.ambiguity_hint == "true";
 let conflict = ctx.conflict_hint == "true";
-let party_chat_recommended = ctx.party_chat_enabled == "true"
+let party_chat_recommended = canary_allowed && ctx.party_chat_enabled == "true"
     && (ctx.depth_mode == "critical" || ambiguity || conflict);
-let recommendation = if conflict {
+let recommendation = if !canary_allowed {
+    "native_authority"
+} else if conflict {
     "resolve_conflict"
 } else if ambiguity {
     "clarify_scope"
@@ -16,12 +21,13 @@ let recommendation = if conflict {
     schema_version: 1,
     policy_id: "rhai.runtime.requirement-analysis",
     version: 1,
-    mode: "shadow",
+    mode: "active_canary",
     requirement_class: ctx.requirement_class,
     atom: ctx.atom,
     ambiguity: ambiguity,
     conflict: conflict,
     party_chat_recommended: party_chat_recommended,
     recommendation: recommendation,
+    canary_allowed: canary_allowed,
     native_effective: true
 }

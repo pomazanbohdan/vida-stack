@@ -7,6 +7,10 @@ use serde_json::{json, Value};
 use crate::config_value_utils::{
     load_project_overlay_yaml, yaml_bool, yaml_lookup, yaml_string, yaml_string_list,
 };
+use crate::requirement_analysis::{
+    active_canary_decision, ActiveRequirementPath, NativeRequirementObservation, RequirementSource,
+    VIDA_STACK_REPOSITORY_ALLOWLIST,
+};
 use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
 
 const SURFACE: &str = "vida requirement analyze";
@@ -357,6 +361,26 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
     let atoms = requirement_atoms(&source_inputs);
     let conflicts = detected_conflicts(&combined_input);
     let party_chat_route = requirement_party_chat_route(&args, &combined_input, &conflicts);
+    let canary_repository =
+        std::env::var("VIDA_REQUIREMENT_ANALYSIS_REPOSITORY").unwrap_or_default();
+    let runtime_certain = std::env::var("VIDA_REQUIREMENT_ANALYSIS_RUNTIME_CERTAIN")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("true"));
+    let requested_class = std::env::var("VIDA_REQUIREMENT_ANALYSIS_CLASS").unwrap_or_default();
+    let canary_observation = NativeRequirementObservation {
+        request_id: identity.to_string(),
+        requirement_class: requested_class,
+        depth_mode: args.depth_mode.as_str().to_string(),
+        sources: source_inputs
+            .iter()
+            .map(|source| RequirementSource {
+                path: None,
+                text: source.public_analysis_text.clone(),
+            })
+            .collect(),
+        party_chat_enabled: true,
+    };
+    let active_decision =
+        active_canary_decision_for_cli(canary_observation, &canary_repository, runtime_certain);
 
     Ok(json!({
         "artifact_kind": "requirement_analysis",
@@ -378,7 +402,12 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
             source_input
         }).collect::<Vec<_>>(),
         "requirement_classification": {
-            "primary_class": requirement_primary_class(&combined_input),
+            "primary_class": active_decision
+                .as_ref()
+                .ok()
+                .filter(|decision| decision.path == ActiveRequirementPath::VidaStackCanary)
+                .map(|decision| decision.decision.requirement_class.as_str())
+                .unwrap_or("unknown"),
             "allowed_classes": ["feature", "bug", "runtime_defect", "documentation", "research", "release", "cleanup"],
             "description": "Classifies the request so the runtime can choose the lawful analysis depth and downstream route."
         },
@@ -461,6 +490,21 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         },
         "handoff": role_projection["handoff"]
     }))
+}
+
+fn active_canary_decision_for_cli(
+    observation: NativeRequirementObservation,
+    repository: &str,
+    runtime_certain: bool,
+) -> Result<crate::requirement_analysis::ActiveRequirementDecision, String> {
+    let facts = crate::requirement_analysis::RequirementFacts::from_native(observation)
+        .map_err(|error| error.to_string())?;
+    if repository.is_empty() && runtime_certain {
+        return Err(format!(
+            "runtime certainty supplied without repository; expected {VIDA_STACK_REPOSITORY_ALLOWLIST}"
+        ));
+    }
+    Ok(active_canary_decision(&facts, repository, runtime_certain))
 }
 
 fn configured_requirement_role_projection() -> Result<Value, String> {
@@ -629,19 +673,6 @@ fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
             })
         })
         .collect()
-}
-
-fn requirement_primary_class(source: &str) -> &'static str {
-    let normalized = source.to_lowercase();
-    if normalized.contains("bug") || normalized.contains("fix") {
-        "bug"
-    } else if normalized.contains("doc") {
-        "documentation"
-    } else if normalized.contains("research") {
-        "research"
-    } else {
-        "feature"
-    }
 }
 
 fn detected_conflicts(source: &str) -> Vec<Value> {

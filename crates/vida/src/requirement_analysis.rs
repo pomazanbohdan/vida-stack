@@ -14,6 +14,7 @@ pub const MAX_SOURCE_LINES: usize = 512;
 pub const MAX_SOURCE_COUNT: usize = 8;
 pub const MAX_ATOM_CHARS: usize = 2048;
 pub const REDACTION_PLACEHOLDER: &str = "[redacted requirement secret line]";
+pub const VIDA_STACK_REPOSITORY_ALLOWLIST: &str = "pomazanbohdan/vida-stack";
 pub const POLICY_SOURCE: &str =
     include_str!("../../../vida/policies/builtin/v1/policies/vida.requirement-analysis.v1");
 
@@ -191,7 +192,7 @@ impl RequirementFacts {
 
     pub fn context_literal(&self) -> String {
         format!(
-            "#{{schema_version: {}, requirement_class: \"{}\", depth_mode: \"{}\", source_count: {}, source_bytes: {}, atom: \"{}\", ambiguity_hint: \"{}\", conflict_hint: \"{}\", party_chat_enabled: \"{}\"}}",
+            "#{{schema_version: {}, requirement_class: \"{}\", depth_mode: \"{}\", source_count: {}, source_bytes: {}, atom: \"{}\", ambiguity_hint: \"{}\", conflict_hint: \"{}\", party_chat_enabled: \"{}\", repository: \"\", runtime_certain: \"false\"}}",
             self.schema_version,
             self.requirement_class,
             self.depth_mode.as_str(),
@@ -220,6 +221,164 @@ pub struct ReplayReceipt {
     pub facts_digest: String,
     pub decision_digest: String,
     pub native_effective: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveRequirementPath {
+    VidaStackCanary,
+    NativeFallback,
+}
+
+impl ActiveRequirementPath {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::VidaStackCanary => "vida_stack_canary",
+            Self::NativeFallback => "native_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveFallbackReason {
+    RepositoryNotAllowlisted,
+    RuntimeUncertain,
+}
+
+impl ActiveFallbackReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RepositoryNotAllowlisted => "repository_not_allowlisted",
+            Self::RuntimeUncertain => "runtime_uncertain",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveRequirementDecision {
+    pub decision: RequirementDecision,
+    pub path: ActiveRequirementPath,
+    pub fallback_reason: Option<ActiveFallbackReason>,
+    pub native_effective: bool,
+    pub mutation_applied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveReplayReceipt {
+    pub case_id: usize,
+    pub facts_digest: String,
+    pub decision_digest: String,
+    pub path: ActiveRequirementPath,
+    pub fallback_reason: Option<ActiveFallbackReason>,
+    pub native_effective: bool,
+    pub mutation_applied: bool,
+}
+
+pub fn repository_is_allowlisted(repository: &str) -> bool {
+    let mut normalized = repository.trim().to_ascii_lowercase();
+    for prefix in [
+        "https://github.com/",
+        "http://github.com/",
+        "github.com/",
+        "git@github.com:",
+    ] {
+        if let Some(value) = normalized.strip_prefix(prefix) {
+            normalized = value.to_string();
+            break;
+        }
+    }
+    normalized = normalized.trim_matches('/').to_string();
+    if normalized.ends_with(".git") {
+        normalized.truncate(normalized.len() - 4);
+    }
+    normalized == VIDA_STACK_REPOSITORY_ALLOWLIST
+}
+
+pub fn native_fallback_decision(facts: &RequirementFacts) -> RequirementDecision {
+    RequirementDecision {
+        requirement_class: facts.requirement_class,
+        ambiguity: false,
+        conflict: false,
+        party_chat_recommended: false,
+        recommendation: "native_authority",
+    }
+}
+
+pub fn active_canary_decision(
+    facts: &RequirementFacts,
+    repository: &str,
+    runtime_certain: bool,
+) -> ActiveRequirementDecision {
+    let fallback_reason = if !runtime_certain {
+        Some(ActiveFallbackReason::RuntimeUncertain)
+    } else if !repository_is_allowlisted(repository) {
+        Some(ActiveFallbackReason::RepositoryNotAllowlisted)
+    } else {
+        None
+    };
+    match fallback_reason {
+        Some(reason) => ActiveRequirementDecision {
+            decision: native_fallback_decision(facts),
+            path: ActiveRequirementPath::NativeFallback,
+            fallback_reason: Some(reason),
+            native_effective: true,
+            mutation_applied: false,
+        },
+        None => ActiveRequirementDecision {
+            decision: shadow_decision(facts),
+            path: ActiveRequirementPath::VidaStackCanary,
+            fallback_reason: None,
+            native_effective: true,
+            mutation_applied: false,
+        },
+    }
+}
+
+pub fn active_decision_digest(
+    facts: &RequirementFacts,
+    repository: &str,
+    runtime_certain: bool,
+) -> String {
+    let active = active_canary_decision(facts, repository, runtime_certain);
+    stable_digest_bytes(&format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        stable_digest(facts),
+        active.path.as_str(),
+        active
+            .fallback_reason
+            .map(ActiveFallbackReason::as_str)
+            .unwrap_or(""),
+        active.native_effective,
+        active.mutation_applied,
+        active.decision.requirement_class,
+        active.decision.ambiguity,
+        active.decision.conflict,
+        active.decision.party_chat_recommended,
+        active.decision.recommendation,
+    ))
+}
+
+pub fn replay_active_canary_cases(
+    cases: &[NativeRequirementObservation],
+    repository: &str,
+    runtime_certain: bool,
+) -> Vec<Result<ActiveReplayReceipt, RequirementAnalysisError>> {
+    cases
+        .iter()
+        .enumerate()
+        .map(|(case_id, observation)| {
+            let facts = RequirementFacts::from_native(observation.clone())?;
+            let active = active_canary_decision(&facts, repository, runtime_certain);
+            Ok(ActiveReplayReceipt {
+                case_id,
+                facts_digest: stable_digest(&facts),
+                decision_digest: active_decision_digest(&facts, repository, runtime_certain),
+                path: active.path,
+                fallback_reason: active.fallback_reason,
+                native_effective: active.native_effective,
+                mutation_applied: active.mutation_applied,
+            })
+        })
+        .collect()
 }
 
 pub fn shadow_decision(facts: &RequirementFacts) -> RequirementDecision {
@@ -362,7 +521,7 @@ mod tests {
     fn source(text: &str) -> RequirementSource {
         RequirementSource {
             path: Some("docs/request.md".to_string()),
-            text: text.to_string(),
+            text: text.replace("\\\\n", "\n"),
         }
     }
 
@@ -413,10 +572,11 @@ mod tests {
     }
 
     #[test]
-    fn secret_lines_are_redacted_before_atom_and_context_projection() {
+    fn secret_lines_are_redacted_fixture() {
         let facts = RequirementFacts::from_native(observation(
             "feature",
-            "Implement editable fields\nAPI_TOKEN=[REDACTED:API key param]",
+            r#"Implement editable fields
+API_TOKEN=do-not-leak"#,
         ))
         .expect("redacted source with normal line");
         assert_eq!(facts.atom, "Implement editable fields");
@@ -462,5 +622,61 @@ mod tests {
         assert!(first
             .iter()
             .all(|receipt| receipt.as_ref().is_ok_and(|row| row.native_effective)));
+    }
+
+    #[test]
+    fn active_canary_is_allowlisted_and_fallback_is_no_mutation() {
+        let facts =
+            RequirementFacts::from_native(observation("feature", "clear atom")).expect("facts");
+        let canary = active_canary_decision(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        assert_eq!(canary.path, ActiveRequirementPath::VidaStackCanary);
+        assert!(canary.fallback_reason.is_none());
+        assert!(canary.native_effective);
+        assert!(!canary.mutation_applied);
+        for (repository, certain, reason) in [
+            (
+                "other-owner/other-repo",
+                true,
+                ActiveFallbackReason::RepositoryNotAllowlisted,
+            ),
+            (
+                VIDA_STACK_REPOSITORY_ALLOWLIST,
+                false,
+                ActiveFallbackReason::RuntimeUncertain,
+            ),
+        ] {
+            let fallback = active_canary_decision(&facts, repository, certain);
+            assert_eq!(fallback.path, ActiveRequirementPath::NativeFallback);
+            assert_eq!(fallback.fallback_reason, Some(reason));
+            assert!(!fallback.mutation_applied);
+            assert_eq!(fallback.decision, native_fallback_decision(&facts));
+        }
+    }
+
+    #[test]
+    fn sixty_four_active_canary_receipts_and_ten_thousand_digests_are_deterministic() {
+        let cases = (0..64)
+            .map(|index| observation("feature", &format!("clear atom {index}")))
+            .collect::<Vec<_>>();
+        let first = replay_active_canary_cases(&cases, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        let second = replay_active_canary_cases(&cases, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        assert_eq!(first, second);
+        assert!(first.iter().all(|receipt| {
+            receipt.as_ref().is_ok_and(|row| {
+                row.path == ActiveRequirementPath::VidaStackCanary
+                    && row.fallback_reason.is_none()
+                    && row.native_effective
+                    && !row.mutation_applied
+            })
+        }));
+        let facts =
+            RequirementFacts::from_native(observation("feature", "clear atom")).expect("facts");
+        let expected = active_decision_digest(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true);
+        for _ in 0..10_000 {
+            assert_eq!(
+                active_decision_digest(&facts, VIDA_STACK_REPOSITORY_ALLOWLIST, true),
+                expected
+            );
+        }
     }
 }
