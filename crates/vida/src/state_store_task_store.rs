@@ -1422,16 +1422,23 @@ impl StateStore {
         })
     }
 
+    fn filter_auto_closed_parents_with_admitted_proof(
+        parents: Vec<TaskRecord>,
+        tasks: &[TaskRecord],
+    ) -> Vec<TaskRecord> {
+        parents
+            .into_iter()
+            .filter(|parent| Self::task_missing_structured_proof_targets(parent, tasks).is_empty())
+            .collect()
+    }
+
     async fn filter_auto_closed_parents_ready_for_close(
         &self,
         parents: Vec<TaskRecord>,
         tasks: &[TaskRecord],
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut ready = Vec::new();
-        for parent in parents {
-            if !Self::task_missing_structured_proof_targets(&parent, tasks).is_empty() {
-                continue;
-            }
+        for parent in Self::filter_auto_closed_parents_with_admitted_proof(parents, tasks) {
             if self
                 .auto_closed_parent_has_unresolved_run_graph(&parent.id)
                 .await?
@@ -3254,6 +3261,8 @@ impl StateStore {
             let requested_status_is_closed =
                 requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
+                let tasks = self.all_tasks().await?;
+                Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
                 if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize_close(
                     crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
                     crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
@@ -4272,10 +4281,6 @@ impl StateStore {
         } else {
             false
         };
-        let dispatch_receipt_source = matches!(
-            &source,
-            crate::taskflow_runtime::TaskLifecycleMutationSource::DispatchReceipt { .. }
-        );
         if let crate::taskflow_runtime::TaskLifecycleMutationSource::DispatchReceipt {
             run_id,
             receipt_id,
@@ -4284,8 +4289,7 @@ impl StateStore {
             self.ensure_dispatch_receipt_binding(task_id, run_id, receipt_id)
                 .await?;
         }
-        let proof_admitted = dispatch_receipt_source
-            && Self::task_missing_structured_proof_targets(&task, &tasks).is_empty();
+        let proof_admitted = Self::task_missing_structured_proof_targets(&task, &tasks).is_empty();
         if let Err(reason) = crate::taskflow_runtime::TaskLifecycleService::authorize_close(
             crate::taskflow_runtime::task_runtime_mode_for_state_root(self.root()),
             crate::taskflow_runtime::task_execution_binding(&task, has_active_run),
@@ -4296,9 +4300,7 @@ impl StateStore {
                 reason: reason.to_string(),
             });
         }
-        if dispatch_receipt_source {
-            Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
-        }
+        Self::ensure_task_structured_proof_admitted(&task, &tasks)?;
         let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
         Self::ensure_task_lifecycle_admitted(
             task_id,
@@ -5313,7 +5315,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn management_close_parent_auto_close_requires_structured_proof() {
+    async fn close_gate_parent_auto_close_requires_structured_proof() {
         let root = unique_task_store_temp_root("vida-close-gate-parent-auto-close");
         let store = StateStore::open(root.clone()).await.expect("open store");
         let target = "cargo test -p vida close_gate_parent_auto_close";
@@ -6137,7 +6139,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_task_status_closed_allows_management_only_proof_target() {
+    async fn update_task_status_closed_rejects_missing_structured_proof() {
         let root = unique_task_store_temp_root("vida-update-close-proof-authority");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
@@ -6181,32 +6183,39 @@ mod tests {
             .await
             .expect("create proof child");
 
-        let closed = store
-            .update_task(UpdateTaskRequest {
-                task_id: "proof-child",
-                title: None,
-                status: Some("closed"),
-                priority: None,
-                notes: None,
-                description: None,
-                parent_id: None,
-                add_labels: &[],
-                remove_labels: &[],
-                set_labels: None,
-                execution_mode: None,
-                order_bucket: None,
-                parallel_group: None,
-                conflict_domain: None,
-                planner_metadata: None,
-            })
-            .await
-            .expect("management-only close should not require execution proof");
-        assert_eq!(closed.status, "closed");
-        assert!(closed.closed_at.is_some());
-        assert!(closed
-            .planner_metadata
-            .proof_targets
-            .contains(&"cargo test proof-child".to_string()));
+        for requested_status in ["closed", "done"] {
+            let error = store
+                .update_task(UpdateTaskRequest {
+                    task_id: "proof-child",
+                    title: None,
+                    status: Some(requested_status),
+                    priority: None,
+                    notes: None,
+                    description: None,
+                    parent_id: None,
+                    add_labels: &[],
+                    remove_labels: &[],
+                    set_labels: None,
+                    execution_mode: None,
+                    order_bucket: None,
+                    parallel_group: None,
+                    conflict_domain: None,
+                    planner_metadata: None,
+                })
+                .await
+                .expect_err("missing structured proof must block generic close updates");
+            assert!(
+                error
+                    .to_string()
+                    .contains("configured proof targets without matching structured pass evidence")
+            );
+        }
+
+        let child = store.show_task("proof-child").await.expect("load child");
+        assert_eq!(child.status, "open");
+        assert!(child.closed_at.is_none());
+        let parent = store.show_task("proof-parent").await.expect("load parent");
+        assert_eq!(parent.status, "open");
 
         close_store_and_remove_root(store, root).await;
     }

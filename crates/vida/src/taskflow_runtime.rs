@@ -113,7 +113,10 @@ pub(crate) fn task_execution_binding(
     task: &TaskRecord,
     has_active_run: bool,
 ) -> TaskExecutionBinding {
-    let explicit_execution_plan = task.execution_semantics != Default::default();
+    let explicit_execution_plan = task.execution_semantics != Default::default()
+        || !task.planner_metadata.owned_paths.is_empty()
+        || !task.planner_metadata.acceptance_targets.is_empty()
+        || !task.planner_metadata.proof_targets.is_empty();
     if has_active_run || explicit_execution_plan {
         TaskExecutionBinding::ExecutionBound
     } else {
@@ -281,7 +284,7 @@ mod tests {
         task.planner_metadata.proof_targets = vec!["proof".to_string()];
         assert_eq!(
             task_execution_binding(&task, false),
-            TaskExecutionBinding::ManagementOnly
+            TaskExecutionBinding::ExecutionBound
         );
     }
 
