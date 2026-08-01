@@ -1,0 +1,27 @@
+// Bounded scalar requirement-analysis shadow policy.
+// Rust owns source paths, 4 MiB bounds, redaction, class validation, and iteration.
+// This policy emits one advisory atom/call result; TaskFlow and native runtime remain authoritative.
+let ambiguity = ctx.ambiguity_hint == "true";
+let conflict = ctx.conflict_hint == "true";
+let party_chat_recommended = ctx.party_chat_enabled == "true"
+    && (ctx.depth_mode == "critical" || ambiguity || conflict);
+let recommendation = if conflict {
+    "resolve_conflict"
+} else if ambiguity {
+    "clarify_scope"
+} else {
+    "proceed_bounded"
+};
+#{
+    schema_version: 1,
+    policy_id: "rhai.runtime.requirement-analysis",
+    version: 1,
+    mode: "shadow",
+    requirement_class: ctx.requirement_class,
+    atom: ctx.atom,
+    ambiguity: ambiguity,
+    conflict: conflict,
+    party_chat_recommended: party_chat_recommended,
+    recommendation: recommendation,
+    native_effective: true
+}
