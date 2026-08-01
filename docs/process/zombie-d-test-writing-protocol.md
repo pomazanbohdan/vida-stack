@@ -285,6 +285,45 @@ without a concrete test, artifact, or explicit non-applicable reason. Legacy
 Z/O/M/B/I/E/S records remain readable; migration is complete when triggered
 R/P/C facets are added to the next canonical evidence record.
 
+### Quality-gate profile matrix
+
+For `rhai.runtime.quality-gate`, every ZOMBIE-D evidence record must carry a
+typed `QualityGateContextV1` and `QualityGateDecisionV1` reference. The decision
+may recommend only `no_change`, `additive_profile`, or `block`; Rhai cannot mark
+evidence passed, remove a required profile, or authorize an effect.
+
+| Profile | Required evidence focus | Rust-owned gate | Rhai role |
+|---|---|---|---|
+| `contract` | schema and compatibility | final contract verdict | additive recommendation |
+| `security` | denial and capability evidence | mandatory security checks | additive recommendation |
+| `a11y` | accessibility fixtures | required accessibility checks | additive recommendation |
+| `visual` | artifact and threshold evidence | artifact validation | additive recommendation |
+| `performance` | budget and timing evidence | budget enforcement | additive recommendation |
+| `resilience` | failure and recovery evidence | recovery verdict | additive recommendation |
+| `property` | generated-case evidence | case/evidence validation | additive recommendation |
+| `observability` | receipt and telemetry evidence | receipt completeness | additive recommendation |
+
+The quality-profile rollout is nested under the policy lifecycle and is distinct
+from `candidate -> shadow -> promotable -> active`. Its rollout matrix is
+`off -> shadow -> additive_canary -> active`; no direct jump is valid. Every evaluation, promotion, activation, failover, rollback, and
+resume requires a receipt. Missing or incompatible pins fail closed with
+`policy_pinned_bundle_missing`; fallback is only a receipt-backed
+last-known-good bundle or immutable Rust baseline, and rollback never rewrites
+existing run pins. Keep this policy/profile/authority matrix identical to the
+versioned Rhai design and authority ADR.
+
+| Policy ID | Reviewed additive profiles | Rust-required authority |
+|---|---|---|
+| `rhai.runtime.authority` | `contract`, `security` | registry, schema, capability and final verdict |
+| `rhai.runtime.lifecycle` | `contract`, `resilience`, `observability` | state transitions, persistence and receipts |
+| `rhai.runtime.failover` | `resilience`, `observability` | last-known-good/baseline selection and blocking |
+| `rhai.runtime.promotion` | `contract`, `performance`, `property`, `observability` | gate admission and activation |
+| `rhai.runtime.rollback` | `resilience`, `security`, `observability` | atomic pointer change and quarantine |
+| `rhai.runtime.pinned-resume` | `contract`, `resilience`, `property`, `observability` | immutable pin resolution and compatibility |
+| `rhai.runtime.quality-gate` | `contract`, `security`, `a11y`, `visual`, `performance`, `resilience`, `property`, `observability` | quality profile registry, additive decisions and final verdict |
+
+These reviewed additive defaults never remove Rust-required profiles.
+
 ## Relationship To Existing Docs
 
 This protocol extends the project-local testing and runtime proof rules without
