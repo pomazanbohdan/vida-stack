@@ -1674,6 +1674,307 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
     execution_plan
 }
 
+// Typed flow-activation shadow contract. Rust owns the canonical topology;
+// the policy receives only the already-validated optional-node scalar.
+pub(crate) const FLOW_ACTIVATION_POLICY_ID: &str = "rhai.runtime.flow-activation";
+pub(crate) const FLOW_ACTIVATION_POLICY_VERSION: u32 = 1;
+pub(crate) const FLOW_ACTIVATION_SCHEMA_VERSION: &str = "flow-activation-facts.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlowActivationRole {
+    BusinessAnalyst,
+    Worker,
+    Verifier,
+    Coach,
+}
+
+impl FlowActivationRole {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::BusinessAnalyst => "business_analyst",
+            Self::Worker => "worker",
+            Self::Verifier => "verifier",
+            Self::Coach => "coach",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlowActivationTaskClass {
+    Specification,
+    Implementation,
+    Verification,
+    Cleanup,
+}
+
+impl FlowActivationTaskClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Specification => TASK_CLASS_SPECIFICATION,
+            Self::Implementation => TASK_CLASS_IMPLEMENTATION,
+            Self::Verification => TASK_CLASS_VERIFICATION,
+            Self::Cleanup => "cleanup",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlowActivationNodeSpec {
+    pub(crate) id: &'static str,
+    pub(crate) order: u8,
+    pub(crate) role: FlowActivationRole,
+    pub(crate) task_class: FlowActivationTaskClass,
+    pub(crate) required: bool,
+    pub(crate) terminal: bool,
+    pub(crate) proof_required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlowActivationEdge {
+    pub(crate) from: &'static str,
+    pub(crate) to: &'static str,
+}
+
+static FLOW_ACTIVATION_NODES: &[FlowActivationNodeSpec] = &[
+    FlowActivationNodeSpec {
+        id: "intake",
+        order: 0,
+        role: FlowActivationRole::BusinessAnalyst,
+        task_class: FlowActivationTaskClass::Specification,
+        required: true,
+        terminal: false,
+        proof_required: false,
+    },
+    FlowActivationNodeSpec {
+        id: "design",
+        order: 1,
+        role: FlowActivationRole::BusinessAnalyst,
+        task_class: FlowActivationTaskClass::Specification,
+        required: true,
+        terminal: false,
+        proof_required: false,
+    },
+    FlowActivationNodeSpec {
+        id: "implementation",
+        order: 2,
+        role: FlowActivationRole::Worker,
+        task_class: FlowActivationTaskClass::Implementation,
+        required: true,
+        terminal: false,
+        proof_required: false,
+    },
+    FlowActivationNodeSpec {
+        id: "quality_review",
+        order: 3,
+        role: FlowActivationRole::Coach,
+        task_class: FlowActivationTaskClass::Verification,
+        required: false,
+        terminal: false,
+        proof_required: false,
+    },
+    FlowActivationNodeSpec {
+        id: "verification",
+        order: 4,
+        role: FlowActivationRole::Verifier,
+        task_class: FlowActivationTaskClass::Verification,
+        required: true,
+        terminal: false,
+        proof_required: true,
+    },
+    FlowActivationNodeSpec {
+        id: "close",
+        order: 5,
+        role: FlowActivationRole::Coach,
+        task_class: FlowActivationTaskClass::Cleanup,
+        required: true,
+        terminal: true,
+        proof_required: false,
+    },
+];
+
+static FLOW_ACTIVATION_EDGES: &[FlowActivationEdge] = &[
+    FlowActivationEdge {
+        from: "intake",
+        to: "design",
+    },
+    FlowActivationEdge {
+        from: "design",
+        to: "implementation",
+    },
+    FlowActivationEdge {
+        from: "implementation",
+        to: "quality_review",
+    },
+    FlowActivationEdge {
+        from: "quality_review",
+        to: "verification",
+    },
+    FlowActivationEdge {
+        from: "verification",
+        to: "close",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlowActivationSnapshot {
+    pub(crate) nodes: &'static [FlowActivationNodeSpec],
+    pub(crate) edges: &'static [FlowActivationEdge],
+}
+
+impl FlowActivationSnapshot {
+    pub(crate) const fn canonical() -> Self {
+        Self {
+            nodes: FLOW_ACTIVATION_NODES,
+            edges: FLOW_ACTIVATION_EDGES,
+        }
+    }
+
+    fn canonical_encoding(self) -> String {
+        use std::fmt::Write;
+
+        let mut encoded = String::from(FLOW_ACTIVATION_SCHEMA_VERSION);
+        for node in self.nodes {
+            write!(
+                encoded,
+                "|node:{}:{}:{}:{}:{}:{}:{}",
+                node.id,
+                node.order,
+                node.role.as_str(),
+                node.task_class.as_str(),
+                node.required,
+                node.terminal,
+                node.proof_required
+            )
+            .expect("writing a String cannot fail");
+        }
+        for edge in self.edges {
+            write!(encoded, "|edge:{}>{}", edge.from, edge.to)
+                .expect("writing a String cannot fail");
+        }
+        encoded
+    }
+
+    pub(crate) fn digest(self) -> String {
+        blake3::hash(self.canonical_encoding().as_bytes())
+            .to_hex()
+            .to_string()
+    }
+
+    fn node(self, id: &str) -> Option<FlowActivationNodeSpec> {
+        self.nodes.iter().find(|node| node.id == id).copied()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FlowActivationObservation {
+    pub(crate) optional_nodes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FlowActivationError {
+    TooManyOptionalNodes { observed: usize },
+    UnknownNode { node_id: String },
+    RequiredNode { node_id: String },
+    TerminalNode { node_id: String },
+    ProofNode { node_id: String },
+}
+
+impl std::fmt::Display for FlowActivationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyOptionalNodes { observed } => {
+                write!(
+                    formatter,
+                    "flow_activation_optional_node_count_exceeded:{observed}"
+                )
+            }
+            Self::UnknownNode { node_id } => {
+                write!(formatter, "flow_activation_node_unknown:{node_id}")
+            }
+            Self::RequiredNode { node_id } => {
+                write!(formatter, "flow_activation_node_required:{node_id}")
+            }
+            Self::TerminalNode { node_id } => {
+                write!(formatter, "flow_activation_node_terminal:{node_id}")
+            }
+            Self::ProofNode { node_id } => {
+                write!(formatter, "flow_activation_node_proof_required:{node_id}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FlowActivationFacts {
+    pub(crate) snapshot_digest: String,
+    pub(crate) optional_node: Option<String>,
+}
+
+impl FlowActivationFacts {
+    pub(crate) fn from_native(
+        observation: FlowActivationObservation,
+    ) -> Result<Self, FlowActivationError> {
+        if observation.optional_nodes.len() > 1 {
+            return Err(FlowActivationError::TooManyOptionalNodes {
+                observed: observation.optional_nodes.len(),
+            });
+        }
+
+        let snapshot = FlowActivationSnapshot::canonical();
+        let optional_node = observation.optional_nodes.into_iter().next();
+        let optional_node = match optional_node {
+            None => None,
+            Some(node_id) => {
+                let node_id = node_id.trim().to_string();
+                let Some(node) = snapshot.node(&node_id) else {
+                    return Err(FlowActivationError::UnknownNode { node_id });
+                };
+                if node.terminal {
+                    return Err(FlowActivationError::TerminalNode { node_id });
+                }
+                if node.proof_required {
+                    return Err(FlowActivationError::ProofNode { node_id });
+                }
+                if node.required {
+                    return Err(FlowActivationError::RequiredNode { node_id });
+                }
+                Some(node_id)
+            }
+        };
+
+        Ok(Self {
+            snapshot_digest: snapshot.digest(),
+            optional_node,
+        })
+    }
+
+    /// The Rhai contract is intentionally one scalar; topology never crosses
+    /// the policy boundary and therefore cannot be changed by the policy.
+    pub(crate) fn context_literal(&self) -> serde_json::Value {
+        serde_json::json!({
+            "optional_node": self.optional_node.as_deref().unwrap_or(""),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FlowActivationReceipt {
+    pub(crate) snapshot_digest: String,
+    pub(crate) optional_node: Option<String>,
+    pub(crate) topology_mutation_allowed: bool,
+}
+
+pub(crate) fn flow_activation_shadow_decision(
+    observation: FlowActivationObservation,
+) -> Result<FlowActivationReceipt, FlowActivationError> {
+    let facts = FlowActivationFacts::from_native(observation)?;
+    Ok(FlowActivationReceipt {
+        snapshot_digest: facts.snapshot_digest,
+        optional_node: facts.optional_node,
+        topology_mutation_allowed: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2774,6 +3075,105 @@ mod tests {
                     relations.blockers
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn frozen_flow_activation_snapshot_is_typed_and_immutable() {
+        let snapshot = super::FlowActivationSnapshot::canonical();
+        let node_ids = snapshot
+            .nodes
+            .iter()
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            node_ids,
+            vec![
+                "intake",
+                "design",
+                "implementation",
+                "quality_review",
+                "verification",
+                "close"
+            ]
+        );
+        assert_eq!(snapshot.nodes[3].id, "quality_review");
+        assert!(!snapshot.nodes[3].required);
+        assert_eq!(snapshot.nodes[3].role.as_str(), "coach");
+        assert_eq!(snapshot.nodes[3].task_class.as_str(), "verification");
+        assert!(snapshot.nodes[0..3].iter().all(|node| node.required));
+        assert!(snapshot.nodes[4].proof_required);
+        assert!(snapshot.nodes[5].terminal);
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            snapshot.digest(),
+            super::FlowActivationSnapshot::canonical().digest()
+        );
+    }
+
+    #[test]
+    fn flow_activation_optional_zero_one_many_and_rejection_matrix() {
+        let zero = super::flow_activation_shadow_decision(super::FlowActivationObservation {
+            optional_nodes: vec![],
+        })
+        .unwrap();
+        assert_eq!(zero.optional_node, None);
+        assert!(!zero.topology_mutation_allowed);
+
+        let one = super::flow_activation_shadow_decision(super::FlowActivationObservation {
+            optional_nodes: vec!["quality_review".to_string()],
+        })
+        .unwrap();
+        assert_eq!(one.optional_node.as_deref(), Some("quality_review"));
+        assert!(!one.topology_mutation_allowed);
+
+        let many = super::flow_activation_shadow_decision(super::FlowActivationObservation {
+            optional_nodes: vec!["quality_review".to_string(), "quality_review".to_string()],
+        })
+        .expect_err("multiple optional nodes in one call must fail closed");
+        assert_eq!(
+            many.to_string(),
+            "flow_activation_optional_node_count_exceeded:2"
+        );
+
+        for (node_id, expected) in [
+            (Some("unknown"), "flow_activation_node_unknown:unknown"),
+            (Some("intake"), "flow_activation_node_required:intake"),
+            (
+                Some("verification"),
+                "flow_activation_node_proof_required:verification",
+            ),
+            (Some("close"), "flow_activation_node_terminal:close"),
+        ] {
+            let error = super::flow_activation_shadow_decision(super::FlowActivationObservation {
+                optional_nodes: vec![node_id.unwrap().to_string()],
+            })
+            .expect_err("invalid node attempt must fail closed");
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn flow_activation_receipt_digest_replay_is_deterministic() {
+        let first = super::flow_activation_shadow_decision(super::FlowActivationObservation {
+            optional_nodes: vec!["quality_review".to_string()],
+        })
+        .unwrap();
+        for _ in 0..50 {
+            let receipt =
+                super::flow_activation_shadow_decision(super::FlowActivationObservation {
+                    optional_nodes: vec!["quality_review".to_string()],
+                })
+                .unwrap();
+            assert_eq!(receipt, first);
+            assert_eq!(receipt.snapshot_digest, first.snapshot_digest);
         }
     }
 }

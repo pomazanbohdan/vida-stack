@@ -1,0 +1,14 @@
+// Bounded flow-activation shadow policy.
+// Rust freezes node ids, order, topology, and required/terminal/proof semantics.
+// Rhai receives one validated optional-node scalar and cannot mutate the flow.
+let has_optional_node = ctx.optional_node != "";
+#{
+    schema_version: 1,
+    policy_id: "rhai.runtime.flow-activation",
+    version: 1,
+    mode: "shadow",
+    optional_node: ctx.optional_node,
+    has_optional_node: has_optional_node,
+    topology_mutation_allowed: false,
+    native_effective: true
+}
