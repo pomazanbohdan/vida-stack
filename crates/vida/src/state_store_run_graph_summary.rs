@@ -3020,6 +3020,13 @@ impl StateStore {
         Ok(canonical)
     }
 
+    fn host_bridge_binding_matches_in_flight_receipt(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> bool {
+        receipt.dispatch_status == "executing"
+            && receipt.lane_status.as_deref() == Some("lane_running")
+    }
+
     pub async fn record_host_bridge_receipt_identity(
         &self,
         identity: &taskflow_host_bridge::HostBridgeReceiptIdentityV1,
@@ -3173,7 +3180,15 @@ impl StateStore {
             .db
             .select(("host_bridge_precursor_fingerprint", compact.run_id.as_str()))
             .await?;
-        if existing_receipt.is_some() {
+        if let Some(existing_receipt) = existing_receipt.as_ref() {
+            if !Self::host_bridge_binding_matches_in_flight_receipt(existing_receipt) {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "host_bridge_receipt_binding_conflict:receipt_key={}",
+                        compact.run_id
+                    ),
+                });
+            }
             let existing_precursor =
                 existing_precursor
                     .as_ref()
@@ -3216,10 +3231,13 @@ impl StateStore {
                  IF array::len($compact_collision) > 0 { \
                     THROW 'host_bridge_receipt_identity_ambiguous_compact_binding'; \
                  }; \
-                 LET $existing_receipt = SELECT VALUE run_id FROM type::record('run_graph_dispatch_receipt', $run_id); \
+                 LET $existing_receipt = SELECT VALUE { run_id: run_id, dispatch_status: dispatch_status, lane_status: lane_status } FROM type::record('run_graph_dispatch_receipt', $run_id); \
                  LET $existing_precursor = SELECT VALUE compact_binding_key FROM type::record('host_bridge_precursor_fingerprint', $run_id); \
                  IF array::len($existing_receipt) > 0 AND array::len($existing_precursor) = 0 { \
                     THROW 'host_bridge_precursor_fingerprint_missing'; \
+                 }; \
+                 IF array::len($existing_receipt) > 0 AND ($existing_receipt[0].dispatch_status != 'executing' OR $existing_receipt[0].lane_status != 'lane_running') { \
+                    THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
                  }; \
                  IF array::len($existing_precursor) > 0 AND $existing_precursor[0] != $compact_key { \
                     THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
@@ -7304,6 +7322,68 @@ mod tests {
                 .contains("host_bridge_precursor_fingerprint_conflict"),
             "error={error:?}"
         );
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_rejects_stale_replay_over_terminal_receipt() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-stale-terminal");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding-stale-terminal";
+        let packet_path = "/tmp/host-bridge-binding-stale-terminal.json";
+        let mut in_flight = sample_dispatch_receipt(run_id);
+        in_flight.dispatch_packet_path = Some(packet_path.to_string());
+        in_flight.dispatch_status = "executing".to_string();
+        in_flight.lane_status = "lane_running".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&in_flight)
+            .await
+            .expect("in-flight dispatch receipt should persist");
+
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
+        let mut terminal = in_flight.clone();
+        terminal.dispatch_status = "executed".to_string();
+        terminal.lane_status = "lane_completed".to_string();
+        terminal.dispatch_result_path = Some("/tmp/terminal-result.json".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&terminal)
+            .await
+            .expect("terminal dispatch receipt should persist");
+
+        let mut stale_pending = in_flight;
+        stale_pending.dispatch_status = "bridge_request_pending".to_string();
+        stale_pending.lane_status = "lane_open".to_string();
+        stale_pending.dispatch_result_path = Some(identity.result_path.clone());
+        let error = store
+            .record_host_bridge_receipt_binding(&identity, &stale_pending)
+            .await
+            .expect_err("stale binding must not replace a terminal receipt");
+        assert!(
+            error
+                .to_string()
+                .contains("host_bridge_receipt_binding_conflict:receipt_key="),
+            "error={error:?}"
+        );
+
+        let stored = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("terminal receipt should remain persisted");
+        assert_eq!(stored.dispatch_status, "executed");
+        assert_eq!(stored.lane_status, "lane_completed");
+        assert_eq!(stored.dispatch_result_path, terminal.dispatch_result_path);
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
