@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 #[cfg(all(test, windows))]
@@ -80,6 +81,7 @@ pub fn atomic_replace_bounded_from_reader(
                 "atomic replacement destination has no file name",
             ),
         })?;
+    validate_atomic_replace_parent(parent, kind)?;
     let parent_dir = Dir::open_ambient_dir(parent, ambient_authority()).map_err(|source| {
         PathPolicyError::Metadata {
             kind,
@@ -96,6 +98,51 @@ pub fn atomic_replace_bounded_from_reader(
         reader,
         limit,
     )
+}
+
+fn validate_atomic_replace_parent(
+    parent: &Path,
+    kind: crate::safe_path::ArtifactPathKind,
+) -> Result<(), PathPolicyError> {
+    let mut current = Some(parent);
+    while let Some(path) = current {
+        let metadata = fs::symlink_metadata(path).map_err(|source| PathPolicyError::Metadata {
+            kind,
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if ambient_metadata_is_link_like(&metadata) {
+            return Err(PathPolicyError::Symlink {
+                kind,
+                path: path.to_path_buf(),
+            });
+        }
+        if !metadata.is_dir() {
+            return Err(PathPolicyError::NotRegularFile {
+                kind,
+                path: path.to_path_buf(),
+            });
+        }
+        current = path.parent();
+    }
+    Ok(())
+}
+
+fn ambient_metadata_is_link_like(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || ambient_metadata_is_reparse_point(metadata)
+}
+
+#[cfg(windows)]
+fn ambient_metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn ambient_metadata_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 pub fn atomic_replace_bounded_from_file(
@@ -1228,5 +1275,50 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replace_bounded_rejects_symlink_parent_without_writing_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("symlink-parent");
+        let outside = temp_root("symlink-parent-outside");
+        let linked_parent = root.join("state-link");
+        let destination = linked_parent.join("journal.json");
+        let outside_destination = outside.join("journal.json");
+        symlink(&outside, &linked_parent).unwrap();
+
+        let error = atomic_replace_bounded(&destination, b"redirected").unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { path, .. } if path == linked_parent));
+        assert!(!outside_destination.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_replace_bounded_rejects_reparse_parent_without_writing_target() {
+        use std::os::windows::fs::symlink_dir;
+
+        let root = temp_root("reparse-parent");
+        let outside = temp_root("reparse-parent-outside");
+        let linked_parent = root.join("state-link");
+        let destination = linked_parent.join("journal.json");
+        let outside_destination = outside.join("journal.json");
+        match symlink_dir(&outside, &linked_parent) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                return;
+            }
+            Err(error) => panic!("parent reparse point should be created: {error}"),
+        }
+
+        let error = atomic_replace_bounded(&destination, b"redirected").unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { path, .. } if path == linked_parent));
+        assert!(!outside_destination.exists());
     }
 }
