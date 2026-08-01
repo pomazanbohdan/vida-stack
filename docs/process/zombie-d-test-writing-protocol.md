@@ -331,6 +331,53 @@ to last-known-good or immutable baseline. Shadow receipts contain policy
 identity, input/output digests, duration, agreement/diff, and error/fallback
 codes only; never raw context, secrets, or arbitrary Rhai output.
 
+### Rollout-closeout test and release gate
+
+The rollout proof must make the promotion thresholds executable and preserve
+the Rust authority boundary:
+
+| Gate | Required evidence | Blocker condition |
+|---|---|---|
+| Compatibility | schema/ABI, dependency, digest, limit, and pinned-resume checks are 100% green | any mismatch, stale pin, or unsupported limit |
+| Shadow parity | 100% Rust final-verdict agreement; every additive difference is enumerated | unexplained divergence or verdict change |
+| Canary safety | complete bounded corpus plus at least 100 production-like evaluations when available | any forbidden effect/capability, timeout, panic, invalid output, or raw evidence |
+| Persistence/receipts | 100% transition/evaluation receipts and restart parity | missing receipt, pointer drift, or pin rewrite |
+| Profile union | all eight profile rows survive `Rust_required ∪ explicit_profiles ∪ Rhai_additions` | required-profile removal or Rhai authority |
+
+The quality-profile lifecycle is tested as `off -> shadow -> additive_canary ->
+active`; a canary recommendation is never a pass or an authorization. Rust must
+validate the context, compute the effective union, enforce effects and limits,
+persist state, select fallback, and emit the final verdict. Any threshold breach
+freezes promotion, preserves pointers and pins, quarantines the failed tuple,
+and requires Rust-owned rollback to the receipt-backed last-known-good bundle or
+immutable baseline. If neither validates, the test expects a fail-closed block.
+
+For ZOMBIE-D closure, map the rollout evidence as follows: `Z` no state or
+candidate, `O` one profile, `M` all eight profiles and multiple tasks, `B`
+threshold and illegal-transition boundaries, `I` public CLI/JSON/TOON surfaces,
+`E` fail-closed blockers and next actions, `S` typed identity/union helpers,
+`R` deterministic replay, `P` restart and immutable pins, and `C` parity across
+proof status, task projections, consume/readiness, and receipts. Each applicable
+row requires `status: pass` with non-empty evidence refs; blocked gates are not
+promoted by narrative.
+
+### Operator telemetry and response contract
+
+Receipts and telemetry may expose bounded identifiers, policy/version/digest,
+mode, verdict, duration, blocker/fallback code, and receipt ID only. They must
+exclude raw context, secrets, credentials, tokens, and arbitrary Rhai output.
+On divergence, evaluator failure, receipt loss, compatibility drift, or profile
+shrinkage, the operator response is: freeze promotion; preserve active,
+last-known-good, and run-pin state; capture the receipt; quarantine the tuple;
+invoke Rust atomic rollback; and keep the operation blocked when no valid
+fallback remains.
+
+Release closure requires DocFlow/readiness, TaskFlow graph validation, focused
+quality-gate E2E proof, formatting/check evidence, and parity among this
+protocol, the versioned design, the authority ADR, and the rollout runbook.
+System installation is a separate release-install gate and is not proof that
+the documentation or Rust authority thresholds passed.
+
 | Policy ID | Reviewed additive profiles | Rust-required authority |
 |---|---|---|
 | `rhai.runtime.authority` | `contract`, `security` | registry, schema, capability and final verdict |

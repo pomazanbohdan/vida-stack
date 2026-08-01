@@ -206,15 +206,71 @@ always retained even when the manifest declares a narrower additive set.
   - `check`
   - `doctor`
 
+### Rollout-closeout proof gates
+
+Promotion is admitted only when every threshold below is evidenced for the
+exact `(policy_id, version, content_digest)` tuple:
+
+| Gate | Threshold | Rust-owned consequence |
+|---|---|---|
+| Schema/ABI/compatibility | 100% of typed fields, ABI checks, dependency closure, and declared limits pass | reject the candidate; no promotion receipt |
+| Deterministic replay | 100% of the bounded replay corpus reproduces verdict, effective profiles, and proof digest | block `promotable` admission |
+| Shadow parity | 100% Rust final-verdict agreement; additive differences must be enumerated and leave the Rust verdict unchanged | unexplained divergence blocks promotion |
+| Safety/effects | 0 forbidden capabilities, effects, ownership violations, or raw-secret/raw-evidence emissions | quarantine the version and fail closed |
+| Evaluator health | 0 timeouts, panics, invalid outputs, or sandbox errors in the gate corpus | select last-known-good or immutable Rust baseline |
+| Receipt completeness | 100% of evaluations and lifecycle transitions have durable receipts | block activation and release admission |
+| Quality profiles | all eight registered profiles remain present; `effective_profiles` is the Rust union and never loses a required profile | reject profile shrinkage or Rhai authority |
+
+The additive canary samples the complete bounded corpus and, when available,
+at least 100 production-like evaluations. A canary is non-authoritative: it
+may recommend additive profiles only; Rust still validates inputs, computes the
+effective union, enforces capabilities and effects, persists state, and emits
+the final verdict. Any threshold violation freezes promotion and routes to the
+rollback/quarantine procedure; there is no direct `shadow -> active` jump.
+
 ## Observability
 - Log policy ID/version/digest, mode, run pin, gate verdict, fallback reason, and receipt ID without logging secrets or arbitrary script output.
 - Count shadow divergence, active denials, evaluator failures, promotion failures, failovers, rollbacks, and pinned-resume blocks.
 - Persist append-only transition receipts and retain the prior last-known-good pointer.
 
+### Compatibility, telemetry, and operator response
+
+Compatibility is exact: the persisted schema/ABI version, dependency closure,
+resource limits, and content digest must validate against the Rust host before a
+candidate can be resumed or promoted. A missing, stale, incompatible, or
+digest-mismatched pin is a blocker, not a migration hint. Existing run pins are
+immutable; only an explicit Rust/DB recovery transaction may repair one.
+
+Telemetry must expose counters and bounded dimensions for shadow divergence,
+evaluator errors/timeouts, invalid output, profile-union changes, promotion or
+activation rejection, failover, rollback, quarantine, and pinned-resume blocks.
+Receipts may contain identifiers, digests, modes, verdicts, durations, blocker
+codes, and fallback states only; raw context, secrets, credentials, and
+arbitrary Rhai output are forbidden.
+
+Operator response is deterministic: freeze promotion, preserve the active and
+last-known-good pointers plus run pins, capture the receipt and blocker code,
+quarantine the failed tuple, then let Rust atomically roll back to the valid
+last-known-good bundle or immutable baseline. If neither validates, keep the
+operation blocked and escalate; never select the latest file/row or rewrite a
+pin.
+
+### Release gate
+
+Release admission requires current DocFlow/readiness, TaskFlow graph validity,
+the focused quality-gate E2E matrix, Rust formatting/check evidence, and
+cross-document parity for this design, the authority ADR, the ZOMBIE-D protocol,
+and the operator runbook. Missing or blocked evidence remains a release blocker;
+it cannot be replaced by a close-reason sentence. System installation is a
+separate final gate and must use the canonical release-install procedure only
+after this evidence bundle is attached.
+
 ## Rollout Strategy
 - Register and validate all six policies in `shadow`; compare against the current Rust decision path.
-- Promote one policy/version at a time after replay, parity, resource, security, and operator gates pass.
-- Activate by an atomic DB pointer change; monitor receipts and divergence; rollback to last-known-good on any failed invariant.
+- Promote one policy/version at a time after the thresholds above, replay, parity, resource, security, and operator gates pass.
+- Run the quality-profile sequence `off -> shadow -> additive_canary -> active`; canary output never authorizes effects or changes pointers.
+- Activate by an atomic Rust-owned DB pointer change only after the activation receipt is durable; monitor receipts and divergence continuously.
+- On any failed invariant, freeze promotion, quarantine the failed tuple, and rollback atomically to last-known-good or the immutable Rust baseline.
 - Existing runs remain pinned; new runs use the active bundle only after the activation receipt is durable.
 
 ## Future Considerations

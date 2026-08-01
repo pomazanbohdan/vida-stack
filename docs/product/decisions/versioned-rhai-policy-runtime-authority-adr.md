@@ -137,6 +137,40 @@ to last-known-good or immutable baseline. Shadow receipts contain policy
 identity, input/output digests, duration, agreement/diff, and error/fallback
 codes only; never raw context, secrets, or arbitrary Rhai output.
 
+### Rollout-closeout thresholds and release admission
+
+The following thresholds are part of this authority decision and apply to the
+exact immutable policy tuple:
+
+| Gate | Required threshold | Authority effect |
+|---|---|---|
+| Typed compatibility | 100% schema, ABI, dependency, digest, and limit checks pass | Rust rejects the candidate |
+| Replay | 100% deterministic replay agreement for verdict, effective profiles, and proof digest | no `promotable` state |
+| Shadow parity | 100% Rust final-verdict agreement; only enumerated additive recommendations may differ | unexplained drift blocks promotion |
+| Safety and health | 0 forbidden effects/capabilities, timeouts, panics, invalid outputs, or raw-secret/raw-evidence emissions | quarantine and fail closed |
+| Receipts | 100% evaluation and lifecycle transitions durable before pointer change | no activation or release |
+| Profile union | all eight registered profiles retained; Rust computes `Rust_required ∪ explicit_profiles ∪ Rhai_additions` | profile removal is rejected |
+
+The additive canary must exercise the complete bounded corpus and, where a
+production-like sample exists, at least 100 evaluations. Canary output is
+strictly non-authoritative: Rhai can recommend additive profiles only; Rust
+validates, enforces, persists, rolls back, and emits the final verdict. The
+quality-profile path is monotonic (`off -> shadow -> additive_canary -> active`)
+and has no direct shadow-to-active transition.
+
+Compatibility is exact, not best-effort. A missing, stale, incompatible, or
+digest-mismatched run pin blocks resume; only an explicit Rust/DB transaction
+with a durable receipt may repair it. Existing pins are never rewritten during
+rollback. Operator telemetry is limited to policy identifiers, digests, modes,
+verdicts, durations, blocker/fallback codes, and receipt IDs; raw context,
+secrets, credentials, and arbitrary Rhai output are excluded.
+
+Release admission requires current DocFlow/readiness, graph validation, focused
+quality-gate E2E evidence, formatting/check evidence, and parity across this ADR,
+the versioned design, the ZOMBIE-D protocol, and the rollout runbook. Missing
+proof is a blocker. System installation is a separate canonical release-install
+gate after the evidence bundle is attached.
+
 The canonical cross-document matrix is:
 
 | Policy ID | Reviewed additive profiles | Rust-required authority |
@@ -185,6 +219,9 @@ always retained even when the manifest declares a narrower additive set.
   activation receipt is durable.
 - Operator surfaces must expose policy ID/version/digest, mode, pin, verdict,
   fallback reason, and receipt ID without arbitrary script output or secrets.
+- A threshold breach freezes promotion, preserves active/last-known-good
+  pointers and run pins, quarantines the failed tuple, and invokes Rust-owned
+  atomic rollback; if no valid fallback exists, the operation remains blocked.
 
 ## Non-Goals
 
