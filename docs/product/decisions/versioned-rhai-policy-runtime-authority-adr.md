@@ -118,6 +118,13 @@ incompatible pinned bundles fail closed with `policy_pinned_bundle_missing`;
 fallback is only the receipt-backed last-known-good bundle or immutable Rust
 baseline. Existing run pins are immutable and rollback does not rewrite them.
 
+Quality-gate fail-closed triggers are unknown policy/profile IDs, schema/type
+mismatch, oversized context or values, evaluator timeout, sandbox error, invalid
+Rhai output, missing/incompatible pin, or receipt failure; Rust falls back only
+to last-known-good or immutable baseline. Shadow receipts contain policy
+identity, input/output digests, duration, agreement/diff, and error/fallback
+codes only; never raw context, secrets, or arbitrary Rhai output.
+
 The canonical cross-document matrix is:
 
 | Policy ID | Reviewed additive profiles | Rust-required authority |

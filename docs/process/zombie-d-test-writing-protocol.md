@@ -312,6 +312,13 @@ last-known-good bundle or immutable Rust baseline, and rollback never rewrites
 existing run pins. Keep this policy/profile/authority matrix identical to the
 versioned Rhai design and authority ADR.
 
+Quality-gate fail-closed triggers are unknown policy/profile IDs, schema/type
+mismatch, oversized context or values, evaluator timeout, sandbox error, invalid
+Rhai output, missing/incompatible pin, or receipt failure; Rust falls back only
+to last-known-good or immutable baseline. Shadow receipts contain policy
+identity, input/output digests, duration, agreement/diff, and error/fallback
+codes only; never raw context, secrets, or arbitrary Rhai output.
+
 | Policy ID | Reviewed additive profiles | Rust-required authority |
 |---|---|---|
 | `rhai.runtime.authority` | `contract`, `security` | registry, schema, capability and final verdict |

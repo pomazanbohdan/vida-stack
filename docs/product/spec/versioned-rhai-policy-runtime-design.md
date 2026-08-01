@@ -99,6 +99,13 @@ fails closed with `policy_pinned_bundle_missing`; fallback is limited to the
 receipt-backed last-known-good bundle or an immutable Rust baseline. Run pins
 are immutable and rollback never rewrites them.
 
+Quality-gate fail-closed triggers are unknown policy/profile IDs, schema/type
+mismatch, oversized context or values, evaluator timeout, sandbox error, invalid
+Rhai output, missing/incompatible pin, or receipt failure; Rust falls back only
+to last-known-good or immutable baseline. Shadow receipts contain policy
+identity, input/output digests, duration, agreement/diff, and error/fallback
+codes only; never raw context, secrets, or arbitrary Rhai output.
+
 The cross-document authority matrix is canonical and must remain identical in
 the ADR and ZOMBIE-D protocol:
 
