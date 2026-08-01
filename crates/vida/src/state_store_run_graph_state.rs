@@ -83,9 +83,7 @@ pub(crate) struct ResumabilityCapsuleRow {
     pub(crate) updated_at: String,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, SurrealValue,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, SurrealValue)]
 #[serde(deny_unknown_fields)]
 pub struct RunGraphPolicyPin {
     pub policy_id: String,
@@ -93,11 +91,18 @@ pub struct RunGraphPolicyPin {
     pub content_digest: String,
 }
 
+fn valid_run_graph_policy_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 impl RunGraphPolicyPin {
     pub(crate) fn normalize(self) -> Result<Self, &'static str> {
         if self.policy_id.trim().is_empty()
             || self.version == 0
-            || self.content_digest.trim().is_empty()
+            || !valid_run_graph_policy_digest(self.content_digest.trim())
         {
             return Err("policy_pinned_bundle_missing");
         }
@@ -992,15 +997,24 @@ mod tests {
         );
         assert_eq!(
             RunGraphPolicyPin {
+                policy_id: "rhai.runtime.quality-gate".to_string(),
+                version: 1,
+                content_digest: "stale-digest".to_string(),
+            }
+            .normalize(),
+            Err("policy_pinned_bundle_missing")
+        );
+        assert_eq!(
+            RunGraphPolicyPin {
                 policy_id: "  rhai.runtime.authority ".to_string(),
                 version: 7,
-                content_digest: "  digest-a  ".to_string(),
+                content_digest: format!("  {}  ", "a".repeat(64)),
             }
             .normalize(),
             Ok(RunGraphPolicyPin {
                 policy_id: "rhai.runtime.authority".to_string(),
                 version: 7,
-                content_digest: "digest-a".to_string(),
+                content_digest: "a".repeat(64),
             })
         );
     }

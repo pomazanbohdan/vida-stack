@@ -4,8 +4,8 @@ use crate::taskflow_routing::{
     route_primary_backend_hint_from_route, runtime_assignment_backend_for_route,
 };
 use crate::{
-    StateStore, json_bool, json_lookup, json_string, json_string_list,
-    read_or_sync_launcher_activation_snapshot,
+    json_bool, json_lookup, json_string, json_string_list,
+    read_or_sync_launcher_activation_snapshot, StateStore,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -33,6 +33,13 @@ pub(crate) struct PolicyPin {
     pub(crate) policy_id: String,
     pub(crate) version: u32,
     pub(crate) content_digest: String,
+}
+
+fn valid_policy_pin_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn resolve_policy_pin(bundle: &serde_json::Value) -> serde_json::Value {
@@ -67,6 +74,9 @@ pub(crate) fn resolve_policy_pin(bundle: &serde_json::Value) -> serde_json::Valu
         else {
             continue;
         };
+        if !valid_policy_pin_digest(content_digest) {
+            continue;
+        }
         return serde_json::to_value(PolicyPin {
             policy_id: policy_id.to_string(),
             version,
@@ -849,19 +859,47 @@ pub(crate) fn summarize_agent_route_from_snapshot_with_authority(
 mod tests {
     use super::{
         build_executor_backend_admissibility_matrix, build_runtime_execution_plan_from_snapshot,
-        build_runtime_lane_selection_from_bundle, summarize_agent_route_from_snapshot,
-        summarize_agent_route_from_snapshot_with_authority, summarize_execution_truth_for_route,
+        build_runtime_lane_selection_from_bundle, resolve_policy_pin,
+        summarize_agent_route_from_snapshot, summarize_agent_route_from_snapshot_with_authority,
+        summarize_execution_truth_for_route,
     };
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::project_activator_surface::read_yaml_file_checked;
     use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::{Cli, build_compiled_agent_extension_bundle_for_root, run};
+    use crate::{build_compiled_agent_extension_bundle_for_root, run, Cli};
     use clap::Parser;
     use std::fs;
     use std::path::Path;
     use std::process::ExitCode;
+
+    #[test]
+    fn resolve_policy_pin_rejects_non_digest_resume_pins() {
+        let invalid = serde_json::json!({
+            "policy_runtime": {
+                "active": {
+                    "policy_id": "rhai.runtime.quality-gate",
+                    "version": 1,
+                    "content_digest": "stale-digest"
+                }
+            }
+        });
+        assert_eq!(resolve_policy_pin(&invalid), serde_json::Value::Null);
+
+        let valid_digest = "a".repeat(64);
+        let valid = serde_json::json!({
+            "policy_runtime": {
+                "active": {
+                    "policy_id": "rhai.runtime.quality-gate",
+                    "version": 1,
+                    "content_digest": valid_digest
+                }
+            }
+        });
+        assert_eq!(resolve_policy_pin(&valid)["version"], 1);
+        assert_eq!(resolve_policy_pin(&valid)["content_digest"], valid_digest);
+    }
 
     #[test]
     fn summarize_agent_route_prefers_explicit_executor_fields() {
@@ -972,14 +1010,12 @@ mod tests {
             &authority,
         );
         assert_eq!(summary["status"], "blocked");
-        assert!(
-            summary["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.iter().any(|code| {
-                    code.as_str()
-                        .is_some_and(|code| code.starts_with("agent_extensions_route_missing:"))
-                }))
-        );
+        assert!(summary["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| {
+                code.as_str()
+                    .is_some_and(|code| code.starts_with("agent_extensions_route_missing:"))
+            })));
     }
 
     #[test]
@@ -1089,11 +1125,9 @@ mod tests {
         let coach_fanout = coach["fanout_executor_backends"]
             .as_array()
             .expect("coach fanout should be an array");
-        assert!(
-            coach_fanout
-                .iter()
-                .any(|value| { value.as_str() == Some(configured_executor("coach")) })
-        );
+        assert!(coach_fanout
+            .iter()
+            .any(|value| { value.as_str() == Some(configured_executor("coach")) }));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -1113,11 +1147,9 @@ mod tests {
         let review_ensemble_fanout = review_ensemble["fanout_executor_backends"]
             .as_array()
             .expect("review ensemble fanout should be an array");
-        assert!(
-            review_ensemble_fanout
-                .iter()
-                .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) })
-        );
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) }));
     }
 
     #[test]
@@ -1323,12 +1355,10 @@ mod tests {
         assert_eq!(selection.selected_role, "worker");
         assert!(selection.conversational_mode.is_none());
         assert_eq!(selection.reason, "auto_explicit_implementation_request");
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "write-producing" || term == "move the test")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "write-producing" || term == "move the test"));
     }
 
     #[test]
@@ -1373,14 +1403,10 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "implement"
-                    || term == "bounded patch"
-                    || term == "code change")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "implement" || term == "bounded patch" || term == "code change"));
     }
 
     #[test]
@@ -1425,12 +1451,10 @@ mod tests {
             Some("scope_discussion")
         );
         assert_eq!(selection.reason, "auto_keyword_match");
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "scope" || term == "spec" || term == "acceptance")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "scope" || term == "spec" || term == "acceptance"));
     }
 
     #[test]
@@ -1475,18 +1499,14 @@ mod tests {
             selection.reason,
             "auto_explicit_implementation_request_override"
         );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "repair" || term == "fix" || term == "regression test")
-        );
-        assert!(
-            selection
-                .matched_terms
-                .iter()
-                .any(|term| term == ".rs" || term == "crates/" || term == "rust file")
-        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "repair" || term == "fix" || term == "regression test"));
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == ".rs" || term == "crates/" || term == "rust file"));
     }
 
     #[test]

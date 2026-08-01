@@ -636,12 +636,12 @@ impl PolicyLifecycleStore {
                 .into_iter()
                 .map(|record| (record.bundle_id, record.mode))
                 .collect(),
-            run_pins: run_pins
-                .into_iter()
-                .map(|pin| (pin.run_id.clone(), pin))
-                .collect(),
+            run_pins: BTreeMap::new(),
             shadow_receipts: BTreeMap::new(),
         };
+        for pin in run_pins {
+            store.record_run_pin(pin)?;
+        }
         for receipt in shadow_receipts {
             store.record_shadow_receipt(receipt)?;
         }
@@ -788,6 +788,28 @@ mod tests {
         assert_eq!(restarted.mode("one"), Ok(PolicyMode::Shadow));
         assert_eq!(restarted.run_pin("run-one").unwrap().bundle_id, "one");
         assert_eq!(restarted.snapshot().shadow_receipts.len(), 1);
+    }
+
+    #[test]
+    fn restart_rejects_persisted_run_pin_that_no_longer_matches_bundle() {
+        let mut store = PolicyLifecycleStore::default();
+        store.import_bundle(bundle("one")).unwrap();
+        store
+            .record_run_pin(PolicyRunPin {
+                run_id: "run-one".to_string(),
+                bundle_id: "one".to_string(),
+                policy_id: "policy".to_string(),
+                version: 1,
+                content_digest: digest("one"),
+            })
+            .unwrap();
+        let mut snapshot = store.snapshot();
+        snapshot.run_pins[0].content_digest = digest("stale");
+        assert!(matches!(
+            PolicyLifecycleStore::from_snapshot(snapshot),
+            Err(PolicyLifecycleStoreError::RunPinDigestMismatch { run_id })
+                if run_id == "run-one"
+        ));
     }
 
     #[test]
