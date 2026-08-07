@@ -7227,10 +7227,9 @@ fn resume_inputs_from_dispatch_packet_without_store(
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
-    let policy_bundle_ref = crate::state_store::policy_bundle_ref_from_execution_plan(
-        &role_selection.execution_plan,
-    )
-    .or_else(|| crate::state_store::policy_bundle_ref_from_execution_plan(&packet));
+    let policy_bundle_ref =
+        crate::state_store::policy_bundle_ref_from_execution_plan(&role_selection.execution_plan)
+            .or_else(|| crate::state_store::policy_bundle_ref_from_execution_plan(&packet));
     let receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),

@@ -1,0 +1,18 @@
+{
+  "description": "Project-local Codex step checkpoint hook.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/step_checkpoint.py\"",
+            "commandWindows": "C:\\Users\\pomaz\\AppData\\Local\\Programs\\Python\\Launcher\\py.exe -3 \"C:\\project\\vida-stack\\.codex\\hooks\\step_checkpoint.py\"",
+            "timeout": 5,
+            "statusMessage": "Updating Codex step checkpoint"
+          }
+        ]
+      }
+    ]
+  }
+}

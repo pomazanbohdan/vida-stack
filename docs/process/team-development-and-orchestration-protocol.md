@@ -756,8 +756,9 @@ For the active Release-1 execution line:
 After bootstrap, development agents must know immediately:
 
 1. project-local TaskFlow runtime is entered through `vida taskflow`,
-2. task lifecycle truth lives in `.vida/state/taskflow-state.db`,
-3. lifecycle/task mutation goes through `vida taskflow task`,
+2. task lifecycle truth is the config/runtime-resolved authoritative state root,
+3. lifecycle/task mutation uses the project-local TaskFlow command surface selected
+   by current runtime/help authority, not a legacy subcommand assumption,
 4. JSONL is bounded import/export only,
 5. delivery-task packets are the only lawful delegated write unit,
 6. the default `vida taskflow` surface is expected to resolve to the project-local runtime path for this repository rather than an installed shim rooted elsewhere.
@@ -793,10 +794,10 @@ After bootstrap, development agents must know immediately:
 artifact_path: process/team-development-and-orchestration-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-07-22'
+artifact_revision: '2026-07-27'
 schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-07-22T16:22:42+03:00
+updated_at: 2026-07-27T00:00:00+03:00
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

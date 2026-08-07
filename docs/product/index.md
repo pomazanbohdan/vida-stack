@@ -39,6 +39,8 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 11. External runtime adapter decisions: [decisions/ldr-061-restate-adapter-mapping-adr.md](decisions/ldr-061-restate-adapter-mapping-adr.md)
 12. Requirements control-plane decisions: [control/decisions/enterprise-requirements-control-plane-decision-record.md](control/decisions/enterprise-requirements-control-plane-decision-record.md)
 13. Product wiki projection: [wiki/index.md](wiki/index.md)
+14. Versioned Rhai policy runtime design: [spec/versioned-rhai-policy-runtime-design.md](spec/versioned-rhai-policy-runtime-design.md)
+15. Versioned Rhai policy runtime authority ADR: [decisions/versioned-rhai-policy-runtime-authority-adr.md](decisions/versioned-rhai-policy-runtime-authority-adr.md)
 
 ## Repository Project Split
 

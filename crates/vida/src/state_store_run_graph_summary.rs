@@ -1,6 +1,6 @@
+use super::state_store_run_graph_state::RunGraphPolicyPin;
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
-use super::state_store_run_graph_state::RunGraphPolicyPin;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
 };

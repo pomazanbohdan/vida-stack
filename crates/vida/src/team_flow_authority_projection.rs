@@ -2048,7 +2048,7 @@ mod tests {
         derive_evidence_requirements, normalize_command, resolve_work_item_flow_bindings,
         source_value, test_support::canonical_compiled_bundle, validate_source_dev_team,
     };
-    use serde_json::{Map, Value, json};
+    use serde_json::{json, Map, Value};
 
     #[test]
     fn evidence_requirement_derivation_matrix_is_typed_and_conflict_safe() {

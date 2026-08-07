@@ -37,6 +37,10 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 9. wave-first epic optimization, three-step task execution, and post-task
    scorecard/checklist routing from `project-orchestrator-operating-protocol.md`.
 10. codebase graph/search routing: use `ccc` for semantic discovery after index-freshness checks; run `ctx_compose` before `ctx_search` for confirmation/context; use `rg` for exact/high-recall fallback; keep `codebase-memory-mcp` optional for fresh graph/call/architecture context and `lean-ctx` authoritative for current file reads, shell commands, and compressed logs. Search output is not proof.
+11. when a defect event is present, restore the open family/contour ledger before
+    counting events or selecting a point fix; the TRACE protocol remains the
+    owner of family identity, pool scheduling, proof, residual classification,
+    and reset law.
 
 ## Runtime Summary
 
@@ -59,6 +63,8 @@ After reading this bundle, the orchestrator should be able to answer:
 13. which post-task checklist items must be proven before selecting unrelated
     work.
 14. whether codebase discovery should start with `ccc`, continue through `ctx_compose` and `ctx_search`, or use `rg` fallback; `codebase-memory-mcp` remains optional graph/call/architecture context and `lean-ctx` remains current-worktree authority.
+15. whether any open defect families or contours were restored and whether their
+    next research/root-batch posture is parallel-safe or sequential.
 
 ## Expansion Rule
 
@@ -99,5 +105,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-startup-bundle.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-07-01T21:45:00+03:00
+updated_at: 2026-07-27T00:00:00+03:00
 changelog_ref: project-orchestrator-startup-bundle.changelog.jsonl

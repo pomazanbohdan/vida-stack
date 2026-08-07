@@ -1,8 +1,9 @@
-//! Standalone semantic-routing shadow contract.
+//! Standalone semantic-routing shadow and active-canary contract.
 //!
 //! This module deliberately has no runtime authority.  The native router owns
 //! tokenization, redaction, catalog lookup, and hard candidate constraints;
-//! this file only projects bounded facts and classifies shadow differences.
+//! this file only projects bounded facts, gates the VIDA canary, and classifies
+//! shadow differences; native routing remains authoritative.
 
 use std::fmt;
 

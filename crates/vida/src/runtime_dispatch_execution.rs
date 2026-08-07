@@ -10802,9 +10802,9 @@ host_tool_bridge:
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("business_analyst".to_string()),
-                selected_backend: Some("internal_subagents".to_string()),
-                policy_bundle_ref: None,
-                recorded_at: "2026-04-11T00:00:00Z".to_string(),
+            selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: None,
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
         }
     }
 
@@ -11095,9 +11095,9 @@ dispatch:
                 downstream_dispatch_last_target: None,
                 activation_agent_type: Some("worker".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("internal_subagents".to_string()),
-            policy_bundle_ref: None,
-            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+                selected_backend: Some("internal_subagents".to_string()),
+                policy_bundle_ref: None,
+                recorded_at: "2026-04-11T00:00:00Z".to_string(),
             },
             serde_json::json!({
                 "selected_cli_execution_class": "internal"

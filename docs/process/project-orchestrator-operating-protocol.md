@@ -119,7 +119,7 @@ Project residue:
 
 1. keep the current vida-stack active task, parent epic, priority reason, owned/read-only paths, proof target, role chain, and sequential/parallel posture visible before write-producing work,
 2. use TaskFlow updates rather than chat-only notes for PRs, downstream reports, runtime defects, CI failures, release tasks, optimizations, documentation/process work, and operator-surface gaps,
-3. use `META` for multi-defect or multi-source batch planning before selecting the shared invariant and proof window,
+3. use `META` for multi-defect or multi-source batch planning; for two related defects, restore the TRACE contour pool before selecting the shared invariant and proof window,
 4. prefer local focused proof and documented script modes before expensive workspace, release, installer, or CI gates,
 5. treat CI after push as diagnostic unless the active bounded unit is release/mainline/installer/CI architecture admission,
 6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
@@ -199,7 +199,7 @@ Before any bounded work source moves into implementation, the orchestrator must:
 Generic delegation, packet, lane, exception, and host-agent bridge law is owned by the runtime/agent-system protocols. This project process doc keeps only the vida-stack routing overlay:
 
 1. normal write-producing work is shaped as one bounded TaskFlow packet and routed through the configured role chain when the runtime can execute it,
-2. the project-preferred chain is analyst -> test_author when needed -> coach_test_gate when needed -> developer/implementer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis,
+2. the selected configured flow's explicit ordered lane projection is authoritative; conditional lanes remain visible with their inclusion result, and this document does not define a fallback role chain,
 3. role, carrier, model, cost, reasoning effort, host CLI, and worktree decisions come from `vida.config.yaml`, agent-extension registries, and runtime assignment evidence,
 4. keep work local only for shaping, read-only analysis, proof-only checks, or a recorded bounded recovery/exception path,
 5. if runtime delegation is blocked, record the runtime defect and use the defective-runtime overlay only until canonical dispatch/continuation is restored,
@@ -253,7 +253,7 @@ Use this table by default:
 | Work shape | Default depth | Default lane sequence | Notes |
 |---|---|---|---|
 | bounded read-only analysis | `delivery_task` | orchestrator or verifier-only | keep local when no writer is needed |
-| one coherent write packet | `delivery_task` | orchestrator -> analyst -> test_author when required -> coach_test_gate when required -> developer/implementer -> coach_implementation_gate -> duplication_reviewer -> tester -> prover -> release_closure | normal path |
+| one coherent write packet | `delivery_task` | orchestrator -> selected configured lane projection -> synthesis | runtime/config authority determines included lanes and terminal conditions |
 | broad backlog item with one clear owner but unclear done | split to `delivery_task` first | shaping only until lawful | do not dispatch yet |
 | one delivery task still crossing multiple mutable contracts | `execution_block` | orchestrator -> analyst -> bounded lane chain after split | split before dispatch |
 | seam or closure bottleneck | `delivery_task` or `execution_block` | orchestrator -> implementer/verifier -> synthesis | choose by contract tightness |
@@ -275,24 +275,28 @@ The orchestrator must treat root-session tokens and paid/high-reasoning model ca
 
 Default routing:
 
-1. use internal read-only or medium lanes for bounded pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review by default,
-2. use `jcode_nim_cli` with `mistralai/mistral-medium-3.5-128b` as a secondary read-only advisory carrier when an independent second opinion is useful or when root-session token pressure is active,
-3. use internal low (`codex_gpt55_low_write`) for one-scope implementation packets with clear owned paths and focused proof,
-4. use internal medium (`codex_gpt55_medium_write`) for test authoring, regression shaping, ambiguous but bounded implementation, and coach decisions that require more structure than low,
-5. reserve high/xhigh internal profiles for architecture boundary decisions, security/safety review, release readiness, or repeated low/medium failure evidence,
+1. use a configured read-only or medium capability lane for bounded pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review by default,
+2. use a configured secondary advisory carrier only when an independent second opinion is useful, host authorization exists, and runtime admission selects it,
+3. use the cheapest config-selected capable implementer for one-scope packets with clear owned paths and focused proof,
+4. use a config-selected test-author, coach, or verifier capability for regression shaping and proof decisions; do not name a model/profile in this protocol,
+5. reserve higher-cost profiles for architecture boundary decisions, security/safety review, release readiness, or repeated lower-tier failure evidence as selected by config and telemetry,
 6. keep the root orchestrator focused on binding, packet shaping, synthesis, TaskFlow mutation, final validation, and conflict resolution.
 
 Before starting a new bounded task, the orchestrator should decide:
 
-1. whether an internal read-only/medium lane can prefetch read-only context or review likely risks in parallel with local inspection,
-2. whether `jcode_nim_cli` should run the same bounded read-only question as an independent NIM-backed advisory pass,
+1. whether a configured read-only/medium lane can prefetch read-only context or review likely risks in parallel with local inspection,
+2. whether a configured secondary advisory carrier should run the same bounded read-only question as an independent pass,
 3. whether the research stage should use `external_readonly_complete`, `external_patch_proposal`, or both in parallel,
-4. whether the write lane can be delegated to internal low before medium,
-5. whether a medium coach/test-author lane is enough before escalating to high,
+4. whether the write lane can use the cheapest capable admitted carrier before escalating,
+5. whether the selected coach/test-author capability is enough before a higher-cost escalation,
 6. whether the next command can be replaced by a compact runtime surface, snapshot query, or previously refreshed `.vida/exports/tasks.snapshot.jsonl`,
 7. whether similar report items can be batched into one TaskFlow mutation window.
 
-Do not use `vibe_cli` or `jcode_nim_cli` for root-session write authority, task closure, receipt fabrication, or final proof acceptance. Their output is advisory evidence until the orchestrator validates it against source, TaskFlow, runtime receipts, or focused proof. `jcode_nim_cli` remains experimental until `jcode run --json` reports a provider label consistent with `jcode provider current` for the selected NIM model.
+Do not use any advisory carrier or CLI for root-session write authority, task closure,
+receipt fabrication, or final proof acceptance. Advisory output remains evidence
+until the orchestrator validates it against source, TaskFlow, runtime receipts,
+or focused proof; carrier and model identity come from current config/registry
+and runtime admission.
 
 ## Wave-First Epic Optimization Rule
 
@@ -710,5 +714,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-07-01T21:45:00+03:00
+updated_at: 2026-07-27T00:00:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

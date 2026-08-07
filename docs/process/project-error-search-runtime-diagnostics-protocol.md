@@ -178,14 +178,19 @@ Adequate output criteria:
 
 ## Multi-Defect Batch Rule
 
-When more than two defects, PR failures, CI failures, runtime blockers, or operator-surface gaps are present:
+When two or more related defects, PR failures, CI failures, runtime blockers, or
+operator-surface gaps are present, apply the Two-Defect Deep-Audit Trigger and
+the contour pool below before selecting a local fix. More than two independent
+events may still be batched when they share an owner, proof window, or release
+gate.
 
-1. cluster by shared invariant before changing code,
-2. identify whether failures are one root cause, dependent blockers, or independent slices,
-3. pick one bounded write slice with the highest unblocking value,
-4. write regression tests for the shared invariant,
-5. batch expensive builds/tests after all tightly related fixes are in place,
-6. keep unrelated dirty files out of the slice.
+1. restore the open family/contour ledger before counting or selecting a fix,
+2. cluster by shared invariant before changing code,
+3. identify whether failures are one root cause, dependent blockers, or independent slices,
+4. pick one bounded root batch with the highest unblocking value,
+5. write regression tests for the shared invariant,
+6. batch expensive builds/tests after all tightly related fixes are in place,
+7. keep unrelated dirty files out of the slice.
 
 Do not run a long full gate after each tiny edit when focused tests can validate the same invariant first.
 
@@ -200,17 +205,29 @@ pool is considered fully closed.
 This trigger is permanent process law for every defect family; it is not a
 one-off session heuristic. Keep a durable, append-only event stream in the
 canonical TaskFlow task/pack artifact (or its referenced artifact) and restore
-the stream before evaluating a new event. The rolling family key is the
-canonical tuple `(invariant_id, owner_id, surface_id)` evaluated inside one
-bounded scope `(pack_id, epic_id, session_id, key_version)`. Canonical ids are
-required; aliases may resolve to canonical ids only through the persisted alias
-map and must never merge two ambiguous owners or surfaces silently.
+the stream before evaluating a new event. Use a two-stage family identity:
+
+1. the provisional family signature is `(defect_type, owner_domain,
+   normalized_transition_pattern, key_version)`; `surface_id` is evidence and
+   must not partition related failures before root ownership is confirmed,
+2. the confirmed family identity is `(invariant_id, owner_id, key_version)` plus
+   the observed `surface_ids`/consumer set; one root cause across surfaces stays
+   one family.
+
+The bounded family scope is `(pack_id, epic_id, key_version)`. If either scope
+id is missing, keep `scope=missing` and block counting rather than substituting
+`session_id`. `session_id` and `worktree_id` remain required provenance, but a
+restart or session handoff must not split a restored pack/epic family.
+Canonical ids are required; aliases may
+resolve to canonical ids only through the persisted alias map and must never
+merge two ambiguous owners or surfaces silently.
 
 ### Trigger, window, and counting
 
 1. A qualifying event is a fresh, evidence-backed defect or proof failure with
-   the same canonical family key. A second qualifying event must be consecutive
-   in that key's bounded pack/epic/session event stream; unrelated keys,
+   the same provisional or confirmed family identity. A second qualifying event
+   must be consecutive in that identity's bounded pack/epic event stream;
+   unrelated keys,
    explicitly excluded events, and a completed reset close the sequence.
 2. The first counted event opens the rolling window (`family_count=1`) and keeps the
    normal bounded slice available only while its owner and proof target remain
@@ -303,11 +320,30 @@ fields (unknown values remain explicit `missing`):
    missing or contradictory rows keep `reset.state=not_ready`.
 6. Run a read-only residual sweep for the same pattern across related files,
    helpers, adapters, persisted snapshots, fixtures, operator output, help,
-   next-action text, templates, schemas, and docs. Classify every result and
-   create/update a follow-up for residuals outside `root_batch`.
+   next-action text, templates, schemas, and docs. Classify every result as
+   `eliminated_by_root`, `inside_root_batch`, `independent`, `blocked`, or
+   `follow_up`; create/update a follow-up for residuals outside `root_batch`.
 7. Set `reset.state=ready` only when the existing Two-Defect reset contract is
    satisfied and the artifact names the closing proof. Append the reset event;
    restart, reassignment, alias changes, or artifact deletion never reset it.
+
+#### Contour Pool Scheduling
+
+Maintain one open contour pool for every provisional or confirmed family in the
+current pack/epic scope. Build a small dependency DAG before dispatch:
+
+1. one node represents one open contour family;
+2. add an edge when contours share an authority domain, owned path, conflict
+   domain, persisted artifact, proof fixture, or dependency;
+3. contours without an edge may run read-only axis research concurrently;
+4. root-batch writes may run concurrently only after explicit disjoint admission
+   proves separate owners, paths, conflict domains, and proof artifacts; any
+   edge serializes the root batches;
+5. integrate, attach proof, classify residuals, close, and reset contours through
+   one serialized owner; a new event joins its existing family before any point
+   fix is considered;
+6. refresh the pool after every research return and preserve fair progress so an
+   older open contour cannot be starved by a newer event.
 
 #### Explicit direct fallback
 
@@ -351,6 +387,7 @@ never inferred):
 | `schema_version`, `event_id`, `occurred_at` | Stable schema version, unique id, and UTC timestamp. |
 | `session_id`, `worktree_id`, `pack_id`, `epic_id`, `bounded_unit_id` | Runtime ownership and bounded-scope identity. |
 | `invariant_id`, `owner_id`, `surface_id`, `key_version` | Canonical rolling-family key and versioned scope; aliases include their resolved id and map version. |
+| `defect_type`, `owner_domain`, `normalized_transition_pattern`, `confirmed_family_id`, `surface_ids`, `pool_id`, `conflict_domain` | Provisional/confirmed family identity, cross-surface grouping, contour-pool membership, and scheduling conflict evidence. |
 | `event_kind`, `failure_class`, `proof_kind`, `freshness`, `classification` | Defect/proof shape and `actual_now`/`partially_fixed`/`superseded`/`merged_into_broader_invariant`/`stale_not_reproduced` result. |
 | `sequence_no`, `previous_event_id`, `family_count`, `trigger_state` | Consecutive-window accounting and states `none`, `audit_required`, `audit_active`, `third_point_fix_forbidden`, `reset`. |
 | `command`, `exit_code`, `duration_ms`, `status`, `blocker_codes`, `next_actions` | Reproducible command and operator result; missing fields stay visible. |
@@ -382,6 +419,8 @@ persisted family event stream:
 | `alias` | Alias is unknown, stale, or resolves to multiple owners/surfaces. | `alias_conflict` blocker; do not merge or increment silently; repair the canonical alias map before continuing. |
 | `persisted` | Stop/restart between the first and second events, then reload the same pack/epic/session artifact. | Sequence, count, trigger state, and exclusions survive restart exactly; deletion or reassignment cannot reset the window. |
 | `public` | Shared-root fix exercised through `--help`, default TOON/plain, explicit `--json`, and persisted-state/public CLI fixtures. | All surfaces converge on the same invariant, `blocker_codes`, `next_actions`, `artifact_refs`, audit state, and third-event point-fix prohibition. |
+| `cross_surface` | Two fresh related events on different surfaces with one provisional signature/root candidate. | One family reaches `family_count=2`; `surface_ids` remain members of the same contour and do not create separate local fixes. |
+| `contour_pool` | Two open contours with disjoint versus overlapping conflict domains. | Disjoint contours research in parallel; only explicitly admitted disjoint root batches may write in parallel; overlapping contours serialize. |
 | `third_failure` | A third fresh related event arrives while audit is open. | `family_count>=3`, `third_point_fix_forbidden`; batch extends and only shared-owner root remediation remains admissible. |
 
 The matrix is contract proof, not a replacement for per-task regression
@@ -431,10 +470,10 @@ Stop local fixing and escalate to project META analysis when:
 artifact_path: process/project-error-search-runtime-diagnostics-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-07-22'
+artifact_revision: '2026-07-27'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-error-search-runtime-diagnostics-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-07-22T00:00:00+03:00
+updated_at: 2026-07-27T00:00:00+03:00
 changelog_ref: project-error-search-runtime-diagnostics-protocol.changelog.jsonl

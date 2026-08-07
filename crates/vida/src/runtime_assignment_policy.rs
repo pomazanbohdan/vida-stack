@@ -229,6 +229,108 @@ impl<'a> DispatchContractLane<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MinimumWriteScope {
+    ReadOnly,
+    WorkspaceWrite,
+    GuardRequired,
+}
+
+impl MinimumWriteScope {
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::WorkspaceWrite => 1,
+            Self::GuardRequired => 2,
+        }
+    }
+
+    pub(crate) fn from_write_scope(write_scope: &str) -> Option<Self> {
+        let normalized = write_scope.trim().to_ascii_lowercase();
+        if normalized.is_empty()
+            || matches!(
+                normalized.as_str(),
+                "none" | "read-only" | "read_only" | "readonly" | "readorreview"
+            )
+            || normalized.starts_with("read_or_")
+        {
+            return Some(Self::ReadOnly);
+        }
+        if matches!(
+            normalized.as_str(),
+            "guard_required"
+                | "guard-required"
+                | "guard_required_owned_paths"
+                | "guard-required-owned-paths"
+                | "guard_required_packet_owned_paths"
+                | "guard-required-packet-owned-paths"
+                | "live_guard"
+        ) {
+            return Some(Self::GuardRequired);
+        }
+        matches!(
+            normalized.as_str(),
+            "workspace"
+                | "scoped_only"
+                | "workspace-write"
+                | "workspace_write"
+                | "service_executor"
+                | "orchestrator_native"
+                | "architecture_safe"
+        )
+        .then_some(Self::WorkspaceWrite)
+    }
+}
+
+pub(crate) fn minimum_write_scope_for_task_class(task_class: &str) -> Option<MinimumWriteScope> {
+    match task_class.trim() {
+        "implementation"
+        | "implementation_medium"
+        | "delivery_task"
+        | "test_authoring"
+        | "regression_test" => Some(MinimumWriteScope::WorkspaceWrite),
+        "execution_block" => Some(MinimumWriteScope::GuardRequired),
+        crate::runtime_contract_vocab::TASK_CLASS_VERIFICATION
+        | crate::runtime_contract_vocab::TASK_CLASS_ARCHITECTURE
+        | crate::runtime_contract_vocab::TASK_CLASS_SPECIFICATION
+        | crate::runtime_contract_vocab::TASK_CLASS_COACH
+        | crate::runtime_contract_vocab::DISPATCH_TARGET_ANALYSIS
+        | "review" => Some(MinimumWriteScope::ReadOnly),
+        _ => None,
+    }
+}
+
+pub(crate) fn stricter_write_scope_override(
+    minimum: MinimumWriteScope,
+    override_scope: &str,
+) -> Option<MinimumWriteScope> {
+    let override_scope = MinimumWriteScope::from_write_scope(override_scope)?;
+    (override_scope.rank() >= minimum.rank()).then_some(override_scope)
+}
+
+pub(crate) fn effective_minimum_write_scope(
+    compiled_bundle: &serde_json::Value,
+    task_class: &str,
+) -> Option<MinimumWriteScope> {
+    let minimum = minimum_write_scope_for_task_class(task_class)?;
+    let Some(capability_registry) = compiled_bundle
+        .get("policy_runtime")
+        .and_then(|value| value.get("capability_registry"))
+    else {
+        return Some(minimum);
+    };
+    let Some(project_overrides) = capability_registry.get("project_overrides") else {
+        return Some(minimum);
+    };
+    let Some(project_overrides) = project_overrides.as_object() else {
+        return None;
+    };
+    match project_overrides.get(task_class) {
+        None => Some(minimum),
+        Some(override_scope) => stricter_write_scope_override(minimum, override_scope.as_str()?),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BackendAdmissibilityKey {
     Implementation,
@@ -918,5 +1020,103 @@ mod tests {
             "coach"
         ));
         assert!(!declared_task_class_supports_requested("custom", "coach"));
+    }
+
+    #[test]
+    fn hard_capability_floor_maps_implementation_test_authoring_and_analysis() {
+        assert_eq!(
+            minimum_write_scope_for_task_class("implementation"),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+        assert_eq!(
+            minimum_write_scope_for_task_class("test_authoring"),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+        assert_eq!(
+            minimum_write_scope_for_task_class(
+                crate::runtime_contract_vocab::DISPATCH_TARGET_ANALYSIS
+            ),
+            Some(MinimumWriteScope::ReadOnly)
+        );
+        assert_eq!(
+            minimum_write_scope_for_task_class("execution_block"),
+            Some(MinimumWriteScope::GuardRequired)
+        );
+    }
+
+    #[test]
+    fn hard_capability_floor_distinguishes_readonly_workspace_and_guard() {
+        assert_eq!(
+            MinimumWriteScope::from_write_scope("readonly"),
+            Some(MinimumWriteScope::ReadOnly)
+        );
+        assert_eq!(
+            MinimumWriteScope::from_write_scope("workspace-write"),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+        assert_eq!(
+            MinimumWriteScope::from_write_scope("guard_required"),
+            Some(MinimumWriteScope::GuardRequired)
+        );
+    }
+
+    #[test]
+    fn project_override_must_be_equal_or_stricter_than_framework_floor() {
+        assert_eq!(
+            stricter_write_scope_override(MinimumWriteScope::WorkspaceWrite, "readonly"),
+            None
+        );
+        assert_eq!(
+            stricter_write_scope_override(MinimumWriteScope::WorkspaceWrite, "workspace-write"),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+        assert_eq!(
+            stricter_write_scope_override(MinimumWriteScope::WorkspaceWrite, "guard_required"),
+            Some(MinimumWriteScope::GuardRequired)
+        );
+    }
+
+    #[test]
+    fn effective_floor_uses_framework_when_override_is_absent() {
+        assert_eq!(
+            effective_minimum_write_scope(&serde_json::json!({}), "implementation"),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+    }
+
+    #[test]
+    fn effective_floor_accepts_equal_and_stricter_overrides() {
+        assert_eq!(
+            effective_minimum_write_scope(
+                &serde_json::json!({"policy_runtime":{"capability_registry":{"project_overrides":{"implementation":"workspace-write"}}}}),
+                "implementation"
+            ),
+            Some(MinimumWriteScope::WorkspaceWrite)
+        );
+        assert_eq!(
+            effective_minimum_write_scope(
+                &serde_json::json!({"policy_runtime":{"capability_registry":{"project_overrides":{"implementation":"guard_required"}}}}),
+                "implementation"
+            ),
+            Some(MinimumWriteScope::GuardRequired)
+        );
+    }
+
+    #[test]
+    fn effective_floor_fails_closed_for_weaker_or_unknown_overrides() {
+        assert_eq!(
+            effective_minimum_write_scope(
+                &serde_json::json!({"policy_runtime":{"capability_registry":{"project_overrides":{"implementation":"readonly"}}}}),
+                "implementation"
+            ),
+            None
+        );
+        assert_eq!(
+            effective_minimum_write_scope(
+                &serde_json::json!({"policy_runtime":{"capability_registry":{"project_overrides":{"implementation":"unknown"}}}}),
+                "implementation"
+            ),
+            None
+        );
     }
 }

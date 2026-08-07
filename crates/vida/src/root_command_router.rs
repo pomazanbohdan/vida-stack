@@ -4,11 +4,11 @@ use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, pack_surface, policy_cli, print_root_help,
-    project_activator_surface,
-    proof_surface, protocol_surface, quality_surface, release_surface, requirement_surface,
-    run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, status_surface,
-    task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
-    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
+    project_activator_surface, proof_surface, protocol_surface, quality_surface, release_surface,
+    requirement_surface, run_taskflow_proxy, runtime_web_surface, service_client_cli,
+    session_surface, status_surface, task_surface, AgentArgs, AgentCommand, Cli, CoderCommand,
+    Command, ReleaseCommand, SessionArgs, SessionCommand, StateArgs, StateCommand, StateResetArgs,
+    TaskArgs, TaskCommand,
 };
 use crate::cli::{command_metadata_by_name, command_metadata_for_command};
 use crate::root_state_binding::{

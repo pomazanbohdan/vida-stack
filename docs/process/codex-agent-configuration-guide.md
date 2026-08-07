@@ -398,7 +398,7 @@ At the current repository cut:
 1. project roles, skills, profiles, and flow sets already have active registry surfaces,
 2. team semantics already exist as product law,
 3. project-local Codex multi-agent configuration is materialized under `.codex/config.toml` and `.codex/agents/*.toml`,
-4. the active carrier tiers use `gpt-5.6-luna` for junior/high, middle/xhigh, and senior/max, plus `gpt-5.6-sol` for architect/medium,
+4. the active carrier tiers use `gpt-5.6-luna` for junior/high, middle/xhigh, and senior/max, plus `gpt-5.6-sol` for architect/high,
 5. internal dispatch aliases are materialized as `.codex/agents/development_*.toml`,
 6. Codex App and legacy Codex CLI materialization templates live under `.codex/templates/`,
 7. `vida.config.yaml` records the Codex App config path, Codex App template path, legacy CLI template path, and CLI multi-agent feature argument,

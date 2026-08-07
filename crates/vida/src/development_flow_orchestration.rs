@@ -3,7 +3,7 @@ use crate::runtime_contract_vocab::{
     TASK_CLASS_VERIFICATION,
 };
 pub(crate) use crate::runtime_lane_summary::{
-    RuntimeConsumptionLaneSelection, build_runtime_lane_selection_with_store,
+    build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
 };
 
 fn canonicalize_moved_test_request(request: &str) -> String {
@@ -701,7 +701,7 @@ fn configured_tracked_flow_sequence(
         .filter(|value| !value.is_empty())
     else {
         return Err(vec![
-            "team_flow_authority_tracked_flow_binding_missing".to_string(),
+            "team_flow_authority_tracked_flow_binding_missing".to_string()
         ]);
     };
     let Some(modes) = binding_modes.get(selected) else {
@@ -1978,18 +1978,17 @@ pub(crate) fn flow_activation_shadow_decision(
 #[cfg(test)]
 mod tests {
     use super::{
-        PrePlanTeamFlowSelectionMode, apply_implementation_analysis_route_overrides,
-        build_design_first_tracked_flow_bootstrap, build_resolved_development_dispatch_contract,
-        configured_dev_team_flow_templates, configured_tracked_flow_sequence,
-        derive_configured_dispatch_relations,
+        apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
+        build_resolved_development_dispatch_contract, configured_dev_team_flow_templates,
+        configured_tracked_flow_sequence, derive_configured_dispatch_relations,
         normalize_fresh_selected_or_default_flow_for_execution_plan,
         normalize_selected_flow_for_execution_plan,
         normalize_selected_or_default_flow_for_execution_plan, pre_plan_team_flow_authority,
         request_requires_execution_preparation, supported_autonomous_execution_settings,
-        task_class_for_selection,
+        task_class_for_selection, PrePlanTeamFlowSelectionMode,
     };
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
+    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
 
     fn strict_team_flow_bundle() -> serde_json::Value {
@@ -2353,15 +2352,13 @@ mod tests {
         let authority =
             pre_plan_team_flow_authority(&bundle, &selection, PrePlanTeamFlowSelectionMode::Fresh)
                 .expect("selected alternate authority must compile");
-        assert!(
-            !request_requires_execution_preparation(
-                &bundle,
-                &selection,
-                &authority,
-                &authority.entry_node_id,
-            )
-            .expect("selected flow policy should resolve")
-        );
+        assert!(!request_requires_execution_preparation(
+            &bundle,
+            &selection,
+            &authority,
+            &authority.entry_node_id,
+        )
+        .expect("selected flow policy should resolve"));
     }
 
     #[test]
@@ -2531,11 +2528,9 @@ mod tests {
 
         assert_eq!(contract["status"], "blocked");
         assert_eq!(contract["lane_sequence"], json!([]));
-        assert!(
-            contract["blocker_codes"][0]
-                .as_str()
-                .is_some_and(|code| code.contains("team_flow_authority_missing"))
-        );
+        assert!(contract["blocker_codes"][0]
+            .as_str()
+            .is_some_and(|code| code.contains("team_flow_authority_missing")));
     }
 
     #[test]
@@ -2983,11 +2978,9 @@ mod tests {
         assert!(blockers.iter().any(|code| {
             code == "team_flow_authority_packet_template_kind_missing:missing-node"
         }));
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "team_flow_authority_activation_missing:missing-node")
-        );
+        assert!(blockers
+            .iter()
+            .any(|code| code == "team_flow_authority_activation_missing:missing-node"));
         assert!(blockers.iter().any(|code| {
             code == "team_flow_authority_task_class_packet_template_ambiguous:verification"
         }));
