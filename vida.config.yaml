@@ -24,7 +24,7 @@ language_policy:
 
 taskflow:
   dispatch:
-    enabled: false
+    enabled: false  # `true` заборонено через дефекти в роботі runtime-диспетчера задач.
 
 operator_surfaces:
   taskflow:
