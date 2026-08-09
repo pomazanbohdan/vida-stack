@@ -148,6 +148,8 @@ Add-Case "test_update_hook_binds_placeholder_values_as_arguments" {
     Assert-True ($source.Contains('$command, [string]$FileRecord.path, [string]$FileRecord.package')) "placeholder values are not passed as separate process arguments"
     Assert-True (-not $source.Contains(".Replace('{file}', [string]`$FileRecord.path)")) "file placeholder is still interpolated as raw PowerShell source"
     Assert-True (-not $source.Contains(".Replace('{package}', [string]`$FileRecord.package)")) "package placeholder is still interpolated as raw PowerShell source"
+}
+
 Add-Case "committed_registry_uses_string_compact_references" {
     $registryPath = Join-Path (Get-Location) ".vida/evidence/mutest-audit/file-registry.json"
     $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
