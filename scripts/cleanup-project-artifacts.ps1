@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$Apply,
-    [switch]$SkipLocked
+    [switch]$SkipLocked,
+    [string[]]$OnlyPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -126,6 +127,20 @@ function Test-ProtectedPath {
     }
 
     return $false
+}
+
+function Resolve-OnlyPath {
+    param([string]$RequestedPath)
+
+    if ([string]::IsNullOrWhiteSpace($RequestedPath)) {
+        throw "OnlyPath rejected: path must not be empty."
+    }
+
+    try {
+        return (Resolve-Path -LiteralPath $RequestedPath -ErrorAction Stop).Path
+    } catch {
+        throw "OnlyPath rejected: path does not resolve to an existing path: $RequestedPath"
+    }
 }
 
 
@@ -329,10 +344,40 @@ if (Test-Path -LiteralPath "C:\temp") {
         ForEach-Object { Add-Candidate $candidates $_.FullName }
 }
 
-$results = @()
 $registeredWorktrees = Get-RegisteredWorktreePaths
-
+$discoveredCandidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate) {
+        [void]$discoveredCandidates.Add((Resolve-Path -LiteralPath $candidate).Path)
+    }
+}
+
+$selectedCandidates = @($candidates)
+if ($null -ne $OnlyPath -and $OnlyPath.Count -gt 0) {
+    $selectedCandidates = @()
+    foreach ($requestedPath in $OnlyPath) {
+        $resolvedRequestedPath = Resolve-OnlyPath $requestedPath
+        if (-not $discoveredCandidates.Contains($resolvedRequestedPath)) {
+            throw "OnlyPath rejected: path is not a discovered cleanup candidate: $resolvedRequestedPath"
+        }
+        if (-not (Test-AllowedPath $resolvedRequestedPath)) {
+            throw "OnlyPath rejected: path is not allowlisted: $resolvedRequestedPath"
+        }
+        if (Test-ProtectedPath $resolvedRequestedPath) {
+            throw "OnlyPath rejected: path is protected or live runtime state: $resolvedRequestedPath"
+        }
+        if ($registeredWorktrees.Contains($resolvedRequestedPath)) {
+            throw "OnlyPath rejected: path is a registered worktree: $resolvedRequestedPath"
+        }
+        if (-not ($selectedCandidates -contains $resolvedRequestedPath)) {
+            $selectedCandidates += $resolvedRequestedPath
+        }
+    }
+}
+
+$results = @()
+
+foreach ($candidate in $selectedCandidates) {
     if (-not (Test-Path -LiteralPath $candidate)) {
         continue
     }

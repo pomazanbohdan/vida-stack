@@ -130,6 +130,18 @@ git -C C:\project\vida-stack status --short
 
 6. If the script reports `partial_or_locked`, leave it unless the operator explicitly authorizes closing the owning process.
 
+## Exact-Path Selector
+
+For a bounded cleanup, pass one or more existing paths with `-OnlyPath`:
+
+```powershell
+.\scripts\cleanup-project-artifacts.ps1 -OnlyPath `
+  'C:\project\vida-stack\crates\runtime-path-policy\result.bin', `
+  'C:\project\vida-stack\~\.cache\pre-commit'
+```
+
+The selector resolves each path and fails closed unless it is a discovered, allowlisted candidate that is not protected, live runtime state, or a registered worktree. Filtered dry-run/apply output contains only the requested exact paths. Without `-OnlyPath`, the existing full candidate discovery and safety behavior is unchanged.
+
 ## Automation Rule
 
 Codex automation may run this cleanup every three days with `-Apply -SkipLocked`.
