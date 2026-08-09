@@ -14696,7 +14696,31 @@ steps:
         selection.execution_plan["team_flow_authority"]["selected_flow_id"] = json!(flow_id);
         selection.matched_terms = vec![format!("dev_team_flow_id:{flow_id}")];
         selection.request = agent_lane_test_request().to_string();
+        let fresh_execution_plan =
+            crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+                &selection.compiled_bundle,
+                &selection,
+            );
+        assert_eq!(
+            fresh_execution_plan["team_flow_inclusion"]["status"], "ready",
+            "transition fixture must persist canonical TeamFlow inclusion receipts"
+        );
+        selection.execution_plan["team_flow_inclusion"] =
+            fresh_execution_plan["team_flow_inclusion"].clone();
         selection
+    }
+
+    #[test]
+    fn architect_coder_persisted_authority_requires_inclusion_receipt_contract() {
+        let mut selection = architect_coder_transition_selection(true);
+        selection.execution_plan["team_flow_inclusion"]
+            .as_object_mut()
+            .expect("canonical inclusion contract should be an object")
+            .remove("receipts");
+
+        let blocker = require_persisted_team_flow_authority_for_selection(&selection)
+            .expect_err("persisted TeamFlow authority must reject missing inclusion receipts");
+        assert_eq!(blocker.code, "team_flow_inclusion_receipt_v1_required");
     }
 
     fn persisted_bound_transition_step(
