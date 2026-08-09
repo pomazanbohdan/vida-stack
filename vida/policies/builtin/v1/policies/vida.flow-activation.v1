@@ -1,14 +1,17 @@
-// Bounded flow-activation shadow policy.
-// Rust freezes node ids, order, topology, and required/terminal/proof semantics.
-// Rhai receives one validated optional-node scalar and cannot mutate the flow.
-let has_optional_node = ctx.optional_node != "";
+// Typed TeamFlow inclusion facade. Rust owns the request, evaluator, final
+// decision, receipt, and immutable activation snapshot.
 #{
     schema_version: 1,
-    policy_id: "rhai.runtime.flow-activation",
-    version: 1,
-    mode: "shadow",
-    optional_node: ctx.optional_node,
-    has_optional_node: has_optional_node,
-    topology_mutation_allowed: false,
-    native_effective: true
+    decision_kind: "team_flow_inclusion_v1",
+    allowed: ctx.terminal
+        || ctx.inclusion_rule == "always"
+        || (ctx.inclusion_rule == "optional" && ctx.evidence.optional_requested)
+        || (ctx.inclusion_rule == "when_proof_required" && ctx.evidence.proof_required)
+        || (ctx.inclusion_rule == "when_review_triggered" && ctx.evidence.review_triggered)
+        || (ctx.inclusion_rule == "when_architecture_triggered" && ctx.evidence.architecture_triggered)
+        || (ctx.inclusion_rule == "when_rework_required" && ctx.evidence.rework_required),
+    score: 100,
+    recommendation: "no_change",
+    blockers: [],
+    evidence_refs: []
 }

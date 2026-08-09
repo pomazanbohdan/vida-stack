@@ -13,6 +13,11 @@ use vida_policy_rhai::{build_policy_engine, Limits, PolicyBundle};
 pub const POLICY_RUNTIME_SCHEMA_VERSION: u16 = 1;
 pub const POLICY_RUNTIME_BASELINE_DIGEST: &str = "rust-baseline-v1";
 const QUALITY_GATE_POLICY_ID: &str = "rhai.runtime.quality-gate";
+pub(crate) const TEAM_FLOW_INCLUSION_POLICY_ID: &str = "rhai.runtime.authority";
+const TEAM_FLOW_INCLUSION_POLICY_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../vida/policies/builtin/v1/policies/vida.flow-activation.v1"
+));
 const SUPPORTED_POLICY_IDS: [&str; 7] = [
     "rhai.runtime.authority",
     "rhai.runtime.lifecycle",
@@ -497,6 +502,8 @@ impl PolicyPin {
 #[serde(deny_unknown_fields)]
 pub struct TypedPolicyDecision {
     pub schema_version: u16,
+    #[serde(default)]
+    pub decision_kind: Option<String>,
     pub allowed: bool,
     pub score: i64,
     pub recommendation: String,
@@ -523,6 +530,15 @@ impl TypedPolicyDecision {
         if self.recommendation.trim().is_empty() {
             return Err(PolicyRuntimeError::InvalidDecision(
                 "recommendation must be non-empty".to_string(),
+            ));
+        }
+        if self
+            .decision_kind
+            .as_deref()
+            .is_some_and(|kind| kind != taskflow_authority::team_flow_inclusion::DECISION_KIND)
+        {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "unsupported decision kind".to_string(),
             ));
         }
         if !matches!(
@@ -621,6 +637,13 @@ pub struct PolicyEvaluationOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TeamFlowInclusionPolicyOutcome {
+    pub(crate) decision: taskflow_authority::team_flow_inclusion::InclusionDecisionV1,
+    pub(crate) pin: PolicyPin,
+    pub(crate) receipt: PolicyReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyRuntimeError {
     InvalidPin,
     BundleNotFound(PolicyPin),
@@ -700,6 +723,29 @@ impl Default for PolicyModeFacade {
 }
 
 impl PolicyModeFacade {
+    pub(crate) fn with_builtin_team_flow_inclusion() -> Result<(Self, PolicyPin), PolicyRuntimeError>
+    {
+        let bundle = PolicyBundle::from_json(
+            &serde_json::json!({
+                "schema": 1,
+                "policy_id": TEAM_FLOW_INCLUSION_POLICY_ID,
+                "version": 1,
+                "engine_abi": vida_policy_rhai::bundle::POLICY_ENGINE_ABI,
+                "source": TEAM_FLOW_INCLUSION_POLICY_SOURCE,
+            })
+            .to_string(),
+        )
+        .map_err(|error| PolicyRuntimeError::Evaluation(error.to_string()))?;
+        let digest = bundle
+            .digest()
+            .map_err(|error| PolicyRuntimeError::Evaluation(error.to_string()))?;
+        let mut facade = Self::default();
+        let pin = facade.register(bundle, digest, PolicyMode::Off)?;
+        facade.set_mode(&pin, PolicyMode::Shadow)?;
+        facade.set_mode(&pin, PolicyMode::Active)?;
+        Ok((facade, pin))
+    }
+
     pub fn new(limits: Limits) -> Self {
         Self {
             policies: BTreeMap::new(),
@@ -974,6 +1020,87 @@ impl PolicyModeFacade {
             resolution,
             receipt,
         })
+    }
+
+    pub(crate) fn evaluate_team_flow_inclusion(
+        &mut self,
+        request: &taskflow_authority::team_flow_inclusion::InclusionRequestV1,
+    ) -> Result<TeamFlowInclusionPolicyOutcome, PolicyRuntimeError> {
+        let native = taskflow_authority::team_flow_inclusion::evaluate(request)
+            .map_err(|error| PolicyRuntimeError::InvalidDecision(error.to_string()))?;
+        let pin = PolicyPin::new(
+            request.policy_id.clone(),
+            request.policy_version,
+            request.policy_content_digest.clone(),
+        )?;
+        if pin.policy_id != TEAM_FLOW_INCLUSION_POLICY_ID {
+            return Err(PolicyRuntimeError::InvalidBundlePolicy {
+                expected: TEAM_FLOW_INCLUSION_POLICY_ID.to_string(),
+                observed: pin.policy_id,
+            });
+        }
+        let outcome = self.evaluate(PolicyEvaluationRequest {
+            run_id: request.run_id.clone(),
+            input: serde_json::to_value(request)
+                .map_err(|error| PolicyRuntimeError::InvalidDecision(error.to_string()))?,
+            rust_decision: TypedPolicyDecision {
+                schema_version: POLICY_RUNTIME_SCHEMA_VERSION,
+                decision_kind: Some(
+                    taskflow_authority::team_flow_inclusion::DECISION_KIND.to_string(),
+                ),
+                allowed: native.included,
+                score: 100,
+                recommendation: "no_change".to_string(),
+                additive_profiles: Vec::new(),
+                blockers: Vec::new(),
+                evidence_refs: request.evidence.evidence_refs.clone(),
+            },
+            pinned: Some(pin.clone()),
+        })?;
+        if outcome.decision.decision_kind.as_deref()
+            != Some(taskflow_authority::team_flow_inclusion::DECISION_KIND)
+            || outcome.decision.allowed != native.included
+        {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "team_flow_inclusion_policy_divergence".to_string(),
+            ));
+        }
+        let mut receipt = outcome.receipt;
+        receipt.authorizes_effects = false;
+        receipt.receipt_id = format!(
+            "team-flow-policy:{}",
+            digest_json(&serde_json::json!({
+                "audit_digest": request.audit_digest,
+                "policy_id": receipt.policy_id,
+                "version": receipt.version,
+                "content_digest": receipt.content_digest,
+                "mode": receipt.mode,
+                "input_digest": receipt.input_digest,
+                "output_digest": receipt.output_digest,
+                "agreed": receipt.agreed,
+            }))?
+        );
+        Ok(TeamFlowInclusionPolicyOutcome {
+            decision: native,
+            pin,
+            receipt,
+        })
+    }
+
+    pub(crate) fn verify_team_flow_inclusion_receipt(
+        &mut self,
+        request: &taskflow_authority::team_flow_inclusion::InclusionRequestV1,
+        persisted: &PolicyReceipt,
+    ) -> Result<TeamFlowInclusionPolicyOutcome, PolicyRuntimeError> {
+        let observed = self.evaluate_team_flow_inclusion(request)?;
+        let mut expected = observed.receipt.clone();
+        expected.duration_ms = persisted.duration_ms;
+        if expected != *persisted {
+            return Err(PolicyRuntimeError::InvalidDecision(
+                "team_flow_inclusion_policy_receipt_invalid".to_string(),
+            ));
+        }
+        Ok(observed)
     }
 
     pub fn evaluate(
@@ -1255,6 +1382,7 @@ mod tests {
     fn decision() -> TypedPolicyDecision {
         TypedPolicyDecision {
             schema_version: 1,
+            decision_kind: None,
             allowed: true,
             score: 100,
             recommendation: "no_change".to_string(),
@@ -1262,6 +1390,88 @@ mod tests {
             blockers: Vec::new(),
             evidence_refs: Vec::new(),
         }
+    }
+
+    fn inclusion_request(
+        pin: &PolicyPin,
+        rule: taskflow_authority::team_flow_inclusion::InclusionRule,
+        triggered: bool,
+    ) -> taskflow_authority::team_flow_inclusion::InclusionRequestV1 {
+        use taskflow_authority::team_flow_inclusion::{
+            EvidenceContextV1, InclusionRequestV1, InclusionRule, DECISION_KIND,
+        };
+        InclusionRequestV1 {
+            schema_version: 1,
+            decision_kind: DECISION_KIND.to_string(),
+            task_id: "task-a".to_string(),
+            run_id: "run-inclusion".to_string(),
+            flow_ref: "flow-a".to_string(),
+            node_id: "node-a".to_string(),
+            inclusion_rule: rule,
+            required: false,
+            terminal: false,
+            authority_id: "authority-a".to_string(),
+            authority_content_hash: "authority-hash".to_string(),
+            config_authority_hash: "config-hash".to_string(),
+            registry_authority_hash: "registry-hash".to_string(),
+            source_snapshot_ref: "snapshot-a".to_string(),
+            policy_id: pin.policy_id.clone(),
+            policy_version: pin.version,
+            policy_content_digest: pin.content_digest.clone(),
+            audit_digest: "audit-a".to_string(),
+            evidence: EvidenceContextV1 {
+                schema_version: 1,
+                optional_requested: triggered,
+                proof_required: triggered,
+                review_triggered: triggered,
+                architecture_triggered: triggered,
+                rework_required: triggered,
+                evidence_refs: vec!["evidence-a".to_string()],
+            },
+        }
+    }
+
+    #[test]
+    fn builtin_team_flow_inclusion_seven_rules_and_restart_receipt() {
+        use taskflow_authority::team_flow_inclusion::InclusionRule::*;
+        let (mut facade, pin) = PolicyModeFacade::with_builtin_team_flow_inclusion().unwrap();
+        assert_eq!(pin.policy_id, TEAM_FLOW_INCLUSION_POLICY_ID);
+        assert_eq!(pin.version, 1);
+        assert_eq!(pin.content_digest.len(), 64);
+        for (rule, triggered, expected) in [
+            (Always, false, true),
+            (Never, true, false),
+            (Optional, true, true),
+            (WhenProofRequired, true, true),
+            (WhenReviewTriggered, true, true),
+            (WhenArchitectureTriggered, true, true),
+            (WhenReworkRequired, true, true),
+        ] {
+            let outcome = facade
+                .evaluate_team_flow_inclusion(&inclusion_request(&pin, rule, triggered))
+                .unwrap();
+            assert_eq!(outcome.decision.included, expected);
+            assert_eq!(outcome.receipt.mode, PolicyMode::Active);
+        }
+        facade.finish_run("run-inclusion");
+
+        let request = inclusion_request(&pin, Optional, true);
+        let receipt = facade
+            .evaluate_team_flow_inclusion(&request)
+            .unwrap()
+            .receipt;
+        let (mut restarted, restarted_pin) =
+            PolicyModeFacade::with_builtin_team_flow_inclusion().unwrap();
+        assert_eq!(restarted_pin, pin);
+        restarted
+            .verify_team_flow_inclusion_receipt(&request, &receipt)
+            .unwrap();
+        let mut tampered = receipt;
+        tampered.input_digest.push('0');
+        let (mut restarted, _) = PolicyModeFacade::with_builtin_team_flow_inclusion().unwrap();
+        assert!(restarted
+            .verify_team_flow_inclusion_receipt(&request, &tampered)
+            .is_err());
     }
 
     fn quality_gate_request() -> QualityGateBaselineRequest {

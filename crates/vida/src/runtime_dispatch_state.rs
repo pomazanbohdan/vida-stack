@@ -52,8 +52,12 @@ use crate::taskflow_routing::{
 };
 use crate::team_flow_authority_adapter::{
     compile_team_flow_authority, require_team_flow_execution_authority, resolve_team_flow_node,
-    TeamFlowAuthorityProjection, TeamFlowExecutionAuthority, TeamFlowNodeResolution,
-    TeamFlowResolutionBlocker,
+    TeamFlowAuthorityProjection, TeamFlowExecutionAuthority, TeamFlowNodeProjection,
+    TeamFlowNodeResolution, TeamFlowResolutionBlocker,
+};
+use taskflow_authority::team_flow_inclusion::{
+    EvidenceContextV1, InclusionAuditV1, InclusionReceiptV1, InclusionRequestV1, InclusionRule,
+    DECISION_KIND,
 };
 use taskflow_authority::team_flow_transition::{
     admit_transition, normalize_receipt_outcome, TeamFlowReceipt,
@@ -1688,11 +1692,12 @@ pub(crate) fn require_team_flow_authority_for_selection(
 ) -> Result<TeamFlowExecutionAuthority, TeamFlowResolutionBlocker> {
     let flow_ref =
         validated_selected_flow_ref(role_selection, None, SelectedFlowIdentityMode::Fresh)?;
-    require_team_flow_execution_authority(
+    let authority = require_team_flow_execution_authority(
         &role_selection.compiled_bundle,
         flow_ref.as_deref(),
         None,
-    )
+    )?;
+    activate_team_flow_inclusion_for_selection(authority, role_selection, true)
 }
 
 pub(crate) fn require_persisted_team_flow_authority_for_selection(
@@ -1700,11 +1705,324 @@ pub(crate) fn require_persisted_team_flow_authority_for_selection(
 ) -> Result<TeamFlowExecutionAuthority, TeamFlowResolutionBlocker> {
     let flow_ref =
         validated_selected_flow_ref(role_selection, None, SelectedFlowIdentityMode::Persisted)?;
-    require_team_flow_execution_authority(
+    let authority = require_team_flow_execution_authority(
         &role_selection.compiled_bundle,
         flow_ref.as_deref(),
         None,
-    )
+    )?;
+    activate_team_flow_inclusion_for_selection(authority, role_selection, false)
+}
+
+fn activate_team_flow_inclusion_for_selection(
+    authority: TeamFlowExecutionAuthority,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    fresh: bool,
+) -> Result<TeamFlowExecutionAuthority, TeamFlowResolutionBlocker> {
+    if !fresh
+        && ["policy_pin", "evidence", "receipts", "policy_receipts"]
+            .into_iter()
+            .any(|field| role_selection.execution_plan["team_flow_inclusion"][field].is_null())
+    {
+        return Err(TeamFlowResolutionBlocker::new(
+            "team_flow_inclusion_receipt_v1_required",
+            authority.snapshot.flow_ref.clone(),
+            Vec::new(),
+        ));
+    }
+    let task_id = runtime_consumption_run_id(role_selection);
+    let run_id = role_selection.execution_plan["run_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("team-flow-run:{task_id}"));
+    let invalid_evidence = |field: &str| {
+        TeamFlowResolutionBlocker::new("team_flow_inclusion_evidence_invalid", field, Vec::new())
+    };
+    let (
+        optional_nodes,
+        proof_required,
+        review_triggered,
+        architecture_triggered,
+        rework_required,
+        evidence_refs,
+    ) = if fresh {
+        let terms = role_selection
+            .matched_terms
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        let selected = |node: &TeamFlowNodeProjection| {
+            [
+                &node.node.node_id,
+                &node.node.runtime_role,
+                &node.node.task_class,
+                &node.dispatch_target,
+                &node.dispatch_alias,
+            ]
+            .into_iter()
+            .any(|identity| terms.contains(identity))
+        };
+        let triggered = |rule: InclusionRule| {
+            authority
+                .ordered_nodes()
+                .any(|node| node.node.inclusion_rule == rule.as_str() && selected(&node))
+        };
+        let optional_nodes = authority
+            .ordered_nodes()
+            .filter(|node| {
+                node.node.inclusion_rule == InclusionRule::Optional.as_str() && selected(node)
+            })
+            .map(|node| node.node.node_id)
+            .collect::<BTreeSet<_>>();
+        let rework_state = [
+            role_selection
+                .execution_plan
+                .pointer("/team_flow_receipt/status"),
+            role_selection
+                .execution_plan
+                .pointer("/dispatch_result/decision"),
+            role_selection
+                .execution_plan
+                .pointer("/runtime_dispatch_result/decision"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|value| matches!(value, "rework" | "rework_required"));
+        let selection_digest =
+            taskflow_authority::team_flow_transition::hash_json(&serde_json::json!({
+                "activation_source": role_selection.activation_source,
+                "selection_mode": role_selection.selection_mode,
+                "selected_role": role_selection.selected_role,
+                "matched_terms": terms,
+                "reason": role_selection.reason,
+                "rework_state": rework_state,
+            }));
+        (
+            optional_nodes,
+            triggered(InclusionRule::WhenProofRequired),
+            triggered(InclusionRule::WhenReviewTriggered),
+            triggered(InclusionRule::WhenArchitectureTriggered),
+            rework_state || triggered(InclusionRule::WhenReworkRequired),
+            vec![format!("selection:{selection_digest}")],
+        )
+    } else {
+        let evidence = &role_selection.execution_plan["team_flow_inclusion"]["evidence"];
+        let boolean = |field| {
+            evidence[field]
+                .as_bool()
+                .ok_or_else(|| invalid_evidence(field))
+        };
+        let strings = |field| {
+            serde_json::from_value::<Vec<String>>(evidence[field].clone())
+                .map_err(|_| invalid_evidence(field))
+        };
+        (
+            strings("optional_nodes")?.into_iter().collect(),
+            boolean("proof_required")?,
+            boolean("review_triggered")?,
+            boolean("architecture_triggered")?,
+            boolean("rework_required")?,
+            strings("evidence_refs")?,
+        )
+    };
+    let (mut facade, builtin_pin) =
+        crate::state_store::policy::runtime::PolicyModeFacade::with_builtin_team_flow_inclusion()
+            .map_err(|error| {
+            TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_policy_evaluation_failed",
+                error.to_string(),
+                Vec::new(),
+            )
+        })?;
+    let pin = if fresh {
+        Ok(builtin_pin.clone())
+    } else {
+        serde_json::from_value(
+            role_selection.execution_plan["team_flow_inclusion"]["policy_pin"].clone(),
+        )
+        .map_err(|_| crate::state_store::policy::runtime::PolicyRuntimeError::InvalidPin)
+        .and_then(|pin: crate::state_store::policy::runtime::PolicyPin| {
+            pin.validate()?;
+            Ok(pin)
+        })
+    }
+    .map_err(|error| {
+        TeamFlowResolutionBlocker::new(
+            "team_flow_inclusion_policy_pin_invalid",
+            error.to_string(),
+            Vec::new(),
+        )
+    })?;
+    if pin != builtin_pin {
+        return Err(TeamFlowResolutionBlocker::new(
+            "team_flow_inclusion_policy_pin_invalid",
+            pin.content_digest,
+            vec![builtin_pin.content_digest],
+        ));
+    }
+    let source_snapshot_ref = authority.source_snapshot_ref.clone();
+    let mut evidence_refs = if fresh {
+        [
+            format!("task:{task_id}"),
+            format!("run:{run_id}"),
+            format!("flow:{}", authority.snapshot.flow_ref),
+            format!("authority:{}", authority.authority_id),
+            format!("snapshot:{source_snapshot_ref}"),
+        ]
+        .into_iter()
+        .chain(evidence_refs)
+        .collect()
+    } else {
+        evidence_refs
+    };
+    let audit = InclusionAuditV1 {
+        task_id: task_id.clone(),
+        run_id: run_id.clone(),
+        flow_ref: authority.snapshot.flow_ref.clone(),
+        authority_id: authority.authority_id.clone(),
+        authority_content_hash: authority.authority_content_hash.clone(),
+        config_authority_hash: authority.config_authority_hash.clone(),
+        registry_authority_hash: authority.registry_authority_hash.clone(),
+        source_snapshot_ref: source_snapshot_ref.clone(),
+        policy_id: pin.policy_id.clone(),
+        policy_version: pin.version,
+        policy_content_digest: pin.content_digest.clone(),
+        optional_nodes: authority
+            .ordered_nodes()
+            .filter(|node| optional_nodes.contains(&node.node.node_id))
+            .map(|node| node.node.node_id)
+            .collect(),
+        proof_required,
+        review_triggered,
+        architecture_triggered,
+        rework_required,
+        evidence_refs: evidence_refs
+            .iter()
+            .filter(|reference| !reference.starts_with("audit:"))
+            .cloned()
+            .collect(),
+    };
+    let audit_digest = audit
+        .canonical_digest()
+        .map_err(|error| invalid_evidence(&error.to_string()))?;
+    let audit_ref = format!("audit:{audit_digest}");
+    if fresh {
+        evidence_refs.push(audit_ref);
+    } else if evidence_refs
+        .iter()
+        .filter(|reference| reference.starts_with("audit:"))
+        .count()
+        != 1
+        || !evidence_refs.contains(&audit_ref)
+    {
+        return Err(invalid_evidence("audit_digest"));
+    }
+    let requests = authority
+        .ordered_nodes()
+        .map(|node| {
+            Ok(InclusionRequestV1 {
+                schema_version: 1,
+                decision_kind: DECISION_KIND.to_string(),
+                task_id: task_id.clone(),
+                run_id: run_id.clone(),
+                flow_ref: authority.snapshot.flow_ref.clone(),
+                node_id: node.node.node_id.clone(),
+                inclusion_rule: node.node.inclusion_rule.parse::<InclusionRule>().map_err(
+                    |error| {
+                        TeamFlowResolutionBlocker::new(
+                            "team_flow_inclusion_rule_invalid",
+                            error.to_string(),
+                            Vec::new(),
+                        )
+                    },
+                )?,
+                required: node.node.required,
+                terminal: node.node.terminal,
+                authority_id: authority.authority_id.clone(),
+                authority_content_hash: authority.authority_content_hash.clone(),
+                config_authority_hash: authority.config_authority_hash.clone(),
+                registry_authority_hash: authority.registry_authority_hash.clone(),
+                source_snapshot_ref: source_snapshot_ref.clone(),
+                policy_id: pin.policy_id.clone(),
+                policy_version: pin.version,
+                policy_content_digest: pin.content_digest.clone(),
+                audit_digest: audit_digest.clone(),
+                evidence: EvidenceContextV1 {
+                    schema_version: 1,
+                    optional_requested: optional_nodes.contains(&node.node.node_id),
+                    proof_required,
+                    review_triggered,
+                    architecture_triggered,
+                    rework_required,
+                    evidence_refs: evidence_refs.clone(),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, TeamFlowResolutionBlocker>>()?;
+    if fresh {
+        let policy_receipts = requests
+            .iter()
+            .map(|request| {
+                facade
+                    .evaluate_team_flow_inclusion(request)
+                    .map_err(|error| {
+                        TeamFlowResolutionBlocker::new(
+                            "team_flow_inclusion_policy_evaluation_failed",
+                            error.to_string(),
+                            Vec::new(),
+                        )
+                    })
+                    .map(|outcome| outcome.receipt)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        facade.finish_run(&run_id);
+        authority.activate_inclusion(requests, None, policy_receipts)
+    } else {
+        let receipts = serde_json::from_value::<Vec<InclusionReceiptV1>>(
+            role_selection.execution_plan["team_flow_inclusion"]["receipts"].clone(),
+        )
+        .map_err(|_| {
+            TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_receipt_invalid",
+                authority.snapshot.flow_ref.clone(),
+                Vec::new(),
+            )
+        })?;
+        let policy_receipts =
+            serde_json::from_value::<Vec<crate::state_store::policy::runtime::PolicyReceipt>>(
+                role_selection.execution_plan["team_flow_inclusion"]["policy_receipts"].clone(),
+            )
+            .map_err(|_| {
+                TeamFlowResolutionBlocker::new(
+                    "team_flow_inclusion_policy_receipt_invalid",
+                    authority.snapshot.flow_ref.clone(),
+                    Vec::new(),
+                )
+            })?;
+        if policy_receipts.len() != requests.len() {
+            return Err(TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_policy_receipt_invalid",
+                authority.snapshot.flow_ref.clone(),
+                Vec::new(),
+            ));
+        }
+        for (request, receipt) in requests.iter().zip(&policy_receipts) {
+            facade
+                .verify_team_flow_inclusion_receipt(request, receipt)
+                .map_err(|error| {
+                    TeamFlowResolutionBlocker::new(
+                        "team_flow_inclusion_policy_receipt_invalid",
+                        error.to_string(),
+                        Vec::new(),
+                    )
+                })?;
+        }
+        facade.finish_run(&run_id);
+        authority.activate_inclusion(requests, Some(receipts), policy_receipts)
+    }
 }
 
 pub(crate) fn resolve_team_flow_target_for_selection(
@@ -1731,12 +2049,13 @@ pub(crate) fn resolve_team_flow_target_for_selection(
     let canonical_target = canonical_dispatch_target_name(match target.trim() {
         "pm" | "product_manager" | "product-management" => "business_analyst",
         "implementer" | "writer" | "developer" => "development_implementer",
-        "tester" | "verification" | "verifier" | "review_ensemble"
-        | "verification_ensemble" => "development_verifier",
+        "tester" | "verification" | "verifier" | "review_ensemble" | "verification_ensemble" => {
+            "development_verifier"
+        }
         "coach" | "review" | "coach_validator" => "development_coach",
         "architecture" | "architect" | "designer" | "execution_preparation" => {
             "development_execution_preparation"
-        },
+        }
         "closure" | "closure_lane" | "terminal_closure" => "development_release_closure",
         // Legacy packet receipts use the task-class label while the persisted
         // authority exposes the canonical dispatch alias.
@@ -2082,9 +2401,7 @@ pub(crate) fn downstream_activation_fields(
         json_string(node.activation.get("activation_agent_type"))
             .or_else(|| json_string(node.assignment.get("activation_agent_type")))
             .or_else(|| json_string(node.assignment.get("selected_tier")))
-            .or_else(|| {
-                (!node.carrier_tier.trim().is_empty()).then(|| node.carrier_tier.clone())
-            })
+            .or_else(|| (!node.carrier_tier.trim().is_empty()).then(|| node.carrier_tier.clone()))
     });
     let activation_runtime_role = lane.as_ref().and_then(|node| {
         json_string(node.activation.get("activation_runtime_role"))
@@ -2355,10 +2672,9 @@ pub(crate) fn dispatch_target_runtime_assignment(
                         "implementer_activation",
                         "dispatch_contract_implementer_activation",
                     ),
-                    "coach" | "development_coach" => (
-                        "coach_activation",
-                        "dispatch_contract_coach_activation",
-                    ),
+                    "coach" | "development_coach" => {
+                        ("coach_activation", "dispatch_contract_coach_activation")
+                    }
                     "tester" | "verification" | "development_verifier" => (
                         "verification_activation",
                         "dispatch_contract_verification_activation",
@@ -11008,9 +11324,8 @@ mod tests {
                 }
                 if let Some(hash_count) = raw_string_hashes {
                     let closes = bytes[index] == b'"'
-                        && (0..hash_count).all(|offset| {
-                            bytes.get(index + 1 + offset) == Some(&b'#')
-                        });
+                        && (0..hash_count)
+                            .all(|offset| bytes.get(index + 1 + offset) == Some(&b'#'));
                     if closes {
                         raw_string_hashes = None;
                         index += hash_count + 1;
@@ -12698,12 +13013,9 @@ host_environment:
     fn compile_team_flow_scenario(spec: ScenarioSpec) -> RuntimeConsumptionLaneSelection {
         let compiled_bundle = spec.compiled_bundle.clone();
         let dev_task_id = spec.dev_task_id.clone();
-        let projection = compile_team_flow_authority(
-            &compiled_bundle,
-            spec.flow_ref_override.as_deref(),
-            None,
-        )
-            .expect("bridge fixture must compile the configured TeamFlow authority");
+        let projection =
+            compile_team_flow_authority(&compiled_bundle, spec.flow_ref_override.as_deref(), None)
+                .expect("bridge fixture must compile the configured TeamFlow authority");
         let ordered_nodes = projection
             .ordered_nodes()
             .filter(|node| node.node.included)
@@ -12959,71 +13271,70 @@ host_environment:
             .get(requested.as_str())
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let typed_scenario =
-            compile_team_flow_authority(
-                &role_selection.compiled_bundle,
-                selected_flow_ref(role_selection),
-                None,
+        let typed_scenario = compile_team_flow_authority(
+            &role_selection.compiled_bundle,
+            selected_flow_ref(role_selection),
+            None,
+        )
+        .ok()
+        .and_then(|projection| {
+            resolve_team_flow_node(
+                &projection,
+                Some(&role_selection.execution_plan),
+                requested.as_str(),
             )
-                .ok()
-                .and_then(|projection| {
-                    resolve_team_flow_node(
-                        &projection,
-                        Some(&role_selection.execution_plan),
-                        requested.as_str(),
-                    )
-                    .ok()
-                    .map(|resolution| {
-                        json!({
-                            "source_node": resolution.node_id,
-                            "lane_id": resolution.lane_id,
-                            "dispatch_target": resolution.dispatch_target,
-                            "dispatch_alias": resolution.dispatch_alias,
-                            "runtime_role": resolution.runtime_role,
-                            "task_class": resolution.task_class,
-                            "packet_template_kind": resolution.packet_template_kind,
-                            "closure_class": resolution.closure_class,
-                            "stage": resolution.stage,
-                            "completion_blocker": resolution.completion_blocker,
-                            "proof_gates": resolution.proof_gates,
-                            "approval_policy": resolution.approval_policy,
-                            "lifecycle_hook_templates": resolution.lifecycle_hook_templates,
-                            "resume_transitions": resolution.resume_transitions,
-                            "rework_transitions": resolution.rework_transitions,
-                            "next_node": resolution.next_node,
-                            "explicit_rework_target": resolution.rework_targets.first(),
-                            "rework_targets": resolution.rework_targets,
-                            "terminal": resolution.terminal,
-                            "command_surface": resolution.command_surface,
-                            "command_ref": resolution.command_ref,
-                            "command_mapping": resolution.command_mapping,
-                            "requires_user_approval": resolution.requires_user_approval,
-                            "carrier_id": resolution.carrier_id,
-                            "carrier_tier": resolution.carrier_tier,
-                            "carrier_relation": resolution.carrier_relation,
-                            "executor_backend_relation": resolution.executor_backend_relation,
-                            "executor_backend_class": resolution.executor_backend_class,
-                            "backend_relation": resolution.backend_relation,
-                            "profile_authority": resolution.profile_authority,
-                            "selected_model_profile": resolution.selected_model_profile,
-                            "component_registry": resolution.component_registry,
-                            "authority_identities": resolution.authority_identities,
-                            "execution_identity": resolution.execution_identity,
-                            "activation": resolution.activation,
-                            "assignment": resolution.assignment,
-                            "assignment_source": resolution.assignment["source"],
-                            "authority_id": resolution.authority_id,
-                            "config_authority_hash": resolution.config_authority_hash,
-                            "registry_authority_hash": resolution.registry_authority_hash,
-                            "ordered_nodes": resolution.ordered_nodes,
-                            "owned_scope": configured_lane["owned_scope"]
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_default()
-                        })
-                    })
+            .ok()
+            .map(|resolution| {
+                json!({
+                    "source_node": resolution.node_id,
+                    "lane_id": resolution.lane_id,
+                    "dispatch_target": resolution.dispatch_target,
+                    "dispatch_alias": resolution.dispatch_alias,
+                    "runtime_role": resolution.runtime_role,
+                    "task_class": resolution.task_class,
+                    "packet_template_kind": resolution.packet_template_kind,
+                    "closure_class": resolution.closure_class,
+                    "stage": resolution.stage,
+                    "completion_blocker": resolution.completion_blocker,
+                    "proof_gates": resolution.proof_gates,
+                    "approval_policy": resolution.approval_policy,
+                    "lifecycle_hook_templates": resolution.lifecycle_hook_templates,
+                    "resume_transitions": resolution.resume_transitions,
+                    "rework_transitions": resolution.rework_transitions,
+                    "next_node": resolution.next_node,
+                    "explicit_rework_target": resolution.rework_targets.first(),
+                    "rework_targets": resolution.rework_targets,
+                    "terminal": resolution.terminal,
+                    "command_surface": resolution.command_surface,
+                    "command_ref": resolution.command_ref,
+                    "command_mapping": resolution.command_mapping,
+                    "requires_user_approval": resolution.requires_user_approval,
+                    "carrier_id": resolution.carrier_id,
+                    "carrier_tier": resolution.carrier_tier,
+                    "carrier_relation": resolution.carrier_relation,
+                    "executor_backend_relation": resolution.executor_backend_relation,
+                    "executor_backend_class": resolution.executor_backend_class,
+                    "backend_relation": resolution.backend_relation,
+                    "profile_authority": resolution.profile_authority,
+                    "selected_model_profile": resolution.selected_model_profile,
+                    "component_registry": resolution.component_registry,
+                    "authority_identities": resolution.authority_identities,
+                    "execution_identity": resolution.execution_identity,
+                    "activation": resolution.activation,
+                    "assignment": resolution.assignment,
+                    "assignment_source": resolution.assignment["source"],
+                    "authority_id": resolution.authority_id,
+                    "config_authority_hash": resolution.config_authority_hash,
+                    "registry_authority_hash": resolution.registry_authority_hash,
+                    "ordered_nodes": resolution.ordered_nodes,
+                    "owned_scope": configured_lane["owned_scope"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
                 })
-                .unwrap_or_else(|| json!({"blocker": "team_flow_scenario_unresolvable"}));
+            })
+        })
+        .unwrap_or_else(|| json!({"blocker": "team_flow_scenario_unresolvable"}));
         role_selection.execution_plan["scenario_authority"] = typed_scenario;
         let runtime_assignment = crate::runtime_assignment_builder::build_runtime_assignment(
             &role_selection.compiled_bundle,
@@ -15357,9 +15668,7 @@ steps:
             .expect("runtime defect flow should expose a current node");
         let downstream_node = authority
             .ordered_nodes()
-            .find(|node| {
-                current_node.node.next_node.as_deref() == Some(node.node.node_id.as_str())
-            })
+            .find(|node| current_node.node.next_node.as_deref() == Some(node.node.node_id.as_str()))
             .expect("runtime defect flow should expose an implementation successor");
         assert_eq!(
             downstream_node.node.task_class, "implementation",

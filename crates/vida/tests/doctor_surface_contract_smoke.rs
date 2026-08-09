@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use taskflow_host_bridge::{
-    HostBridgeAdapterOperations, effective_host_bridge_request_with_registry,
+    effective_host_bridge_request_with_registry, HostBridgeAdapterOperations,
 };
 
 #[path = "support/runtime_consumption.rs"]
@@ -2204,13 +2204,11 @@ fn active_task_attribution_json_blocks_dirty_owner_contradiction() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
     assert_eq!(payload["status"], "blocked");
-    assert!(
-        payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should be array")
-            .iter()
-            .any(|code| code == "dirty_ownership_ambiguous")
-    );
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be array")
+        .iter()
+        .any(|code| code == "dirty_ownership_ambiguous"));
     assert_eq!(
         payload["dirty_summary"]["unmatched_files"],
         serde_json::json!(["README.md"])
@@ -2305,13 +2303,11 @@ fn active_task_attribution_json_ignores_tampered_task_snapshot() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
     assert_eq!(payload["status"], "blocked");
-    assert!(
-        payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should be array")
-            .iter()
-            .any(|code| code == "dirty_ownership_ambiguous")
-    );
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be array")
+        .iter()
+        .any(|code| code == "dirty_ownership_ambiguous"));
     assert_eq!(
         payload["dirty_summary"]["unmatched_files"],
         serde_json::json!(["README.md"])
@@ -2430,11 +2426,9 @@ fn task_steps_outputs_default_toon_json_and_filters() {
     assert_eq!(row["status"], "in_progress");
     assert_eq!(row["parent_id"], "task-steps-parent-a");
     assert_eq!(row["parent_title"], "Task steps parent A");
-    assert!(
-        row["created"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(row["created"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(row["closed"].is_null());
     assert!(row["close_reason"].is_null());
     assert_eq!(
@@ -2468,11 +2462,9 @@ fn task_steps_rejects_oversized_since_filter() {
         payload["blocker_codes"],
         serde_json::json!(["invalid_since_filter"])
     );
-    assert!(
-        payload["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("too large"))
-    );
+    assert!(payload["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("too large")));
 }
 
 #[test]
@@ -2601,15 +2593,13 @@ fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
     assert_eq!(payload["unmatched_files"], serde_json::json!(["README.md"]));
     assert_eq!(payload["unowned_paths"], serde_json::json!(["README.md"]));
     assert_eq!(payload["confidence"], "mixed");
-    assert!(
-        payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be array")
-            .iter()
-            .any(|action| action
-                .as_str()
-                .is_some_and(|text| text.contains("unrelated dirty files")))
-    );
+    assert!(payload["next_actions"]
+        .as_array()
+        .expect("next_actions should be array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("unrelated dirty files"))));
 
     let file_override_output = vida()
         .args([
@@ -2754,25 +2744,21 @@ fn classify_dirty_groups_owned_paths_and_reports_unclassified() {
         serde_json::json!(["crates/vida/src/task_surface.rs"])
     );
     assert_eq!(payload["groups"][0]["confidence"], "high");
-    assert!(
-        payload["groups"][0]["reasons"]
-            .as_array()
-            .expect("reasons should be array")
-            .iter()
-            .any(|reason| reason
-                .as_str()
-                .is_some_and(|text| text.contains("proof targets")))
-    );
+    assert!(payload["groups"][0]["reasons"]
+        .as_array()
+        .expect("reasons should be array")
+        .iter()
+        .any(|reason| reason
+            .as_str()
+            .is_some_and(|text| text.contains("proof targets"))));
     assert_eq!(payload["unclassified"], serde_json::json!(["README.md"]));
-    assert!(
-        payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be array")
-            .iter()
-            .any(|action| action
-                .as_str()
-                .is_some_and(|text| text.contains("unclassified files")))
-    );
+    assert!(payload["next_actions"]
+        .as_array()
+        .expect("next_actions should be array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("unclassified files"))));
 }
 
 #[test]
@@ -2928,6 +2914,41 @@ fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
     assert!(
         help_stdout.contains("default compact TOON"),
         "agent host-bridge help should document default compact TOON: {help_stdout}"
+    );
+}
+
+#[test]
+fn agent_init_public_team_flow_projection_keeps_excluded_nodes_visible() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .current_dir(&project_root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_ROOT", &project_root)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    let output = vida()
+        .args(["agent-init", "--role", "coder", "--json"])
+        .current_dir(&project_root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_ROOT", &project_root)
+        .output()
+        .expect("agent-init should run");
+    assert_success(&output, "agent-init");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent-init json should parse");
+    let authority = payload
+        .pointer("/dev_team_readiness/team_flow_authority")
+        .expect("agent-init must expose TeamFlow authority");
+    let nodes = authority
+        .get("lanes")
+        .and_then(serde_json::Value::as_array)
+        .unwrap_or_else(|| panic!("public TeamFlow projection must expose nodes: {authority}"));
+    assert!(
+        nodes.iter().any(|node| node["included"] == false),
+        "excluded nodes must remain visible on agent-init: {authority}"
     );
 }
 
@@ -3482,12 +3503,10 @@ fn agent_host_bridge_json_retains_sanitized_lock_open_diagnostic() {
     assert_eq!(payload["state_access"]["open_stage"], "datastore_open");
     assert_eq!(payload["state_access"]["lock_evidence"], "datastore");
     assert!(payload.get("error").is_none());
-    assert!(
-        payload["state_access"]
-            .to_string()
-            .find(&state_dir)
-            .is_none()
-    );
+    assert!(payload["state_access"]
+        .to_string()
+        .find(&state_dir)
+        .is_none());
     assert!(payload["state_access"].to_string().find("999999").is_none());
     assert!(payload["state_access"].to_string().find("LOCK").is_none());
 
@@ -4676,10 +4695,10 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                     .is_empty(),
                 "accepted rework dispatch should not block the lane envelope for {target}: {payload}"
             );
-            let completion_result_path =
-                payload["artifact_refs"]["downstream_dispatch_result_path"]
-                    .as_str()
-                    .expect("completion result path should be present");
+            let completion_result_path = payload["artifact_refs"]
+                ["downstream_dispatch_result_path"]
+                .as_str()
+                .expect("completion result path should be present");
             let completion_result: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string(completion_result_path)
                     .expect("completion result should exist"),
@@ -4877,12 +4896,10 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         lane_payload["recommended_surface"], "vida agent host-bridge",
         "lane payload should recommend active coder request: {lane_payload}"
     );
-    assert!(
-        lane_payload["recommended_command"]
-            .as_str()
-            .expect("recommended command")
-            .starts_with("vida agent host-bridge --request ")
-    );
+    assert!(lane_payload["recommended_command"]
+        .as_str()
+        .expect("recommended command")
+        .starts_with("vida agent host-bridge --request "));
     assert!(
         !lane_payload["recommended_command"]
             .as_str()
@@ -4942,13 +4959,11 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "pass");
-    assert!(
-        !payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should render")
-            .iter()
-            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
-    );
+    assert!(!payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should render")
+        .iter()
+        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
 }
 
 #[test]
@@ -5039,13 +5054,11 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane");
-    assert!(
-        !payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should render")
-            .iter()
-            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
-    );
+    assert!(!payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should render")
+        .iter()
+        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
     let result_path = payload["artifact_refs"]["host_bridge_result_path"]
         .as_str()
         .expect("host bridge result path should be present");
@@ -5065,12 +5078,10 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
         "packet_ready"
     );
     assert_eq!(payload["artifact_refs"]["downstream_dispatch_ready"], true);
-    assert!(
-        payload["artifact_refs"]["downstream_dispatch_blockers"]
-            .as_array()
-            .expect("downstream blockers should render")
-            .is_empty()
-    );
+    assert!(payload["artifact_refs"]["downstream_dispatch_blockers"]
+        .as_array()
+        .expect("downstream blockers should render")
+        .is_empty());
     let downstream_packet_path = payload["artifact_refs"]["downstream_dispatch_packet_path"]
         .as_str()
         .expect("rework retry should write downstream dispatch packet");
@@ -5411,13 +5422,11 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
     assert_eq!(payload["surface"], "vida lane", "payload: {payload:#}");
-    assert!(
-        !payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should render")
-            .iter()
-            .any(|code| code.as_str() == Some("host_bridge_request_not_pending"))
-    );
+    assert!(!payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should render")
+        .iter()
+        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
     assert!(payload["artifact_refs"]["host_bridge_result_path"].is_string());
     let receipt: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.bridge_receipt_path)
@@ -5516,12 +5525,10 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         lane_payload["recommended_surface"],
         "vida agent host-bridge"
     );
-    assert!(
-        lane_payload["recommended_command"]
-            .as_str()
-            .expect("recommended command")
-            .contains(&fixture.request_path)
-    );
+    assert!(lane_payload["recommended_command"]
+        .as_str()
+        .expect("recommended command")
+        .contains(&fixture.request_path));
     drop(lane_show);
 
     let output = vida()
@@ -5576,18 +5583,14 @@ fn lane_show_recommends_host_bridge_completion_before_exception_takeover() {
         payload["recommended_surface"], "vida agent host-bridge",
         "payload={payload}"
     );
-    assert!(
-        payload["recommended_command"]
-            .as_str()
-            .expect("recommended command should exist")
-            .starts_with("vida agent host-bridge --request ")
-    );
-    assert!(
-        payload["recommended_command"]
-            .as_str()
-            .expect("recommended command should exist")
-            .contains(&fixture.request_path)
-    );
+    assert!(payload["recommended_command"]
+        .as_str()
+        .expect("recommended command should exist")
+        .starts_with("vida agent host-bridge --request "));
+    assert!(payload["recommended_command"]
+        .as_str()
+        .expect("recommended command should exist")
+        .contains(&fixture.request_path));
     assert!(
         !payload["recommended_command"]
             .as_str()
@@ -5629,13 +5632,11 @@ fn host_bridge_public_cli_blocks_out_of_scope_taskflow_attempt_artifacts_without
     assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(payload["dispatch_status"], "blocked");
-    assert!(
-        payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should be an array")
-            .iter()
-            .any(|code| code == "implementation_attempt_scope_guard_violation")
-    );
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array")
+        .iter()
+        .any(|code| code == "implementation_attempt_scope_guard_violation"));
     let bridge_result: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
     )
@@ -6854,7 +6855,8 @@ fn doctor_json_uses_current_run_final_snapshot_over_newer_retired_and_malformed_
         "doctor-current-run"
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]
+            ["runtime_consumption_selected_final_snapshot_path"],
         serde_json::json!(current_snapshot_path)
     );
     for blocker in [
@@ -7007,11 +7009,9 @@ fn doctor_json_fails_closed_without_matching_effective_run_final_despite_valid_g
             "{blocker} must remain blocked without same-run final evidence: {doctor_json}"
         );
     }
-    assert!(
-        trace_blocker_codes
-            .iter()
-            .any(|code| code == "trace_missing")
-    );
+    assert!(trace_blocker_codes
+        .iter()
+        .any(|code| code == "trace_missing"));
     assert_eq!(
         doctor_json["trace_evidence"]["root_trace"]["effective_run_id"],
         "doctor-missing-final-run"
@@ -7029,7 +7029,8 @@ fn doctor_json_fails_closed_without_matching_effective_run_final_despite_valid_g
         serde_json::Value::Null
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]
+            ["runtime_consumption_selected_final_snapshot_path"],
         serde_json::Value::Null
     );
 }
@@ -7091,11 +7092,9 @@ fn doctor_json_fails_closed_on_malformed_effective_run_final_despite_valid_globa
             "{blocker} must remain blocked for malformed effective-run evidence: {doctor_json}"
         );
     }
-    assert!(
-        trace_blocker_codes
-            .iter()
-            .any(|code| code == "trace_incomplete")
-    );
+    assert!(trace_blocker_codes
+        .iter()
+        .any(|code| code == "trace_incomplete"));
     assert_eq!(
         doctor_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
         serde_json::json!(malformed_snapshot_path)
@@ -7109,7 +7108,8 @@ fn doctor_json_fails_closed_on_malformed_effective_run_final_despite_valid_globa
         serde_json::json!(malformed_snapshot_path)
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]
+            ["runtime_consumption_selected_final_snapshot_path"],
         serde_json::json!(malformed_snapshot_path)
     );
 }
@@ -7166,11 +7166,9 @@ fn doctor_json_keeps_global_final_fallback_without_effective_run() {
             "{blocker} must stay clear for no-run global fallback: {doctor_json}"
         );
     }
-    assert!(
-        !trace_blocker_codes
-            .iter()
-            .any(|code| code == "trace_incomplete")
-    );
+    assert!(!trace_blocker_codes
+        .iter()
+        .any(|code| code == "trace_incomplete"));
     assert_eq!(
         doctor_json["trace_evidence"]["root_trace"]["effective_run_id"],
         serde_json::Value::Null
@@ -7188,7 +7186,8 @@ fn doctor_json_keeps_global_final_fallback_without_effective_run() {
         serde_json::json!(global_snapshot_path)
     );
     assert_eq!(
-        doctor_json["trace_evidence"]["root_trace"]["runtime_consumption_selected_final_snapshot_path"],
+        doctor_json["trace_evidence"]["root_trace"]
+            ["runtime_consumption_selected_final_snapshot_path"],
         serde_json::Value::Null
     );
 }
@@ -7876,13 +7875,11 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
         status_json["continuation_binding"]["ambiguity_reason"],
         "latest_run_graph_status_blocked"
     );
-    assert!(
-        !status_json["operator_contracts"]["blocker_codes"]
-            .as_array()
-            .expect("status blocker codes")
-            .iter()
-            .any(|code| code == "continuation_binding_ambiguous")
-    );
+    assert!(!status_json["operator_contracts"]["blocker_codes"]
+        .as_array()
+        .expect("status blocker codes")
+        .iter()
+        .any(|code| code == "continuation_binding_ambiguous"));
 
     let doctor = vida()
         .args(["doctor", "--json"])
@@ -7895,11 +7892,9 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
     let doctor_blockers = doctor_json["blocker_codes"]
         .as_array()
         .expect("doctor blocker codes");
-    assert!(
-        !doctor_blockers
-            .iter()
-            .any(|code| code == "recovery_readiness_blocked")
-    );
+    assert!(!doctor_blockers
+        .iter()
+        .any(|code| code == "recovery_readiness_blocked"));
 }
 
 #[test]

@@ -267,6 +267,8 @@ fn team_flow_plan_identity_fields(
             "team_flow_authority_id": serde_json::Value::Null,
             "team_flow_config_hash": serde_json::Value::Null,
             "team_flow_registry_hash": serde_json::Value::Null,
+            "team_flow_source_snapshot_ref": serde_json::Value::Null,
+            "team_flow_activation_snapshot_ref": serde_json::Value::Null,
         });
     };
     let projection = authority.projection();
@@ -274,6 +276,8 @@ fn team_flow_plan_identity_fields(
         "team_flow_authority_id": projection.authority_id.clone(),
         "team_flow_config_hash": projection.config_authority_hash.clone(),
         "team_flow_registry_hash": projection.registry_authority_hash.clone(),
+        "team_flow_source_snapshot_ref": projection.source_snapshot_ref.clone(),
+        "team_flow_activation_snapshot_ref": projection.activation_snapshot_ref.clone(),
     })
 }
 
@@ -319,20 +323,15 @@ fn configured_dev_team_flow_templates_from_authority(
     execution_authority: &crate::team_flow_authority_adapter::TeamFlowExecutionAuthority,
     selected_node_id: Option<&str>,
 ) -> Result<ConfiguredDevelopmentFlow, String> {
+    execution_authority
+        .require_inclusion_receipts()
+        .map_err(|error| error.code)?;
     let projection = execution_authority.projection();
     let flow_id = projection.snapshot.flow_ref.clone();
     let authority_id = projection.authority_id.clone();
     let config_authority_hash = projection.config_authority_hash.clone();
     let registry_authority_hash = projection.registry_authority_hash.clone();
-    let lanes = execution_authority
-        .ordered_nodes()
-        .filter(|node| node.node.included)
-        .map(|node| {
-            execution_authority
-                .resolve_target(None, &node.node.node_id)
-                .map_err(|error| error.to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let lanes = execution_authority.projected_nodes().collect::<Vec<_>>();
     let selected_node_id = selected_node_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -475,6 +474,7 @@ pub(crate) fn normalize_selected_flow_for_execution_plan_with_selected_node(
                 .as_str()
                 .is_some_and(|task_id| !task_id.trim().is_empty())
         });
+    let inclusion_contract = selection.execution_plan.get("team_flow_inclusion").cloned();
     selection.compiled_bundle = compiled_bundle.clone();
     selection.selected_role = runtime_role.to_string();
     selection
@@ -487,6 +487,14 @@ pub(crate) fn normalize_selected_flow_for_execution_plan_with_selected_node(
         "team_flow_authority_selected_flow_id": selected_flow_id,
         "team_flow_authority_selected_node_id": selected_node_id,
     });
+    if let Some(plan) = selection.execution_plan.as_object_mut() {
+        if let Some(task_id) = explicit_task_id.clone() {
+            plan.insert("runtime_consumption_explicit_task_id".to_string(), task_id);
+        }
+        if let Some(inclusion_contract) = inclusion_contract {
+            plan.insert("team_flow_inclusion".to_string(), inclusion_contract);
+        }
+    }
     selection.execution_plan = build_runtime_execution_plan_from_snapshot_with_mode(
         compiled_bundle,
         selection,
@@ -1044,6 +1052,8 @@ fn build_resolved_development_dispatch_contract_using_authority(
         "team_flow_authority_id": authority_id,
         "team_flow_config_hash": config_authority_hash,
         "team_flow_registry_hash": registry_authority_hash,
+        "team_flow_source_snapshot_ref": identity["team_flow_source_snapshot_ref"],
+        "team_flow_activation_snapshot_ref": identity["team_flow_activation_snapshot_ref"],
         "team_flow_authority_selected_node_id": selected_node_id.clone(),
         "selected_node_id": selected_node_id,
         "execution_preparation_required": requires_execution_preparation,
@@ -1474,6 +1484,51 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
         .unwrap_or(serde_json::Value::Null);
     let backend_admissibility_matrix =
         crate::runtime_lane_summary::build_executor_backend_admissibility_matrix(agent_system);
+    let inclusion_contract = authority.as_ref().map_or_else(
+        || {
+            serde_json::json!({
+                "schema_version": 1,
+                "decision_kind": "team_flow_inclusion_v1",
+                "status": "blocked",
+                "blocker_codes": ["team_flow_inclusion_receipt_v1_required"],
+            })
+        },
+        |authority| {
+            let projection = authority.projection();
+            let evidence = projection.inclusion_receipts.first().map(|first| {
+                let context = &first.request.evidence;
+                serde_json::json!({
+                    "optional_nodes": projection.inclusion_receipts.iter()
+                        .filter(|receipt| receipt.request.evidence.optional_requested)
+                        .map(|receipt| receipt.request.node_id.clone())
+                        .collect::<Vec<_>>(),
+                    "proof_required": context.proof_required,
+                    "review_triggered": context.review_triggered,
+                    "architecture_triggered": context.architecture_triggered,
+                    "rework_required": context.rework_required,
+                    "evidence_refs": context.evidence_refs,
+                })
+            });
+            let policy_pin = projection.inclusion_receipts.first().map(|receipt| {
+                serde_json::json!({
+                    "policy_id": receipt.request.policy_id,
+                    "version": receipt.request.policy_version,
+                    "content_digest": receipt.request.policy_content_digest,
+                })
+            });
+            serde_json::json!({
+                "schema_version": 1,
+                "decision_kind": "team_flow_inclusion_v1",
+                "status": "ready",
+                "source_snapshot_ref": projection.source_snapshot_ref,
+                "activation_snapshot_ref": projection.activation_snapshot_ref,
+                "policy_pin": policy_pin,
+                "evidence": evidence,
+                "receipts": projection.inclusion_receipts,
+                "policy_receipts": projection.inclusion_policy_receipts,
+            })
+        },
+    );
     let mut execution_plan = serde_json::json!({
         "status": if !dispatch_ready || tracked_flow_binding_blocked {
             "blocked_team_flow_authority"
@@ -1483,6 +1538,7 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
             "ready_for_runtime_routing"
         },
         "policy_bundle_ref": policy_bundle_ref,
+        "team_flow_inclusion": inclusion_contract,
         "system_mode": crate::json_string(crate::json_lookup(agent_system, &["mode"])).unwrap_or_default(),
         "state_owner": crate::json_string(crate::json_lookup(agent_system, &["state_owner"])).unwrap_or_default(),
         "max_parallel_agents": crate::json_lookup(agent_system, &["max_parallel_agents"]).cloned().unwrap_or(serde_json::Value::Null),
@@ -1674,307 +1730,6 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
     execution_plan
 }
 
-// Typed flow-activation shadow contract. Rust owns the canonical topology;
-// the policy receives only the already-validated optional-node scalar.
-pub(crate) const FLOW_ACTIVATION_POLICY_ID: &str = "rhai.runtime.flow-activation";
-pub(crate) const FLOW_ACTIVATION_POLICY_VERSION: u32 = 1;
-pub(crate) const FLOW_ACTIVATION_SCHEMA_VERSION: &str = "flow-activation-facts.v1";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FlowActivationRole {
-    BusinessAnalyst,
-    Worker,
-    Verifier,
-    Coach,
-}
-
-impl FlowActivationRole {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::BusinessAnalyst => "business_analyst",
-            Self::Worker => "worker",
-            Self::Verifier => "verifier",
-            Self::Coach => "coach",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FlowActivationTaskClass {
-    Specification,
-    Implementation,
-    Verification,
-    Cleanup,
-}
-
-impl FlowActivationTaskClass {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Specification => TASK_CLASS_SPECIFICATION,
-            Self::Implementation => TASK_CLASS_IMPLEMENTATION,
-            Self::Verification => TASK_CLASS_VERIFICATION,
-            Self::Cleanup => "cleanup",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FlowActivationNodeSpec {
-    pub(crate) id: &'static str,
-    pub(crate) order: u8,
-    pub(crate) role: FlowActivationRole,
-    pub(crate) task_class: FlowActivationTaskClass,
-    pub(crate) required: bool,
-    pub(crate) terminal: bool,
-    pub(crate) proof_required: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FlowActivationEdge {
-    pub(crate) from: &'static str,
-    pub(crate) to: &'static str,
-}
-
-static FLOW_ACTIVATION_NODES: &[FlowActivationNodeSpec] = &[
-    FlowActivationNodeSpec {
-        id: "intake",
-        order: 0,
-        role: FlowActivationRole::BusinessAnalyst,
-        task_class: FlowActivationTaskClass::Specification,
-        required: true,
-        terminal: false,
-        proof_required: false,
-    },
-    FlowActivationNodeSpec {
-        id: "design",
-        order: 1,
-        role: FlowActivationRole::BusinessAnalyst,
-        task_class: FlowActivationTaskClass::Specification,
-        required: true,
-        terminal: false,
-        proof_required: false,
-    },
-    FlowActivationNodeSpec {
-        id: "implementation",
-        order: 2,
-        role: FlowActivationRole::Worker,
-        task_class: FlowActivationTaskClass::Implementation,
-        required: true,
-        terminal: false,
-        proof_required: false,
-    },
-    FlowActivationNodeSpec {
-        id: "quality_review",
-        order: 3,
-        role: FlowActivationRole::Coach,
-        task_class: FlowActivationTaskClass::Verification,
-        required: false,
-        terminal: false,
-        proof_required: false,
-    },
-    FlowActivationNodeSpec {
-        id: "verification",
-        order: 4,
-        role: FlowActivationRole::Verifier,
-        task_class: FlowActivationTaskClass::Verification,
-        required: true,
-        terminal: false,
-        proof_required: true,
-    },
-    FlowActivationNodeSpec {
-        id: "close",
-        order: 5,
-        role: FlowActivationRole::Coach,
-        task_class: FlowActivationTaskClass::Cleanup,
-        required: true,
-        terminal: true,
-        proof_required: false,
-    },
-];
-
-static FLOW_ACTIVATION_EDGES: &[FlowActivationEdge] = &[
-    FlowActivationEdge {
-        from: "intake",
-        to: "design",
-    },
-    FlowActivationEdge {
-        from: "design",
-        to: "implementation",
-    },
-    FlowActivationEdge {
-        from: "implementation",
-        to: "quality_review",
-    },
-    FlowActivationEdge {
-        from: "quality_review",
-        to: "verification",
-    },
-    FlowActivationEdge {
-        from: "verification",
-        to: "close",
-    },
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FlowActivationSnapshot {
-    pub(crate) nodes: &'static [FlowActivationNodeSpec],
-    pub(crate) edges: &'static [FlowActivationEdge],
-}
-
-impl FlowActivationSnapshot {
-    pub(crate) const fn canonical() -> Self {
-        Self {
-            nodes: FLOW_ACTIVATION_NODES,
-            edges: FLOW_ACTIVATION_EDGES,
-        }
-    }
-
-    fn canonical_encoding(self) -> String {
-        use std::fmt::Write;
-
-        let mut encoded = String::from(FLOW_ACTIVATION_SCHEMA_VERSION);
-        for node in self.nodes {
-            write!(
-                encoded,
-                "|node:{}:{}:{}:{}:{}:{}:{}",
-                node.id,
-                node.order,
-                node.role.as_str(),
-                node.task_class.as_str(),
-                node.required,
-                node.terminal,
-                node.proof_required
-            )
-            .expect("writing a String cannot fail");
-        }
-        for edge in self.edges {
-            write!(encoded, "|edge:{}>{}", edge.from, edge.to)
-                .expect("writing a String cannot fail");
-        }
-        encoded
-    }
-
-    pub(crate) fn digest(self) -> String {
-        blake3::hash(self.canonical_encoding().as_bytes())
-            .to_hex()
-            .to_string()
-    }
-
-    fn node(self, id: &str) -> Option<FlowActivationNodeSpec> {
-        self.nodes.iter().find(|node| node.id == id).copied()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FlowActivationObservation {
-    pub(crate) optional_nodes: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FlowActivationError {
-    TooManyOptionalNodes { observed: usize },
-    UnknownNode { node_id: String },
-    RequiredNode { node_id: String },
-    TerminalNode { node_id: String },
-    ProofNode { node_id: String },
-}
-
-impl std::fmt::Display for FlowActivationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TooManyOptionalNodes { observed } => {
-                write!(
-                    formatter,
-                    "flow_activation_optional_node_count_exceeded:{observed}"
-                )
-            }
-            Self::UnknownNode { node_id } => {
-                write!(formatter, "flow_activation_node_unknown:{node_id}")
-            }
-            Self::RequiredNode { node_id } => {
-                write!(formatter, "flow_activation_node_required:{node_id}")
-            }
-            Self::TerminalNode { node_id } => {
-                write!(formatter, "flow_activation_node_terminal:{node_id}")
-            }
-            Self::ProofNode { node_id } => {
-                write!(formatter, "flow_activation_node_proof_required:{node_id}")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FlowActivationFacts {
-    pub(crate) snapshot_digest: String,
-    pub(crate) optional_node: Option<String>,
-}
-
-impl FlowActivationFacts {
-    pub(crate) fn from_native(
-        observation: FlowActivationObservation,
-    ) -> Result<Self, FlowActivationError> {
-        if observation.optional_nodes.len() > 1 {
-            return Err(FlowActivationError::TooManyOptionalNodes {
-                observed: observation.optional_nodes.len(),
-            });
-        }
-
-        let snapshot = FlowActivationSnapshot::canonical();
-        let optional_node = observation.optional_nodes.into_iter().next();
-        let optional_node = match optional_node {
-            None => None,
-            Some(node_id) => {
-                let node_id = node_id.trim().to_string();
-                let Some(node) = snapshot.node(&node_id) else {
-                    return Err(FlowActivationError::UnknownNode { node_id });
-                };
-                if node.terminal {
-                    return Err(FlowActivationError::TerminalNode { node_id });
-                }
-                if node.proof_required {
-                    return Err(FlowActivationError::ProofNode { node_id });
-                }
-                if node.required {
-                    return Err(FlowActivationError::RequiredNode { node_id });
-                }
-                Some(node_id)
-            }
-        };
-
-        Ok(Self {
-            snapshot_digest: snapshot.digest(),
-            optional_node,
-        })
-    }
-
-    /// The Rhai contract is intentionally one scalar; topology never crosses
-    /// the policy boundary and therefore cannot be changed by the policy.
-    pub(crate) fn context_literal(&self) -> serde_json::Value {
-        serde_json::json!({
-            "optional_node": self.optional_node.as_deref().unwrap_or(""),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FlowActivationReceipt {
-    pub(crate) snapshot_digest: String,
-    pub(crate) optional_node: Option<String>,
-    pub(crate) topology_mutation_allowed: bool,
-}
-
-pub(crate) fn flow_activation_shadow_decision(
-    observation: FlowActivationObservation,
-) -> Result<FlowActivationReceipt, FlowActivationError> {
-    let facts = FlowActivationFacts::from_native(observation)?;
-    Ok(FlowActivationReceipt {
-        snapshot_digest: facts.snapshot_digest,
-        optional_node: facts.optional_node,
-        topology_mutation_allowed: false,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1990,6 +1745,9 @@ mod tests {
     use crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle;
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
+    use taskflow_authority::team_flow_inclusion::{
+        evaluate, InclusionReceiptV1, InclusionRequestV1,
+    };
 
     fn strict_team_flow_bundle() -> serde_json::Value {
         canonical_compiled_bundle()
@@ -2032,6 +1790,98 @@ mod tests {
         }
     }
 
+    fn seed_fresh_inclusion_plan(
+        bundle: &serde_json::Value,
+        selection: &mut RuntimeConsumptionLaneSelection,
+    ) {
+        let explicit_task_id = selection
+            .execution_plan
+            .get("runtime_consumption_explicit_task_id")
+            .cloned();
+        selection.execution_plan =
+            super::build_runtime_execution_plan_from_snapshot(bundle, selection);
+        if let Some(explicit_task_id) = explicit_task_id {
+            selection.execution_plan["runtime_consumption_explicit_task_id"] = explicit_task_id;
+        }
+        assert_eq!(
+            selection.execution_plan["team_flow_inclusion"]["status"], "ready",
+            "fresh fixture must persist canonical inclusion receipts"
+        );
+    }
+
+    fn json_digest(value: &impl serde::Serialize) -> String {
+        blake3::hash(&serde_json::to_vec(value).unwrap())
+            .to_hex()
+            .to_string()
+    }
+
+    fn resign_persisted_inclusion(
+        plan: &mut serde_json::Value,
+        mutate: impl FnOnce(&mut [InclusionRequestV1]),
+    ) {
+        let receipts: Vec<InclusionReceiptV1> =
+            serde_json::from_value(plan["team_flow_inclusion"]["receipts"].clone()).unwrap();
+        let mut requests = receipts
+            .into_iter()
+            .map(|receipt| receipt.request)
+            .collect::<Vec<_>>();
+        mutate(&mut requests);
+        let decisions = requests
+            .iter()
+            .map(evaluate)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let decision_digests = decisions
+            .iter()
+            .map(|decision| decision.canonical_digest().unwrap())
+            .collect::<Vec<_>>();
+        let activation = json_digest(&(
+            requests[0].source_snapshot_ref.as_str(),
+            decision_digests.clone(),
+        ));
+        let receipts = requests
+            .iter()
+            .cloned()
+            .zip(decisions)
+            .zip(decision_digests)
+            .map(
+                |((request, decision), decision_digest)| InclusionReceiptV1 {
+                    schema_version: 1,
+                    decision_kind: taskflow_authority::team_flow_inclusion::DECISION_KIND
+                        .to_string(),
+                    receipt_id: format!(
+                        "team-flow-inclusion:{}",
+                        json_digest(&(
+                            request.canonical_digest().unwrap(),
+                            decision_digest.as_str(),
+                            activation.as_str(),
+                        ))
+                    ),
+                    activation_snapshot_ref: activation.clone(),
+                    request,
+                    decision,
+                    decision_digest,
+                },
+            )
+            .collect::<Vec<_>>();
+        let (mut facade, _) =
+            crate::state_store::policy::runtime::PolicyModeFacade::with_builtin_team_flow_inclusion()
+                .unwrap();
+        let policy_receipts = requests
+            .iter()
+            .map(|request| {
+                facade
+                    .evaluate_team_flow_inclusion(request)
+                    .unwrap()
+                    .receipt
+            })
+            .collect::<Vec<_>>();
+        facade.finish_run(&requests[0].run_id);
+        plan["team_flow_inclusion"]["activation_snapshot_ref"] = json!(activation);
+        plan["team_flow_inclusion"]["receipts"] = json!(receipts);
+        plan["team_flow_inclusion"]["policy_receipts"] = json!(policy_receipts);
+    }
+
     #[test]
     fn task_class_for_selection_missing_selected_node_fails_closed() {
         let mut bundle = strict_team_flow_bundle();
@@ -2040,10 +1890,21 @@ mod tests {
         let mut selection = strict_team_flow_selection(&bundle);
         selection.selected_role = "orchestrator".to_string();
         selection.matched_terms.clear();
-        selection.execution_plan = serde_json::json!({
-            "team_flow_authority_selected_flow_id": bundle["team_flow_authority"]
-                ["resolved_all_flow_payload"]["flows"][0]["flow_id"]
-        });
+        seed_fresh_inclusion_plan(&bundle, &mut selection);
+        selection
+            .execution_plan
+            .as_object_mut()
+            .expect("fresh plan")
+            .remove("team_flow_authority_selected_node_id");
+        let contract = &mut selection.execution_plan["development_flow"]["dispatch_contract"];
+        contract
+            .as_object_mut()
+            .expect("fresh dispatch contract")
+            .remove("team_flow_authority_selected_node_id");
+        contract
+            .as_object_mut()
+            .expect("fresh dispatch contract")
+            .remove("selected_node_id");
         let error = super::task_class_for_selection_with_mode(
             &bundle,
             &selection,
@@ -2138,6 +1999,9 @@ mod tests {
             selection.request = request;
             selection.matched_terms = matched_terms;
             selection.execution_plan = execution_plan;
+            if mode == super::PrePlanTeamFlowSelectionMode::Persisted {
+                seed_fresh_inclusion_plan(&bundle, &mut selection);
+            }
             let authority = super::pre_plan_team_flow_authority(&bundle, &selection, mode);
             match expected_flow {
                 Some(expected_flow) => assert_eq!(
@@ -2190,15 +2054,20 @@ mod tests {
             .expect("alternate flow must expose an included node");
         let mut selection = strict_team_flow_selection(&bundle);
         selection.execution_plan = serde_json::json!({
-            "runtime_consumption_explicit_task_id": "explicit-alternate-task",
-            "team_flow_authority_selected_node_id": first_node.node.node_id
+            "runtime_consumption_explicit_task_id": "explicit-alternate-task"
         });
         selection.matched_terms = vec![format!("dev_team_flow_id:{alternate_flow}")];
+        seed_fresh_inclusion_plan(&bundle, &mut selection);
         normalize_selected_flow_for_execution_plan(&mut selection, &bundle, alternate_flow)
             .expect("alternate flow should rebuild from the matched flow term");
 
         let contract = &selection.execution_plan["development_flow"]["dispatch_contract"];
-        assert_eq!(contract["selected_flow_set"].as_str(), Some(alternate_flow));
+        assert_eq!(
+            contract["selected_flow_set"].as_str(),
+            Some(alternate_flow),
+            "plan={}",
+            selection.execution_plan
+        );
         assert_eq!(
             contract["team_flow_authority_id"].as_str(),
             Some(authority.projection().authority_id.as_str())
@@ -2251,10 +2120,7 @@ mod tests {
             .expect("default flow must expose an included node");
         let mut selection = strict_team_flow_selection(&bundle);
         selection.matched_terms.clear();
-        selection.execution_plan = serde_json::json!({
-            "team_flow_authority_selected_flow_id": default_flow,
-            "team_flow_authority_selected_node_id": first_node.node.node_id
-        });
+        seed_fresh_inclusion_plan(&bundle, &mut selection);
 
         normalize_selected_or_default_flow_for_execution_plan(&mut selection, &bundle)
             .expect("persisted selected node should normalize");
@@ -2724,7 +2590,6 @@ mod tests {
             .as_array()
             .expect("persisted lanes must be an array")
             .iter()
-            .filter(|lane| lane["included"].as_bool() == Some(true))
             .collect::<Vec<_>>();
         assert_eq!(flow.flow_id, persisted_flow["flow_id"]);
         assert_eq!(flow.lanes.len(), persisted_lanes.len());
@@ -2824,8 +2689,21 @@ mod tests {
             .iter()
             .filter_map(|lane| lane["node_id"].as_str().map(str::to_string))
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(emitted_node_ids, included_node_ids);
-        assert!(emitted_node_ids.is_disjoint(&excluded_node_ids));
+        let all_node_ids = included_node_ids
+            .union(&excluded_node_ids)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(emitted_node_ids, all_node_ids);
+        assert!(excluded_node_ids.iter().all(|node_id| emitted_lanes
+            .iter()
+            .any(|lane| lane["node_id"] == node_id.as_str() && lane["included"] == false)));
+        let executable_node_ids = contract["execution_lane_sequence"]
+            .as_array()
+            .expect("execution lanes")
+            .iter()
+            .filter_map(|node| node.as_str().map(str::to_string))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(executable_node_ids, included_node_ids);
 
         for lane in emitted_lanes {
             let emitted_fields = lane
@@ -3072,101 +2950,157 @@ mod tests {
     }
 
     #[test]
-    fn frozen_flow_activation_snapshot_is_typed_and_immutable() {
-        let snapshot = super::FlowActivationSnapshot::canonical();
-        let node_ids = snapshot
-            .nodes
-            .iter()
-            .map(|node| node.id)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            node_ids,
-            vec![
-                "intake",
-                "design",
-                "implementation",
-                "quality_review",
-                "verification",
-                "close"
-            ]
-        );
-        assert_eq!(snapshot.nodes[3].id, "quality_review");
-        assert!(!snapshot.nodes[3].required);
-        assert_eq!(snapshot.nodes[3].role.as_str(), "coach");
-        assert_eq!(snapshot.nodes[3].task_class.as_str(), "verification");
-        assert!(snapshot.nodes[0..3].iter().all(|node| node.required));
-        assert!(snapshot.nodes[4].proof_required);
-        assert!(snapshot.nodes[5].terminal);
-        assert_eq!(
-            snapshot
-                .nodes
-                .iter()
-                .map(|node| node.order)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4, 5]
-        );
-        assert_eq!(
-            snapshot.digest(),
-            super::FlowActivationSnapshot::canonical().digest()
-        );
-    }
-
-    #[test]
-    fn flow_activation_optional_zero_one_many_and_rejection_matrix() {
-        let zero = super::flow_activation_shadow_decision(super::FlowActivationObservation {
-            optional_nodes: vec![],
-        })
-        .unwrap();
-        assert_eq!(zero.optional_node, None);
-        assert!(!zero.topology_mutation_allowed);
-
-        let one = super::flow_activation_shadow_decision(super::FlowActivationObservation {
-            optional_nodes: vec!["quality_review".to_string()],
-        })
-        .unwrap();
-        assert_eq!(one.optional_node.as_deref(), Some("quality_review"));
-        assert!(!one.topology_mutation_allowed);
-
-        let many = super::flow_activation_shadow_decision(super::FlowActivationObservation {
-            optional_nodes: vec!["quality_review".to_string(), "quality_review".to_string()],
-        })
-        .expect_err("multiple optional nodes in one call must fail closed");
-        assert_eq!(
-            many.to_string(),
-            "flow_activation_optional_node_count_exceeded:2"
-        );
-
-        for (node_id, expected) in [
-            (Some("unknown"), "flow_activation_node_unknown:unknown"),
-            (Some("intake"), "flow_activation_node_required:intake"),
+    fn canonical_inclusion_evidence_projection_replay_and_legacy_blocker_matrix() {
+        let bundle = strict_team_flow_bundle();
+        for (name, signal, expected) in [
+            ("ordinary", None, vec!["coder", "release_closure"]),
             (
-                Some("verification"),
-                "flow_activation_node_proof_required:verification",
+                "proof",
+                Some("tester"),
+                vec!["coder", "tester", "release_closure"],
             ),
-            (Some("close"), "flow_activation_node_terminal:close"),
+            (
+                "review",
+                Some("coach_validator"),
+                vec!["coder", "coach_validator", "release_closure"],
+            ),
+            (
+                "architecture",
+                Some("architect"),
+                vec!["coder", "architect", "release_closure"],
+            ),
+            ("rework", Some("rework"), vec!["coder", "release_closure"]),
         ] {
-            let error = super::flow_activation_shadow_decision(super::FlowActivationObservation {
-                optional_nodes: vec![node_id.unwrap().to_string()],
-            })
-            .expect_err("invalid node attempt must fail closed");
-            assert_eq!(error.to_string(), expected);
-        }
-    }
+            let mut selection = strict_team_flow_selection(&bundle);
+            selection.execution_plan = json!({
+                "runtime_consumption_explicit_task_id": format!("inclusion-{name}"),
+                "team_flow_receipt": if name == "rework" {
+                    json!({"status": "rework"})
+                } else {
+                    serde_json::Value::Null
+                },
+            });
+            if let Some(signal) = signal {
+                selection.matched_terms.push(signal.to_string());
+            }
+            let task_id = selection.execution_plan["runtime_consumption_explicit_task_id"].clone();
+            let plan = super::build_runtime_execution_plan_from_snapshot(&bundle, &selection);
+            assert_eq!(plan["team_flow_inclusion"]["status"], "ready", "{name}");
+            assert_eq!(
+                plan["team_flow_inclusion"]["receipts"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(5),
+                "{name}: one receipt per node"
+            );
+            let contract = &plan["development_flow"]["dispatch_contract"];
+            assert_eq!(
+                contract["lane_catalog"]
+                    .as_object()
+                    .map(|lanes| lanes.len()),
+                Some(5)
+            );
+            assert_eq!(
+                contract["execution_lane_sequence"],
+                json!(expected),
+                "{name}"
+            );
+            assert!(contract["lane_catalog"]
+                .as_object()
+                .expect("lane catalog")
+                .values()
+                .any(|lane| lane["included"] == false));
 
-    #[test]
-    fn flow_activation_receipt_digest_replay_is_deterministic() {
-        let first = super::flow_activation_shadow_decision(super::FlowActivationObservation {
-            optional_nodes: vec!["quality_review".to_string()],
-        })
-        .unwrap();
-        for _ in 0..50 {
-            let receipt =
-                super::flow_activation_shadow_decision(super::FlowActivationObservation {
-                    optional_nodes: vec!["quality_review".to_string()],
-                })
-                .unwrap();
-            assert_eq!(receipt, first);
-            assert_eq!(receipt.snapshot_digest, first.snapshot_digest);
+            selection.execution_plan = plan.clone();
+            selection.execution_plan["runtime_consumption_explicit_task_id"] = task_id;
+            pre_plan_team_flow_authority(
+                &bundle,
+                &selection,
+                PrePlanTeamFlowSelectionMode::Persisted,
+            )
+            .unwrap_or_else(|error| panic!("{name}: persisted authority: {error}"));
+            let replay = super::build_runtime_execution_plan_from_snapshot_with_mode(
+                &bundle,
+                &selection,
+                super::PrePlanTeamFlowSelectionMode::Persisted,
+            );
+            assert_eq!(
+                replay["team_flow_inclusion"]["activation_snapshot_ref"],
+                plan["team_flow_inclusion"]["activation_snapshot_ref"],
+                "{name}: replay must preserve the activation identity"
+            );
+            if name == "ordinary" {
+                let mut tampered = selection.clone();
+                tampered.execution_plan["team_flow_inclusion"]["policy_receipts"][0]
+                    ["input_digest"] = json!("0".repeat(64));
+                let error = pre_plan_team_flow_authority(
+                    &bundle,
+                    &tampered,
+                    PrePlanTeamFlowSelectionMode::Persisted,
+                )
+                .expect_err("tampered persisted policy receipt must fail closed");
+                assert!(error.contains("team_flow_inclusion_policy_receipt_invalid"));
+
+                let mut tampered = selection.clone();
+                tampered.execution_plan["team_flow_inclusion"]["receipts"][0]["decision"]
+                    ["included"] = json!(false);
+                let error = pre_plan_team_flow_authority(
+                    &bundle,
+                    &tampered,
+                    PrePlanTeamFlowSelectionMode::Persisted,
+                )
+                .expect_err("tampered persisted inclusion decision must fail closed");
+                assert!(error.contains("team_flow_inclusion_receipt_invalid"));
+
+                let mut tampered = selection.clone();
+                let forged_audit = "f".repeat(64);
+                for reference in tampered.execution_plan["team_flow_inclusion"]["evidence"]
+                    ["evidence_refs"]
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    if reference.as_str().unwrap().starts_with("audit:") {
+                        *reference = json!(format!("audit:{forged_audit}"));
+                    }
+                }
+                resign_persisted_inclusion(&mut tampered.execution_plan, |requests| {
+                    for request in requests {
+                        request.audit_digest = forged_audit.clone();
+                        for reference in &mut request.evidence.evidence_refs {
+                            if reference.starts_with("audit:") {
+                                *reference = format!("audit:{forged_audit}");
+                            }
+                        }
+                    }
+                });
+                let error = pre_plan_team_flow_authority(
+                    &bundle,
+                    &tampered,
+                    PrePlanTeamFlowSelectionMode::Persisted,
+                )
+                .expect_err("self-consistent forged persisted audit must fail closed");
+                assert!(error.contains("team_flow_inclusion_evidence_invalid"));
+
+                let mut tampered = selection.clone();
+                resign_persisted_inclusion(&mut tampered.execution_plan, |requests| {
+                    requests[1].evidence.review_triggered = true;
+                });
+                let error = pre_plan_team_flow_authority(
+                    &bundle,
+                    &tampered,
+                    PrePlanTeamFlowSelectionMode::Persisted,
+                )
+                .expect_err("heterogeneous persisted global evidence must fail closed");
+                assert!(error.contains("team_flow_inclusion_policy_receipt_invalid"));
+            }
         }
+
+        let mut legacy = strict_team_flow_selection(&bundle);
+        legacy.execution_plan =
+            json!({"team_flow_authority_selected_flow_id": "adaptive-task-flow"});
+        let error =
+            pre_plan_team_flow_authority(&bundle, &legacy, PrePlanTeamFlowSelectionMode::Persisted)
+                .expect_err("legacy inclusion state must remain display-only");
+        assert!(error.contains("team_flow_inclusion_receipt_v1_required"));
     }
 }

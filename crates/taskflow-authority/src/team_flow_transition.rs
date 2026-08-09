@@ -1415,16 +1415,10 @@ fn strict_command_catalog_entry<'a>(
 }
 
 fn validate_inclusion_rule(inclusion_rule: &str, node: &str) -> Result<(), TeamFlowSnapshotError> {
-    if matches!(
-        inclusion_rule,
-        "always"
-            | "never"
-            | "optional"
-            | "when_proof_required"
-            | "when_review_triggered"
-            | "when_architecture_triggered"
-            | "when_rework_required"
-    ) {
+    if inclusion_rule
+        .parse::<crate::team_flow_inclusion::InclusionRule>()
+        .is_ok()
+    {
         Ok(())
     } else {
         Err(TeamFlowSnapshotError::InvalidNodeFieldType {

@@ -12,6 +12,9 @@ use std::{
 };
 
 use serde_json::{Map, Value};
+use taskflow_authority::team_flow_inclusion::{
+    build_snapshot_overlay, replay_snapshot_overlay, InclusionReceiptV1, InclusionRequestV1,
+};
 use taskflow_authority::team_flow_transition::{
     admit_transition, TeamFlowNode, TeamFlowReceipt, TeamFlowSnapshot, TransitionVerdict,
 };
@@ -58,6 +61,10 @@ pub(crate) struct TeamFlowAuthorityProjection {
     pub(crate) config_authority_hash: String,
     pub(crate) registry_authority_hash: String,
     pub(crate) registry_identities: Value,
+    pub(crate) source_snapshot_ref: String,
+    pub(crate) activation_snapshot_ref: Option<String>,
+    pub(crate) inclusion_receipts: Vec<InclusionReceiptV1>,
+    pub(crate) inclusion_policy_receipts: Vec<crate::state_store::policy::runtime::PolicyReceipt>,
     pub(crate) nodes: Vec<TeamFlowNodeProjection>,
 }
 
@@ -88,7 +95,11 @@ pub(crate) struct TeamFlowResolutionBlocker {
 }
 
 impl TeamFlowResolutionBlocker {
-    fn new(code: impl Into<String>, requested: impl Into<String>, candidates: Vec<String>) -> Self {
+    pub(crate) fn new(
+        code: impl Into<String>,
+        requested: impl Into<String>,
+        candidates: Vec<String>,
+    ) -> Self {
         Self {
             code: code.into(),
             requested: requested.into(),
@@ -172,6 +183,89 @@ impl TeamFlowExecutionAuthority {
 
     pub(crate) fn projection(&self) -> &TeamFlowAuthorityProjection {
         &self.projection
+    }
+
+    pub(crate) fn activate_inclusion(
+        self,
+        requests: Vec<InclusionRequestV1>,
+        persisted_receipts: Option<Vec<InclusionReceiptV1>>,
+        policy_receipts: Vec<crate::state_store::policy::runtime::PolicyReceipt>,
+    ) -> Result<Self, TeamFlowResolutionBlocker> {
+        let source_snapshot_ref = self.projection.snapshot.snapshot_ref.clone();
+        let overlay = match persisted_receipts {
+            Some(receipts) => {
+                replay_snapshot_overlay(&self.projection.snapshot, requests, receipts)
+            }
+            None => build_snapshot_overlay(&self.projection.snapshot, requests),
+        }
+        .map_err(|error| {
+            TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_receipt_invalid",
+                error.to_string(),
+                Vec::new(),
+            )
+        })?;
+        if overlay.source_snapshot_ref != source_snapshot_ref {
+            return Err(TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_source_snapshot_mismatch",
+                overlay.source_snapshot_ref,
+                vec![source_snapshot_ref],
+            ));
+        }
+        let mut projection = self.projection;
+        for receipt in &overlay.receipts {
+            let request = &receipt.request;
+            if request.authority_id != projection.authority_id
+                || request.authority_content_hash != projection.authority_content_hash
+                || request.config_authority_hash != projection.config_authority_hash
+                || request.registry_authority_hash != projection.registry_authority_hash
+            {
+                return Err(TeamFlowResolutionBlocker::new(
+                    "team_flow_inclusion_authority_identity_mismatch",
+                    request.node_id.clone(),
+                    Vec::new(),
+                ));
+            }
+        }
+        for node in &mut projection.nodes {
+            node.node.included = overlay
+                .snapshot
+                .node(&node.node.node_id)
+                .ok_or_else(|| {
+                    TeamFlowResolutionBlocker::new(
+                        "team_flow_inclusion_node_missing",
+                        node.node.node_id.clone(),
+                        Vec::new(),
+                    )
+                })?
+                .included;
+        }
+        projection.source_snapshot_ref = source_snapshot_ref;
+        projection.activation_snapshot_ref = Some(overlay.activation_snapshot_ref);
+        projection.inclusion_receipts = overlay.receipts;
+        projection.inclusion_policy_receipts = policy_receipts;
+        projection.snapshot = overlay.snapshot;
+        Ok(Self { projection })
+    }
+
+    pub(crate) fn require_inclusion_receipts(&self) -> Result<(), TeamFlowResolutionBlocker> {
+        if self.projection.activation_snapshot_ref.is_none()
+            || self.projection.inclusion_receipts.len() != self.projection.nodes.len()
+            || self.projection.inclusion_policy_receipts.len() != self.projection.nodes.len()
+        {
+            return Err(TeamFlowResolutionBlocker::new(
+                "team_flow_inclusion_receipt_v1_required",
+                self.projection.snapshot.flow_ref.clone(),
+                Vec::new(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn projected_nodes(&self) -> impl Iterator<Item = TeamFlowNodeResolution> + '_ {
+        self.projection
+            .ordered_nodes()
+            .map(|node| resolution_from_projection(&self.projection, &node))
     }
 
     pub(crate) fn resolve_target(
@@ -1021,11 +1115,18 @@ fn resolve_node(
             vec![node.node.node_id.clone()],
         ));
     }
+    Ok(resolution_from_projection(projection, node))
+}
+
+fn resolution_from_projection(
+    projection: &TeamFlowAuthorityProjection,
+    node: &TeamFlowNodeProjection,
+) -> TeamFlowNodeResolution {
     let command_surface = node
         .command_mapping
         .as_ref()
         .and_then(|mapping| nonempty(mapping.get("surface")));
-    Ok(TeamFlowNodeResolution {
+    TeamFlowNodeResolution {
         node_id: node.node.node_id.clone(),
         lane_id: node.lane_id.clone(),
         dispatch_target: node.dispatch_target.clone(),
@@ -1071,7 +1172,7 @@ fn resolve_node(
         registry_authority_hash: projection.registry_authority_hash.clone(),
         ordered_nodes: projection.ordered_node_ids().to_vec(),
         source: "persisted_projection".to_string(),
-    })
+    }
 }
 
 fn parse_persisted_lane(
@@ -2461,6 +2562,10 @@ fn compile_persisted(
     }
     let entry_node_id = snapshot.entry_node_id.clone();
     Ok(TeamFlowAuthorityProjection {
+        source_snapshot_ref: snapshot.snapshot_ref.clone(),
+        activation_snapshot_ref: None,
+        inclusion_receipts: Vec::new(),
+        inclusion_policy_receipts: Vec::new(),
         snapshot,
         entry_node_id,
         authority_id,
