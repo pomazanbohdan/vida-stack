@@ -141,11 +141,44 @@ Add-Case "controlled_file_diff_registry_contract" {
     Assert-True ($third.file_scan.queued_files -eq $third.file_scan.candidate_files) "FullRescan did not queue every candidate file"
 }
 
+Add-Case "test_update_hook_binds_placeholder_values_as_arguments" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains(".Replace('{file}', '`$args[0]')")) "file placeholder is not bound through a positional argument"
+    Assert-True ($source.Contains(".Replace('{package}', '`$args[1]')")) "package placeholder is not bound through a positional argument"
+    Assert-True ($source.Contains('$command, [string]$FileRecord.path, [string]$FileRecord.package')) "placeholder values are not passed as separate process arguments"
+    Assert-True (-not $source.Contains(".Replace('{file}', [string]`$FileRecord.path)")) "file placeholder is still interpolated as raw PowerShell source"
+    Assert-True (-not $source.Contains(".Replace('{package}', [string]`$FileRecord.package)")) "package placeholder is still interpolated as raw PowerShell source"
+}
+
+Add-Case "committed_registry_uses_string_compact_references" {
+    $registryPath = Join-Path (Get-Location) ".vida/evidence/mutest-audit/file-registry.json"
+    $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+
+    foreach ($name in @("needs_tests", "needs_rerun", "needs_rescan")) {
+        foreach ($reference in @($registry.$name)) {
+            Assert-True ($reference -is [string]) "committed registry $name contains a non-string reference"
+        }
+    }
+
+    foreach ($row in @($registry.files)) {
+        foreach ($defect in @($row.defects)) {
+            foreach ($name in @("evidence", "evidence_refs")) {
+                if ($null -eq $defect.PSObject.Properties[$name]) { continue }
+                foreach ($reference in @($defect.$name)) {
+                    Assert-True ($reference -is [string]) "committed defect $name contains a non-string reference for $($row.path)"
+                }
+            }
+        }
+    }
+}
+
 Add-Case "per_file_loc_and_hash_refresh_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
         Assert-True ($source.Contains($needle)) "missing LOC/index-refresh contract: $needle"
     }
+    Assert-True ($source.Contains("[System.IO.StreamReader]::new")) "LOC metrics do not stream source files"
+    Assert-True (-not $source.Contains("[System.IO.File]::ReadAllLines")) "LOC metrics read entire source files into memory"
     $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-loc-contract-" + [guid]::NewGuid().ToString("N") + ".json")
     $first = Invoke-IndexRefresh -RegistryPath $registry
     Assert-True ($first.status -eq "index_refreshed") "index refresh did not return index_refreshed"
@@ -332,7 +365,22 @@ Add-Case "custom_mutest_launcher_and_schema_contract" {
     Assert-True ($plan.commands[0].command.Contains($expectedCargo)) "custom launcher path is absent from the command manifest"
 }
 
-Add-Case "automatic_launcher_environment_and_target_contract" {
+Add-Case "default_launcher_does_not_trust_project_executables" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    $resolverStart = $source.IndexOf("function Resolve-MutestCargoPath")
+    $resolverEnd = $source.IndexOf("function Get-CargoTargetArguments", $resolverStart)
+    Assert-True ($resolverStart -ge 0 -and $resolverEnd -gt $resolverStart) "mutest path resolver boundary is missing"
+    $resolver = $source.Substring($resolverStart, $resolverEnd - $resolverStart)
+    Assert-True (-not $resolver.Contains(".vida\tmp\mutest-rs-pathfix-bin")) "resolver trusts a project-controlled executable"
+    Assert-True (-not $resolver.Contains("mutest-rs\target")) "resolver trusts a sibling build executable"
+    Assert-True (-not $resolver.Contains('source = "auto"')) "resolver retains automatic direct-executable selection"
+
+    $plan = Invoke-Plan
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$plan.config.mutest_cargo_path)) "default plan selected a direct mutest executable"
+    Assert-True ($plan.config.mutest_cargo_path_source -eq "cargo-subcommand") "default plan did not use Cargo subcommand resolution"
+}
+
+Add-Case "launcher_environment_and_target_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @(
         "Resolve-MutestCargoPath", "mutest_cargo_path_source", "Get-CargoTargetArguments",

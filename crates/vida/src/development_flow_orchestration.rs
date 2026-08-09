@@ -474,6 +474,11 @@ pub(crate) fn normalize_selected_flow_for_execution_plan_with_selected_node(
                 .as_str()
                 .is_some_and(|task_id| !task_id.trim().is_empty())
         });
+    let run_id = selection
+        .execution_plan
+        .get("run_id")
+        .cloned()
+        .filter(|value| value.as_str().is_some_and(|run_id| !run_id.trim().is_empty()));
     let inclusion_contract = selection.execution_plan.get("team_flow_inclusion").cloned();
     selection.compiled_bundle = compiled_bundle.clone();
     selection.selected_role = runtime_role.to_string();
@@ -491,6 +496,9 @@ pub(crate) fn normalize_selected_flow_for_execution_plan_with_selected_node(
         if let Some(task_id) = explicit_task_id.clone() {
             plan.insert("runtime_consumption_explicit_task_id".to_string(), task_id);
         }
+        if let Some(run_id) = run_id.clone() {
+            plan.insert("run_id".to_string(), run_id);
+        }
         if let Some(inclusion_contract) = inclusion_contract {
             plan.insert("team_flow_inclusion".to_string(), inclusion_contract);
         }
@@ -506,6 +514,9 @@ pub(crate) fn normalize_selected_flow_for_execution_plan_with_selected_node(
         .ok_or_else(|| "team_flow_authority_execution_plan_missing".to_string())?;
     if let Some(task_id) = explicit_task_id {
         plan.insert("runtime_consumption_explicit_task_id".to_string(), task_id);
+    }
+    if let Some(run_id) = run_id {
+        plan.insert("run_id".to_string(), run_id);
     }
     plan.insert(
         "team_flow_authority_selected_flow_id".to_string(),
@@ -1521,6 +1532,7 @@ fn build_runtime_execution_plan_from_snapshot_with_mode(
                 "decision_kind": "team_flow_inclusion_v1",
                 "status": "ready",
                 "source_snapshot_ref": projection.source_snapshot_ref,
+                "snapshot_ref": projection.snapshot.snapshot_ref,
                 "activation_snapshot_ref": projection.activation_snapshot_ref,
                 "policy_pin": policy_pin,
                 "evidence": evidence,

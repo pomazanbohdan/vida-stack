@@ -267,6 +267,23 @@ fn consume_final_toon_bool(value: bool) -> &'static str {
     }
 }
 
+fn emit_consume_final_blocked_error(
+    as_json: bool,
+    blocker_code: &str,
+    error: impl std::fmt::Display,
+) {
+    if as_json {
+        crate::print_json_pretty(&serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "blocked",
+            "blocker_codes": [blocker_code],
+            "error": error.to_string(),
+        }));
+    } else {
+        eprintln!("{error}");
+    }
+}
+
 fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
     let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
         ["required_lanes"]
@@ -902,7 +919,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                 &flow_id,
                                             )
                                         {
-                                            eprintln!("{error}");
+                                            emit_consume_final_blocked_error(
+                                                as_json,
+                                                "team_flow_authority_flow_normalization_failed",
+                                                error,
+                                            );
                                             return ExitCode::from(1);
                                         }
                                     }
@@ -932,7 +953,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     &mut role_selection,
                                     &runtime_bundle.activation_bundle,
                                 ) {
-                                    eprintln!("{error}");
+                                    emit_consume_final_blocked_error(
+                                        as_json,
+                                        "team_flow_authority_flow_normalization_failed",
+                                        error,
+                                    );
                                     return ExitCode::from(1);
                                 }
                             }
@@ -950,7 +975,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "run-graph role selection execution_plan is not an object",
                                 )
                             {
-                                eprintln!("{error}");
+                                emit_consume_final_blocked_error(
+                                    as_json,
+                                    "run_graph_runtime_assignment_failed",
+                                    error,
+                                );
                                 return ExitCode::from(1);
                             }
                             let mut dispatch_receipt =
@@ -960,7 +989,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 ) {
                                     Ok(receipt) => receipt,
                                     Err(error) => {
-                                        eprintln!("{error}");
+                                        emit_consume_final_blocked_error(
+                                            as_json,
+                                            "run_graph_dispatch_receipt_build_failed",
+                                            error,
+                                        );
                                         return ExitCode::from(1);
                                     }
                                 };
@@ -1196,8 +1229,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 .await
                             };
                             if let Err(error) = downstream_preview_result {
-                                eprintln!(
-                                    "Failed to write downstream runtime dispatch packet: {error}"
+                                emit_consume_final_blocked_error(
+                                    as_json,
+                                    "runtime_dispatch_packet_preview_failed",
+                                    format!(
+                                        "Failed to write downstream runtime dispatch packet: {error}"
+                                    ),
                                 );
                                 return ExitCode::from(1);
                             }
@@ -1220,8 +1257,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 match super::runtime_dispatch_packet_preview(&ctx) {
                                     Ok(preview) => Some(preview),
                                     Err(error) => {
-                                        eprintln!(
-                                            "Failed to build runtime dispatch packet preview: {error}"
+                                        emit_consume_final_blocked_error(
+                                            as_json,
+                                            "runtime_dispatch_packet_preview_failed",
+                                            format!(
+                                                "Failed to build runtime dispatch packet preview: {error}"
+                                            ),
                                         );
                                         return ExitCode::from(1);
                                     }
@@ -1305,8 +1346,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     match super::write_runtime_dispatch_packet(&ctx) {
                                         Ok(path) => path,
                                         Err(error) => {
-                                            eprintln!(
-                                                "Failed to write runtime dispatch packet: {error}"
+                                            emit_consume_final_blocked_error(
+                                                as_json,
+                                                "runtime_dispatch_packet_write_failed",
+                                                format!(
+                                                    "Failed to write runtime dispatch packet: {error}"
+                                                ),
                                             );
                                             return ExitCode::from(1);
                                         }
@@ -1375,7 +1420,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 )
                                 .await
                                 {
-                                    eprintln!("{error}");
+                                    emit_consume_final_blocked_error(
+                                        as_json,
+                                        "runtime_dispatch_downstream_chain_failed",
+                                        error,
+                                    );
                                     return ExitCode::from(1);
                                 }
                             }
@@ -1387,8 +1436,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             {
                                 Ok(store) => store,
                                 Err(error) => {
-                                    eprintln!(
-                                        "Failed to reopen authoritative state store before receipt persistence: {error}"
+                                    emit_consume_final_blocked_error(
+                                        as_json,
+                                        "authoritative_state_store_reopen_failed",
+                                        format!(
+                                            "Failed to reopen authoritative state store before receipt persistence: {error}"
+                                        ),
                                     );
                                     return ExitCode::from(1);
                                 }
@@ -1398,8 +1451,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     .record_run_graph_dispatch_receipt(&dispatch_receipt)
                                     .await
                                 {
-                                    eprintln!(
-                                        "Failed to record run-graph dispatch receipt: {error}"
+                                    emit_consume_final_blocked_error(
+                                        as_json,
+                                        "run_graph_dispatch_receipt_persist_failed",
+                                        format!(
+                                            "Failed to record run-graph dispatch receipt: {error}"
+                                        ),
                                     );
                                     return ExitCode::from(1);
                                 }
@@ -1423,7 +1480,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     )
                                     .await
                                     {
-                                        eprintln!("Failed to re-sync continuation binding after downstream dispatch chain: {error}");
+                                        emit_consume_final_blocked_error(
+                                            as_json,
+                                            "continuation_binding_resync_failed",
+                                            format!(
+                                                "Failed to re-sync continuation binding after downstream dispatch chain: {error}"
+                                            ),
+                                        );
                                         return ExitCode::from(1);
                                     }
                                     }
@@ -1482,7 +1545,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     {
                                         Ok(snapshot_path) => snapshot_path,
                                         Err(error) => {
-                                            eprintln!("{error}");
+                                            emit_consume_final_blocked_error(
+                                                as_json,
+                                                "runtime_consumption_json_emit_failed",
+                                                error,
+                                            );
                                             return ExitCode::from(1);
                                         }
                                     };
@@ -1493,7 +1560,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     )
                                     .await
                                 {
-                                    eprintln!("{error}");
+                                    emit_consume_final_blocked_error(
+                                        as_json,
+                                        "runtime_consumption_reconciliation_failed",
+                                        error,
+                                    );
                                     return ExitCode::from(1);
                                 }
                             } else {

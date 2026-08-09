@@ -116,8 +116,10 @@ fn dispatch_target_capability(
     requested_target: &str,
 ) -> Result<DispatchTargetCapability, String> {
     let authority =
-        crate::runtime_dispatch_state::require_team_flow_authority_for_selection(role_selection)
-            .map_err(|blocker| blocker.to_string())?;
+        crate::runtime_dispatch_state::require_persisted_team_flow_authority_for_selection(
+            role_selection,
+        )
+        .map_err(|blocker| blocker.to_string())?;
     let selected_node_id = crate::runtime_dispatch_state::selected_flow_node_ref(role_selection)
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -149,10 +151,10 @@ fn dispatch_target_capability(
                 )
                 .is_ok_and(|resolved| resolved.node_id == node.node_id);
             if !selected_node_matches_requested {
-            return Err(format!(
-                "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
-                node.node_id, requested
-            ));
+                return Err(format!(
+                    "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
+                    node.node_id, requested
+                ));
             }
         }
     }
@@ -14029,6 +14031,58 @@ agent_system:
             blocker.contains("ambiguous"),
             "unexpected blocker: {blocker}"
         );
+    }
+
+    #[test]
+    fn dispatch_capability_rejects_matched_terms_not_authorized_by_persisted_inclusion() {
+        let mut selection = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        let flow_id = selection.compiled_bundle["default_flow_set"]
+            .as_str()
+            .expect("fixture should expose a default TeamFlow identity")
+            .to_string();
+        selection.execution_plan["team_flow_authority_selected_flow_id"] =
+            serde_json::json!(flow_id);
+        selection.execution_plan["development_flow"]["dispatch_contract"]["selected_flow_set"] =
+            serde_json::json!(flow_id);
+        selection.execution_plan["selected_flow_contract"]["flow_id"] = serde_json::json!(flow_id);
+        selection.execution_plan["team_flow_authority"]["selected_flow_id"] =
+            serde_json::json!(flow_id);
+        let persisted_plan =
+            crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+                &selection.compiled_bundle,
+                &selection,
+            );
+        selection.execution_plan["team_flow_inclusion"] =
+            persisted_plan["team_flow_inclusion"].clone();
+        let compiled_authority =
+            crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                &selection.compiled_bundle,
+                crate::runtime_dispatch_state::selected_flow_ref(&selection),
+                None,
+            )
+            .expect("compiled TeamFlow authority should resolve");
+        let excluded = compiled_authority
+            .projection()
+            .nodes
+            .iter()
+            .find(|node| !node.node.included)
+            .expect("fixture should retain a conditionally excluded node");
+        let excluded_node_id = excluded.node.node_id.clone();
+        let excluded_target = excluded.dispatch_target.clone();
+        let persisted_authority =
+            crate::runtime_dispatch_state::require_persisted_team_flow_authority_for_selection(
+                &selection,
+            )
+            .expect("persisted TeamFlow inclusion should replay");
+        persisted_authority
+            .resolve_target(Some(&selection.execution_plan), &excluded_target)
+            .expect_err("persisted authority must exclude the conditional lane");
+
+        selection.matched_terms.push(excluded_node_id);
+
+        let blocker = super::dispatch_target_capability(&selection, &excluded_target)
+            .expect_err("mutable matched terms must not widen persisted dispatch authority");
+        assert!(!blocker.trim().is_empty(), "unexpected blocker: {blocker}");
     }
 
     #[test]

@@ -237,14 +237,6 @@ pub(crate) enum MinimumWriteScope {
 }
 
 impl MinimumWriteScope {
-    pub(crate) fn rank(self) -> u8 {
-        match self {
-            Self::ReadOnly => 0,
-            Self::WorkspaceWrite => 1,
-            Self::GuardRequired => 2,
-        }
-    }
-
     pub(crate) fn from_write_scope(write_scope: &str) -> Option<Self> {
         let normalized = write_scope.trim().to_ascii_lowercase();
         if normalized.is_empty()
@@ -280,6 +272,13 @@ impl MinimumWriteScope {
         )
         .then_some(Self::WorkspaceWrite)
     }
+
+    pub(crate) fn admits(self, candidate: Self) -> bool {
+        match self {
+            Self::ReadOnly => candidate == Self::ReadOnly,
+            Self::WorkspaceWrite | Self::GuardRequired => candidate >= self,
+        }
+    }
 }
 
 pub(crate) fn minimum_write_scope_for_task_class(task_class: &str) -> Option<MinimumWriteScope> {
@@ -305,7 +304,7 @@ pub(crate) fn stricter_write_scope_override(
     override_scope: &str,
 ) -> Option<MinimumWriteScope> {
     let override_scope = MinimumWriteScope::from_write_scope(override_scope)?;
-    (override_scope.rank() >= minimum.rank()).then_some(override_scope)
+    minimum.admits(override_scope).then_some(override_scope)
 }
 
 pub(crate) fn effective_minimum_write_scope(
@@ -1061,7 +1060,19 @@ mod tests {
     }
 
     #[test]
+    fn readonly_scope_rejects_write_capable_candidates() {
+        assert!(MinimumWriteScope::ReadOnly.admits(MinimumWriteScope::ReadOnly));
+        assert!(!MinimumWriteScope::ReadOnly.admits(MinimumWriteScope::WorkspaceWrite));
+        assert!(!MinimumWriteScope::ReadOnly.admits(MinimumWriteScope::GuardRequired));
+        assert!(MinimumWriteScope::WorkspaceWrite.admits(MinimumWriteScope::GuardRequired));
+    }
+
+    #[test]
     fn project_override_must_be_equal_or_stricter_than_framework_floor() {
+        assert_eq!(
+            stricter_write_scope_override(MinimumWriteScope::ReadOnly, "workspace-write"),
+            None
+        );
         assert_eq!(
             stricter_write_scope_override(MinimumWriteScope::WorkspaceWrite, "readonly"),
             None

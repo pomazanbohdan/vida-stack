@@ -581,9 +581,13 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
                 "missing required tracked bootstrap evidence `tracked_flow_bootstrap.blocker_codes`"
                     .to_string()
             })?;
+        let blocker_code =
+            required_str(&blocker_codes[0], "tracked_flow_bootstrap.blocker_codes[0]")?;
         return Ok(serde_json::json!({
             "surface": "vida taskflow bootstrap-spec",
             "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_code": blocker_code,
             "required": required,
             "executable": false,
             "view_only": true,
@@ -961,6 +965,48 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn blocked_spec_bootstrap_preserves_dispatch_contract() {
+        let unique_root = std::env::temp_dir().join(format!(
+            "vida-blocked-spec-bootstrap-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should flow")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&unique_root).expect("temporary project root should be creatable");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(StateStore::open(
+                unique_root.join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let tracked = serde_json::json!({
+            "required": true,
+            "status": "blocked",
+            "executable": false,
+            "view_only": true,
+            "activation_semantics": "teamflow_relation_required",
+            "blocker_codes": ["teamflow_relation_missing"],
+            "schema_vocabulary": {},
+        });
+
+        let result = execute_taskflow_bootstrap_spec_with_store(
+            &unique_root,
+            &store,
+            "test blocked bootstrap",
+            &tracked,
+        )
+        .expect("blocked bootstrap should return dispatch-compatible evidence");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "teamflow_relation_missing");
+        assert_eq!(result["blocker_codes"], tracked["blocker_codes"]);
+
+        fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
+    }
 
     #[test]
     fn spec_bootstrap_receipt_writes_files_to_temp_root() {

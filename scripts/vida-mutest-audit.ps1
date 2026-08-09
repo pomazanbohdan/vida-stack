@@ -73,8 +73,9 @@ Files at or below the threshold are recorded as needs_tests; a file is green onl
 mutation_score_percent > threshold_percent (default: > 90%). To run a controlled test-update hook,
 pass -AutoUpdateTests -TestUpdateCommand with {file} and {package} placeholders.
 
-On Windows the script auto-discovers cargo-mutest.exe and the MSVC windows.lib
-directory. Use -MutestCargoPath or -MutestNativeLibPath only to override discovery.
+On Windows the script auto-discovers the MSVC windows.lib directory. By default,
+mutest is resolved as a Cargo subcommand; use -MutestCargoPath only to select a
+direct executable explicitly, or -MutestNativeLibPath to override library discovery.
 Workers use isolated writable TMP/TEMP directories and select --lib/--bin for
 standard production paths automatically.
 `-Files` and `-Packages` accept comma-separated values for shell-safe batch waves.
@@ -193,19 +194,6 @@ function Resolve-MutestCargoPath {
             throw "MutestCargoPath does not exist: $resolved"
         }
         return [pscustomobject]@{ path = $resolved; source = "explicit" }
-    }
-    $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-    $candidates = @(
-        (Join-Path $RepoRoot ".vida\tmp\mutest-rs-pathfix-bin\cargo-mutest.exe"),
-        (Join-Path (Split-Path -Parent $RepoRoot) "mutest-rs\target\release\cargo-mutest.exe"),
-        (Join-Path (Split-Path -Parent $RepoRoot) "mutest-rs\target\debug\cargo-mutest.exe")
-    )
-    if (-not [string]::IsNullOrWhiteSpace($userProfile)) { $candidates += Join-Path $userProfile ".cargo\bin\cargo-mutest.exe" }
-    $candidates = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return [pscustomobject]@{ path = [System.IO.Path]::GetFullPath($candidate); source = "auto" }
-        }
     }
     return [pscustomobject]@{ path = $null; source = "cargo-subcommand" }
 }
@@ -402,9 +390,17 @@ function Get-FileLineMetrics {
     if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
         return [ordered]@{ loc = 0; loc_total = 0 }
     }
-    $lines = @([System.IO.File]::ReadAllLines($absolute))
-    $nonEmpty = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    return [ordered]@{ loc = [int]$nonEmpty.Count; loc_total = [int]$lines.Count }
+    $loc = 0
+    $locTotal = 0
+    $reader = [System.IO.StreamReader]::new($absolute)
+    try {
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $locTotal++
+            if (-not [string]::IsNullOrWhiteSpace($line)) { $loc++ }
+        }
+    }
+    finally { $reader.Dispose() }
+    return [ordered]@{ loc = [int]$loc; loc_total = [int]$locTotal }
 }
 
 function Get-PackageForFile {
@@ -990,8 +986,10 @@ function Invoke-TestUpdateHook {
     $safe = Convert-ToSafeName ([string]$FileRecord.path)
     $evidence = Join-Path $RunEvidenceRoot "test-updates\$safe"
     [void](New-Item -ItemType Directory -Force -Path $evidence)
-    $command = $TestUpdateCommand.Replace('{file}', [string]$FileRecord.path).Replace('{package}', [string]$FileRecord.package)
-    $result = Invoke-Captured -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
+    # Keep repository-controlled values out of PowerShell source. Values supplied after
+    # -Command are exposed through $args and cannot introduce additional statements.
+    $command = $TestUpdateCommand.Replace('{file}', '$args[0]').Replace('{package}', '$args[1]')
+    $result = Invoke-Captured -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command, [string]$FileRecord.path, [string]$FileRecord.package)
     $result | Select-Object ExitCode, Stdout, Stderr | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidence "result.json") -Encoding UTF8
     $status = if ($result.ExitCode -eq 0) { "completed" } else { "blocked" }
     $payload = [ordered]@{ path = $FileRecord.path; package = $FileRecord.package; status = $status; command = $command; exit_code = $result.ExitCode; evidence = $evidence }

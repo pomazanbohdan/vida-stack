@@ -2963,9 +2963,9 @@ impl StateStore {
                 reason: "host_bridge_precursor_fingerprint_serialize_failed:receipt_not_object"
                     .to_string(),
             })?;
-        // `policy_bundle_ref` is state-store authority metadata, not part of the
-        // host-bridge v1 precursor contract. Keep the bridge fingerprint stable
-        // while retaining the policy pin in the persisted run-graph receipt.
+        // Project through the shared host-bridge contract so every
+        // security-relevant receipt field, including `policy_bundle_ref`, is
+        // bound identically during fingerprint creation and validation.
         let value = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
             .iter()
             .filter_map(|field| {
@@ -3038,11 +3038,14 @@ impl StateStore {
         Ok(canonical)
     }
 
-    fn host_bridge_binding_matches_in_flight_receipt(
-        receipt: &RunGraphDispatchReceiptStored,
-    ) -> bool {
-        receipt.dispatch_status == "executing"
-            && receipt.lane_status.as_deref() == Some("lane_running")
+    fn host_bridge_binding_accepts_receipt_state(receipt: &RunGraphDispatchReceiptStored) -> bool {
+        matches!(
+            (
+                receipt.dispatch_status.as_str(),
+                receipt.lane_status.as_deref()
+            ),
+            ("executing", Some("lane_running")) | ("bridge_request_pending", Some("lane_open"))
+        )
     }
 
     pub async fn record_host_bridge_receipt_identity(
@@ -3211,7 +3214,7 @@ impl StateStore {
             .select(("host_bridge_precursor_fingerprint", compact.run_id.as_str()))
             .await?;
         if let Some(existing_receipt) = existing_receipt.as_ref() {
-            if !Self::host_bridge_binding_matches_in_flight_receipt(existing_receipt) {
+            if !Self::host_bridge_binding_accepts_receipt_state(existing_receipt) {
                 return Err(StateStoreError::InvalidTaskRecord {
                     reason: format!(
                         "host_bridge_receipt_binding_conflict:receipt_key={}",
@@ -3266,7 +3269,7 @@ impl StateStore {
                  IF array::len($existing_receipt) > 0 AND array::len($existing_precursor) = 0 { \
                     THROW 'host_bridge_precursor_fingerprint_missing'; \
                  }; \
-                 IF array::len($existing_receipt) > 0 AND ($existing_receipt[0].dispatch_status != 'executing' OR $existing_receipt[0].lane_status != 'lane_running') { \
+                 IF array::len($existing_receipt) > 0 AND !(($existing_receipt[0].dispatch_status = 'executing' AND $existing_receipt[0].lane_status = 'lane_running') OR ($existing_receipt[0].dispatch_status = 'bridge_request_pending' AND $existing_receipt[0].lane_status = 'lane_open')) { \
                     THROW 'host_bridge_receipt_binding_conflict:receipt_key=' + $run_id; \
                  }; \
                  IF array::len($existing_precursor) > 0 AND $existing_precursor[0] != $compact_key { \
@@ -7210,6 +7213,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_bridge_precursor_fingerprint_rejects_cross_policy_receipt() {
+        let root = temp_run_graph_root("vida-host-bridge-cross-policy");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-cross-policy";
+        let packet_path = "/tmp/host-bridge-cross-policy.json";
+        let mut receipt = sample_dispatch_receipt(run_id);
+        receipt.dispatch_packet_path = Some(packet_path.to_string());
+        receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
+            policy_id: "rhai.runtime.authority".to_string(),
+            version: 1,
+            content_digest:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        });
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
+        let baseline = identity
+            .precursor_fingerprint
+            .as_ref()
+            .expect("identity should bind its precursor receipt");
+
+        let mut cross_policy = receipt;
+        cross_policy.policy_bundle_ref = Some(RunGraphPolicyPin {
+            policy_id: "rhai.runtime.authority".to_string(),
+            version: 2,
+            content_digest:
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        });
+        let cross_policy_fingerprint =
+            StateStore::host_bridge_precursor_fingerprint(&identity.request_id, &cross_policy)
+                .expect("cross-policy fingerprint should build");
+
+        assert_ne!(baseline.fingerprint(), cross_policy_fingerprint.fingerprint());
+        assert_ne!(
+            baseline.exact_binding_key(),
+            cross_policy_fingerprint.exact_binding_key()
+        );
+        assert_ne!(
+            baseline.compact_binding_key(),
+            cross_policy_fingerprint.compact_binding_key()
+        );
+        assert_eq!(
+            baseline
+                .validate_candidate_receipt(&cross_policy_fingerprint.receipt)
+                .expect_err("cross-policy receipt must fail closed"),
+            "host_bridge_precursor_fingerprint_conflict"
+        );
+
+        let error = store
+            .record_host_bridge_receipt_binding(&identity, &cross_policy)
+            .await
+            .expect_err("cross-policy binding must fail before persistence");
+        assert!(
+            error
+                .to_string()
+                .contains("host_bridge_precursor_fingerprint_conflict"),
+            "error={error:?}"
+        );
+        assert!(
+            store
+                .host_bridge_receipt_identity(
+                    &identity.run_id,
+                    &identity.dispatch_target,
+                    &identity.packet_path,
+                    &identity.request_id,
+                )
+                .await
+                .expect("identity lookup should succeed")
+                .is_none()
+        );
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
     async fn host_bridge_receipt_binding_is_idempotent_and_rejects_conflicts() {
         let root = temp_run_graph_root("vida-host-bridge-receipt-binding");
         let store = StateStore::open(root.clone()).await.expect("open store");
@@ -7314,6 +7390,40 @@ mod tests {
             .expect("receipt lookup should succeed")
             .expect("pending receipt should remain persisted");
         assert_eq!(stored.dispatch_status, "bridge_request_pending");
+        assert_eq!(stored.dispatch_result_path, pending.dispatch_result_path);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn host_bridge_receipt_binding_accepts_idempotent_pending_replay() {
+        let root = temp_run_graph_root("vida-host-bridge-receipt-binding-pending-replay");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-binding-pending-replay";
+        let packet_path = "/tmp/host-bridge-binding-pending-replay.json";
+        let mut pending = sample_dispatch_receipt(run_id);
+        pending.dispatch_packet_path = Some(packet_path.to_string());
+        pending.dispatch_status = "bridge_request_pending".to_string();
+        pending.lane_status = "lane_open".to_string();
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &pending);
+        pending.dispatch_result_path = Some(identity.result_path.clone());
+
+        store
+            .record_host_bridge_receipt_binding(&identity, &pending)
+            .await
+            .expect("first pending host bridge binding should persist");
+        store
+            .record_host_bridge_receipt_binding(&identity, &pending)
+            .await
+            .expect("same pending host bridge binding should be idempotent");
+
+        let stored = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("pending receipt should remain persisted");
+        assert_eq!(stored.dispatch_status, "bridge_request_pending");
+        assert_eq!(stored.lane_status, "lane_open");
         assert_eq!(stored.dispatch_result_path, pending.dispatch_result_path);
 
         close_store_and_remove_root(store, root).await;

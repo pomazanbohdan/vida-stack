@@ -1967,7 +1967,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             .unwrap_or_default();
         let admitted = hard_minimum_write_scope.is_some_and(|minimum| {
             MinimumWriteScope::from_write_scope(write_scope)
-                .is_some_and(|candidate_scope| candidate_scope >= minimum)
+                .is_some_and(|candidate_scope| minimum.admits(candidate_scope))
         });
         if !admitted {
             rejected_candidates.push(serde_json::json!({
@@ -5523,6 +5523,53 @@ mod tests {
             .as_array()
             .expect("rejected candidates should render")
             .is_empty());
+    }
+
+    #[test]
+    fn workspace_write_scope_is_rejected_for_review_task_class() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "workspace_review",
+            "tier": "review",
+            "rate": 0,
+            "normalized_cost_units": 0,
+            "default_runtime_role": "coach",
+            "runtime_roles": ["coach"],
+            "task_classes": ["review"],
+            "reasoning_band": "medium",
+            "default_model_profile": "workspace_review_profile",
+            "model_profiles": {
+                "workspace_review_profile": {
+                    "profile_id": "workspace_review_profile",
+                    "model_ref": "review/model",
+                    "provider": "review",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 0,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["review"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|candidate| {
+                candidate["carrier_id"] == "workspace_review"
+                    && candidate["reason"] == "hard_capability_registry_denied"
+            }));
     }
 
     #[test]

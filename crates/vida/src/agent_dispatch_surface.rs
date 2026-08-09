@@ -7,10 +7,10 @@ use std::{
 use fs2::FileExt;
 
 use crate::dev_team_sequence_contract::{
-    configured_dev_team_first_step_for_task, dev_team_flow_is_explicitly_sequential,
-    dev_team_receipt_gate, dev_team_sequence, dev_team_sequence_for_flow_id,
-    dev_team_sequence_for_task, dev_team_sequence_for_work_item, selected_dev_team_flow_for_task,
-    task_flow_lookup_keys, DevTeamSequenceStep,
+    configured_dev_team_first_step_for_task, configured_dev_team_first_step_for_task_status,
+    dev_team_flow_is_explicitly_sequential, dev_team_receipt_gate, dev_team_sequence,
+    dev_team_sequence_for_flow_id, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+    selected_dev_team_flow_for_task, task_flow_lookup_keys, DevTeamSequenceStep,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::runtime_proof_scope::{
@@ -3577,6 +3577,23 @@ fn selection_truth_for_task(
     )
 }
 
+fn agent_select_conversation_role(
+    activation_bundle: &serde_json::Value,
+    explicit_role: Option<&str>,
+) -> Option<String> {
+    explicit_role
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            activation_bundle["role_selection"]["fallback_role"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn selection_truth_for_task_with_role_and_class(
     activation_bundle: &serde_json::Value,
     task: &state_store::TaskRecord,
@@ -3586,9 +3603,18 @@ fn selection_truth_for_task_with_role_and_class(
 ) -> Result<AgentDispatchLaneSelectionTruth, String> {
     let task_value = serde_json::to_value(task)
         .map_err(|error| format!("task_record_serialization_failed:{error}"))?;
-    let configured_step = dev_team_sequence_for_task(activation_bundle, task)
-        .into_iter()
-        .find(|step| step.requires_task);
+    let configured_route_resolution =
+        configured_dev_team_first_step_for_task_status(activation_bundle, task);
+    let configured_route = configured_route_resolution.route;
+    if configured_route.is_none() && task_class_override.is_none() {
+        return Err(configured_route_resolution
+            .authority
+            .blocker
+            .unwrap_or_else(|| "team_flow_execution_task_route_missing".to_string()));
+    }
+    let configured_task_class = configured_route
+        .as_ref()
+        .map(|route| route.task_class.clone());
     let task_class = task_class_override
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
@@ -3603,7 +3629,7 @@ fn selection_truth_for_task_with_role_and_class(
                         .map(str::to_string)
                 })
         })
-        .or_else(|| configured_step.as_ref().map(|step| step.task_class.clone()))
+        .or_else(|| configured_task_class.clone())
         .ok_or_else(|| "task_class_binding_missing".to_string())?;
     let runtime_role = runtime_role_override
         .filter(|value| !value.trim().is_empty())
@@ -3620,9 +3646,9 @@ fn selection_truth_for_task_with_role_and_class(
                 })
         })
         .or_else(|| {
-            configured_step
+            configured_route
                 .as_ref()
-                .map(|step| step.runtime_role.clone())
+                .map(|route| route.runtime_role.clone())
         })
         .ok_or_else(|| "runtime_role_binding_missing".to_string())?;
     if conversation_role.trim().is_empty() {
@@ -7454,22 +7480,13 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
     {
         blocker_codes.push("task_class_binding_missing");
     }
-    if command
-        .conversation_role
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
-    {
-        blocker_codes.push("conversation_role_binding_missing");
-    }
     if !blocker_codes.is_empty() {
         let payload = serde_json::json!({
             "surface": "vida agent select",
             "status": release1_blocked_status(),
             "mode": "config_driven_runtime_assignment",
             "blocker_codes": blocker_codes,
-            "next_actions": ["Provide runtime_role, task_class, and conversation_role from the active configuration/team relation."],
+            "next_actions": ["Provide runtime_role and task_class; conversation_role may be omitted when the activation fallback role is configured."],
         });
         if command.json {
             crate::print_json_pretty(&payload);
@@ -7481,7 +7498,7 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
     }
     let runtime_role = command.runtime_role.as_deref().unwrap_or_default();
     let task_class = command.task_class.as_deref().unwrap_or_default();
-    let conversation_role = command.conversation_role.as_deref().unwrap_or_default();
+    let explicit_conversation_role = command.conversation_role.as_deref();
     let state_dir = command
         .state_dir
         .clone()
@@ -7496,9 +7513,29 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let Some(conversation_role) =
+                agent_select_conversation_role(&activation_bundle, explicit_conversation_role)
+            else {
+                let payload = serde_json::json!({
+                    "surface": "vida agent select",
+                    "status": release1_blocked_status(),
+                    "mode": "config_driven_runtime_assignment",
+                    "blocker_codes": ["conversation_role_binding_missing"],
+                    "next_actions": [
+                        "Provide conversation_role or configure role_selection.fallback_role in the activation bundle."
+                    ],
+                });
+                if command.json {
+                    crate::print_json_pretty(&payload);
+                } else {
+                    println!("agent select: blocked");
+                    println!("blocker codes: {}", payload["blocker_codes"]);
+                }
+                return ExitCode::from(1);
+            };
             let selection = crate::build_runtime_assignment_from_resolved_constraints(
                 &activation_bundle,
-                conversation_role,
+                &conversation_role,
                 task_class,
                 runtime_role,
             );
@@ -8104,9 +8141,10 @@ mod tests {
         agent_dispatch_materialization_lanes, agent_dispatch_next_bound_current_task_id,
         agent_dispatch_next_compact_payload, agent_dispatch_next_effective_materialize_packets,
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
-        agent_dispatch_status_from_blockers, agent_status_runtime_task_stale_code,
-        apply_configured_lane_runtime_assignment, apply_continuation_dispatch_gate_to_preview,
-        blocker_code_value, build_agent_dispatch_next_preview,
+        agent_dispatch_status_from_blockers, agent_select_conversation_role,
+        agent_status_runtime_task_stale_code, apply_configured_lane_runtime_assignment,
+        apply_continuation_dispatch_gate_to_preview, blocker_code_value,
+        build_agent_dispatch_next_preview,
         build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt,
         canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
@@ -16717,6 +16755,27 @@ mod tests {
         assert!(blocker_codes
             .iter()
             .any(|code| code.starts_with(&expected_prefix)));
+    }
+
+    #[test]
+    fn agent_select_conversation_role_prefers_explicit_then_activation_fallback() {
+        let mut activation_bundle = activation_bundle_with_worker_selection_truth();
+        activation_bundle["role_selection"] = serde_json::json!({
+            "fallback_role": "configured-worker"
+        });
+
+        assert_eq!(
+            agent_select_conversation_role(&activation_bundle, Some("explicit-host")),
+            Some("explicit-host".to_string())
+        );
+        assert_eq!(
+            agent_select_conversation_role(&activation_bundle, None),
+            Some("configured-worker".to_string())
+        );
+        assert_eq!(
+            agent_select_conversation_role(&serde_json::json!({}), None),
+            None
+        );
     }
 
     #[test]
