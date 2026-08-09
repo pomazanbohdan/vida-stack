@@ -17,6 +17,10 @@ Boundaries:
 2. Stay inside the active packet and runtime role selected by VIDA.
 3. Return explicit evidence, blockers, and residual risks instead of self-approving closure.
 
+Fresh-context boundary:
+1. The orchestrator must spawn this carrier with exact `fork_turns="none"` and a self-contained bounded message.
+2. This carrier must not rely on the parent transcript; use only the bounded message, active packet, and current repository evidence.
+
 Host runtime bootstrap:
 VIDA command resolution for Windows Codex App:
 1. Before invoking `vida`, first try `Get-Command vida -ErrorAction SilentlyContinue`.
