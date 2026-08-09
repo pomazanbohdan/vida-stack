@@ -31,6 +31,7 @@ param(
     [switch]$Resume,
     [switch]$IncludeWorkingTree,
     [switch]$FullRescan,
+    [switch]$RefreshIndex,
     [switch]$AutoUpdateTests,
     [ValidateRange(1, 300)]
     [int]$PollSeconds = 2,
@@ -62,6 +63,9 @@ Examples:
 
 The default run is a Git-snapshot diff scan. A compatible completed file record is
 resumed by SHA-256 content hash; -FullRescan explicitly invalidates all file records.
+Use -RefreshIndex to update the canonical file index with per-file LOC/hash metrics
+without starting mutation workers; this preserves existing wave results and flags
+content drift for the next mutation wave.
 Files at or below the threshold are recorded as needs_tests; a file is green only when
 mutation_score_percent > threshold_percent (default: > 90%). To run a controlled test-update hook,
 pass -AutoUpdateTests -TestUpdateCommand with {file} and {package} placeholders.
@@ -389,6 +393,17 @@ function Get-FileContentHash {
     finally { $stream.Dispose(); $sha.Dispose() }
 }
 
+function Get-FileLineMetrics {
+    param([string]$RelativePath)
+    $absolute = Join-Path $RepoRoot ($RelativePath.Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
+        return [ordered]@{ loc = 0; loc_total = 0 }
+    }
+    $lines = @([System.IO.File]::ReadAllLines($absolute))
+    $nonEmpty = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    return [ordered]@{ loc = [int]$nonEmpty.Count; loc_total = [int]$lines.Count }
+}
+
 function Get-PackageForFile {
     param([string]$RelativePath, [string[]]$KnownPackages)
     $parts = $RelativePath.Replace('\', '/').Split('/')
@@ -461,6 +476,29 @@ function Get-OptionalProperty {
     return $property.Value
 }
 
+function Convert-ToOrderedRecord {
+    param([object]$Object)
+    $record = [ordered]@{}
+    if ($null -eq $Object) { return $record }
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($key in $Object.Keys) { $record[[string]$key] = $Object[$key] }
+        return $record
+    }
+    foreach ($property in $Object.PSObject.Properties) { $record[$property.Name] = $property.Value }
+    return $record
+}
+
+function Get-WaveSortValue {
+    param([object]$Row)
+    $wave = [string](Get-OptionalProperty $Row "last_wave_id" "")
+    $match = [regex]::Match($wave, 'wave-mutest-(?<stamp>\d{8}-\d{6})')
+    if ($match.Success) {
+        return [DateTime]::ParseExact($match.Groups["stamp"].Value, "yyyyMMdd-HHmmss", [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $updated = [string](Get-OptionalProperty $Row "wave_updated_at" "")
+    try { return [DateTime]::Parse($updated, [Globalization.CultureInfo]::InvariantCulture) } catch { return [DateTime]::MinValue }
+}
+
 function Convert-ToCanonicalFileRow {
     param([object]$Row)
     if ($null -eq $Row -or [string]::IsNullOrWhiteSpace([string](Get-OptionalProperty $Row "path"))) { return $null }
@@ -476,6 +514,9 @@ function Convert-ToCanonicalFileRow {
     if (-not $record.Contains("blocker_family")) { $record["blocker_family"] = $null }
     if (-not $record.Contains("blocker_reason")) { $record["blocker_reason"] = $null }
     if (-not $record.Contains("next_action")) { $record["next_action"] = $null }
+    if (-not $record.Contains("loc")) { $record["loc"] = $null }
+    if (-not $record.Contains("loc_total")) { $record["loc_total"] = $null }
+    if (-not $record.Contains("loc_hash")) { $record["loc_hash"] = $null }
     return [pscustomobject]$record
 }
 
@@ -508,6 +549,70 @@ function New-MutationRegistry {
     }
 }
 
+function Get-IndexRefreshRows {
+    param(
+        [string[]]$CandidateFiles,
+        [string[]]$KnownPackages,
+        [object]$Registry,
+        [string]$SnapshotTree,
+        [switch]$PartialSelection
+    )
+    $oldByPath = @{}
+    $oldRows = @(Get-UniqueFileRows -Rows @($Registry.files))
+    foreach ($old in $oldRows) {
+        if ($null -ne $old.path) { $oldByPath[([string]$old.path).ToLowerInvariant()] = $old }
+    }
+    $rows = New-Object System.Collections.Generic.List[object]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @($CandidateFiles | ForEach-Object { Normalize-RepoPath $_ } | Sort-Object -Unique)) {
+        [void]$seen.Add($path)
+        $hash = Get-FileContentHash -RelativePath $path
+        $metrics = Get-FileLineMetrics -RelativePath $path
+        $pathKey = $path.ToLowerInvariant()
+        $old = if ($oldByPath.ContainsKey($pathKey)) { $oldByPath[$pathKey] } else { $null }
+        if ($null -ne $old) {
+            $record = [ordered]@{}
+            foreach ($property in $old.PSObject.Properties) { $record[$property.Name] = $property.Value }
+            $oldHashValue = Get-OptionalProperty -Object $old -Name "hash"
+            if ($null -eq $oldHashValue) { $oldHashValue = Get-OptionalProperty -Object $old -Name "content_hash_sha256" }
+            $oldHash = if ($null -ne $oldHashValue) { [string]$oldHashValue } else { $null }
+            $record.hash = $hash
+            $record.content_hash_sha256 = $hash
+            $record.loc = [int]$metrics.loc
+            $record.loc_total = [int]$metrics.loc_total
+            $record.loc_hash = $hash
+            $record.snapshot_index_tree = $SnapshotTree
+            if ([string]::IsNullOrWhiteSpace($oldHash) -or $oldHash -ne $hash) {
+                $record.status = "queued"
+                $record.queue_reason = if ([string]::IsNullOrWhiteSpace($oldHash)) { "missing_content_hash" } else { "content_hash_changed" }
+                $record.needs_rerun = $true
+                $record.wave_status = "queued"
+                $record.wave_updated_at = [DateTime]::UtcNow.ToString("o")
+            }
+            $record.updated_at = [DateTime]::UtcNow.ToString("o")
+            [void]$rows.Add([pscustomobject]$record)
+            continue
+        }
+        [void]$rows.Add([pscustomobject][ordered]@{
+            path = $path; package = Get-PackageForFile -RelativePath $path -KnownPackages $KnownPackages
+            hash = $hash; content_hash_sha256 = $hash; loc = [int]$metrics.loc; loc_total = [int]$metrics.loc_total; loc_hash = $hash
+            status = "queued"; queue_reason = "new_file"; mutation_score = $null; mutation_score_ratio = $null
+            killed = 0; survived = 0; timeout = 0; no_coverage = 0; compile_error = 0; defects = @(); recommendations = @()
+            needs_tests = $false; needs_rerun = $true; needs_rescan = $false; blocker_code = $null; blocker_family = $null
+            blocker_reason = $null; next_action = $null; last_scan_hash = $null; last_scan_run_id = $null
+            snapshot_index_tree = $SnapshotTree; config_hash = $null; resume_source = "index_refresh"; scan_count = 0
+            last_wave_id = $null; wave_status = "queued"; wave_updated_at = [DateTime]::UtcNow.ToString("o"); wave_count = 0
+            test_update_status = "not_requested"; updated_at = [DateTime]::UtcNow.ToString("o")
+        })
+    }
+    foreach ($old in $oldRows) {
+        if ($null -ne $old.path -and -not $seen.Contains([string]$old.path)) {
+            [void]$rows.Add($old)
+        }
+    }
+    return @(Get-UniqueFileRows -Rows @($rows.ToArray()))
+}
+
 function Read-FileRegistry {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return New-MutationRegistry }
@@ -518,9 +623,8 @@ function Read-FileRegistry {
         $registry.schema_version = 3
         $registry.index_role = "mutation_wave_orchestrator"
         $registry.registry_revision = [int](Get-OptionalProperty $value "registry_revision" 0)
-        $registry.files = @(Get-UniqueFileRows -Rows @($value.files))
-        $registry.waves = @($value.waves)
-        if ($null -eq $registry.waves) { $registry.waves = @() }
+        $registry.files = @(Get-UniqueFileRows -Rows @(Get-OptionalProperty $value "files" @()))
+        $registry.waves = @((Get-OptionalProperty $value "waves" @()))
         return $registry
     } catch {
         throw "Cannot read file registry $Path`: $($_.Exception.Message)"
@@ -538,6 +642,24 @@ function Get-FileStatusCounts {
         if ($status -ne "needs_rescan" -and [bool](Get-OptionalProperty $row "needs_rescan" $false)) { $counts.needs_rescan++ }
     }
     return $counts
+}
+
+function Get-InferredRegistryWaves {
+    param([object[]]$Rows)
+    return @($Rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string](Get-OptionalProperty $_ "last_wave_id" "")) } | Group-Object { [string](Get-OptionalProperty $_ "last_wave_id" "") } | ForEach-Object {
+        $groupRows = @($_.Group)
+        $first = $groupRows | Select-Object -First 1
+        $runId = [string](Get-OptionalProperty $first "last_scan_run_id" "")
+        $statuses = @($groupRows | ForEach-Object { [string](Get-OptionalProperty $_ "wave_status" "unknown") } | Sort-Object -Unique)
+        [ordered]@{
+            wave_id = [string]$_.Name
+            run_id = $runId
+            status = if ($statuses.Count -eq 1) { $statuses[0] } else { "completed_with_followups" }
+            counts = Get-FileStatusCounts -Rows $groupRows
+            artifact_root = $null
+            inferred_from_rows = $true
+        }
+    } | Sort-Object wave_id)
 }
 
 function Write-CanonicalRegistry {
@@ -573,6 +695,7 @@ function Get-FileRegistryPlan {
     foreach ($path in $normalizedCandidates) {
         [void]$seen.Add($path)
         $hash = Get-FileContentHash -RelativePath $path
+        $metrics = Get-FileLineMetrics -RelativePath $path
         $pathKey = $path.ToLowerInvariant()
         $old = if ($oldByPath.ContainsKey($pathKey)) { $oldByPath[$pathKey] } else { $null }
         $oldHashValue = Get-OptionalProperty -Object $old -Name "hash"
@@ -586,13 +709,17 @@ function Get-FileRegistryPlan {
             foreach ($property in $old.PSObject.Properties) { $record[$property.Name] = $property.Value }
             $record.resume_source = "compatible_registry"
             $record.snapshot_index_tree = $SnapshotTree
+            $record.loc = [int]$metrics.loc
+            $record.loc_total = [int]$metrics.loc_total
+            $record.loc_hash = $hash
             [void]$rows.Add([pscustomobject]$record)
             continue
         }
         $reason = if ($FullRescan) { "full_rescan" } elseif ($null -eq $old) { "new_file" } elseif ($oldHash -ne $hash) { "content_hash_changed" } elseif ([bool](Get-OptionalProperty $old "needs_tests") ) { "needs_tests" } elseif ([bool](Get-OptionalProperty $old "needs_rescan") ) { "needs_rescan" } elseif ([bool](Get-OptionalProperty $old "needs_rerun") ) { "needs_rerun" } else { "incompatible_config" }
         $record = [ordered]@{
             path = $path; package = Get-PackageForFile -RelativePath $path -KnownPackages $KnownPackages
-            hash = $hash; content_hash_sha256 = $hash; status = "queued"; queue_reason = $reason
+            hash = $hash; content_hash_sha256 = $hash; loc = [int]$metrics.loc; loc_total = [int]$metrics.loc_total; loc_hash = $hash
+            status = "queued"; queue_reason = $reason
             mutation_score = $null; mutation_score_ratio = $null; killed = 0; survived = 0; timeout = 0; no_coverage = 0
             compile_error = 0; defects = @(); recommendations = @(); needs_tests = $false; needs_rerun = $true; needs_rescan = $false
             blocker_code = $null; blocker_family = $null; blocker_reason = $null; next_action = $null
@@ -944,11 +1071,15 @@ if ([string]::IsNullOrWhiteSpace($ToolRoot)) {
     $siblingToolRoot = Join-Path (Split-Path -Parent $RepoRoot) "mutest-rs"
     if (Test-Path -LiteralPath $siblingToolRoot) { $ToolRoot = $siblingToolRoot }
 }
-$mutestPathResolution = Resolve-MutestCargoPath -RequestedPath $MutestCargoPath
-$MutestCargoPathAbsolute = $mutestPathResolution.path
-$MutestCargoPathSource = $mutestPathResolution.source
+$MutestCargoPathAbsolute = $null
+$MutestCargoPathSource = if ($RefreshIndex) { "index_refresh" } else { $null }
 $MutestNativeLibPathAbsolute = $null
-if (-not [string]::IsNullOrWhiteSpace($MutestNativeLibPath)) {
+if (-not $RefreshIndex) {
+    $mutestPathResolution = Resolve-MutestCargoPath -RequestedPath $MutestCargoPath
+    $MutestCargoPathAbsolute = $mutestPathResolution.path
+    $MutestCargoPathSource = $mutestPathResolution.source
+}
+if (-not $RefreshIndex -and -not [string]::IsNullOrWhiteSpace($MutestNativeLibPath)) {
     $nativeCandidate = if ([System.IO.Path]::IsPathRooted($MutestNativeLibPath)) {
         [System.IO.Path]::GetFullPath($MutestNativeLibPath)
     } else {
@@ -964,6 +1095,9 @@ if (-not [string]::IsNullOrWhiteSpace($MutestNativeLibPath)) {
     if ([string]::IsNullOrWhiteSpace($MutestNativeLibPathAbsolute)) {
         throw "Custom MutestCargoPath on Windows requires MutestNativeLibPath (directory containing windows.lib)."
     }
+}
+if ($RefreshIndex -and ($PlanOnly -or $Resume -or $FullRescan -or $AutoUpdateTests)) {
+    throw "-RefreshIndex cannot be combined with -PlanOnly, -Resume, -FullRescan, or -AutoUpdateTests."
 }
 Assert-WorkingTreePolicy
 $WorkspacePackages = Get-WorkspacePackages
@@ -1005,6 +1139,64 @@ $ConfigHash = Get-CommandHash -Commands @([ordered]@{
 })
 $Registry = Read-FileRegistry -Path $RegistryPathAbsolute
 $PartialSelection = @($Files).Count -gt 0
+if ($RefreshIndex) {
+    $RefreshId = "index-refresh-$(Get-Date -Format yyyyMMdd-HHmmss)-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $refreshedRows = Get-IndexRefreshRows -CandidateFiles $CandidateFiles -KnownPackages $WorkspacePackages -Registry $Registry -SnapshotTree $Provenance.index_tree -PartialSelection:$PartialSelection
+    $RegistryDocument = Convert-ToOrderedRecord -Object $Registry
+    $RegistryDocument.schema_version = 3
+    $RegistryDocument.index_role = "mutation_wave_orchestrator"
+    $RegistryDocument.snapshot_mode = if ($IncludeWorkingTree) { "working_tree" } else { "index" }
+    $RegistryDocument.snapshot_index_tree = $Provenance.index_tree
+    $RegistryDocument.loc_policy = [ordered]@{
+        loc = "non_empty_source_lines"
+        loc_total = "physical_lines"
+        loc_hash = "content_hash_sha256"
+        excludes_blank_lines = $true
+        comments_included = $true
+    }
+    $latestWaveCandidates = @($refreshedRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string](Get-OptionalProperty $_ "last_wave_id" "")) } | Sort-Object @{ Expression = { Get-WaveSortValue $_ }; Descending = $true } | Select-Object -First 1)
+    $latestWaveRow = if ($latestWaveCandidates.Count -gt 0) { $latestWaveCandidates[0] } else { $null }
+    $currentWaveId = [string](Get-OptionalProperty $RegistryDocument "last_wave_id" "")
+    $currentWaveMatch = [regex]::Match($currentWaveId, 'wave-mutest-(?<stamp>\d{8}-\d{6})')
+    $currentWaveTime = if ($currentWaveMatch.Success) { [DateTime]::ParseExact($currentWaveMatch.Groups["stamp"].Value, "yyyyMMdd-HHmmss", [Globalization.CultureInfo]::InvariantCulture) } else { [DateTime]::MinValue }
+    if ($null -ne $latestWaveRow -and ([string]::IsNullOrWhiteSpace($currentWaveId) -or (Get-WaveSortValue $latestWaveRow) -gt $currentWaveTime)) {
+        $RegistryDocument.last_wave_id = [string](Get-OptionalProperty $latestWaveRow "last_wave_id" $null)
+        $RegistryDocument.run_id = [string](Get-OptionalProperty $latestWaveRow "last_scan_run_id" $null)
+    }
+    $existingWaves = @((Get-OptionalProperty $RegistryDocument "waves" @()))
+    if ($existingWaves.Count -eq 0) {
+        $inferredWaves = @(Get-InferredRegistryWaves -Rows $refreshedRows)
+        if ($inferredWaves.Count -gt 0) { $RegistryDocument.waves = $inferredWaves }
+    }
+    $RegistryDocument.files = @($refreshedRows)
+    $RegistryDocument.index_refresh = [ordered]@{
+        refresh_id = $RefreshId
+        refreshed_at = [DateTime]::UtcNow.ToString("o")
+        candidate_files = @($CandidateFiles).Count
+        selected_files = @($refreshedRows | Where-Object { $CandidateFiles -contains $_.path }).Count
+        mode = if ($PartialSelection) { "partial" } else { "all_production_files" }
+        mutation_workers_started = $false
+        hash_policy = "sha256_content_drift_marks_needs_rerun"
+        loc_policy = $RegistryDocument.loc_policy
+    }
+    Write-CanonicalRegistry -Registry $RegistryDocument -Path $RegistryPathAbsolute
+    [void](New-Item -ItemType Directory -Force -Path $RunEvidenceRoot)
+    $refreshReport = [ordered]@{
+        schema_version = 1
+        status = "index_refreshed"
+        refresh_id = $RefreshId
+        registry_path = $RegistryPathAbsolute
+        registry_revision = [int](Get-OptionalProperty $RegistryDocument "registry_revision" 0)
+        candidate_files = @($CandidateFiles).Count
+        indexed_files = @($refreshedRows).Count
+        loc_policy = $RegistryDocument.loc_policy
+        hash_policy = "sha256_content_drift_marks_needs_rerun"
+        mutation_workers_started = $false
+    }
+    Write-AtomicJson -Path (Join-Path $RunEvidenceRoot "index-refresh.json") -Value $refreshReport
+    $refreshReport | ConvertTo-Json -Depth 20
+    exit 0
+}
 $FilePlan = Get-FileRegistryPlan -CandidateFiles $CandidateFiles -KnownPackages $WorkspacePackages -Registry $Registry -ConfigHash $ConfigHash -SnapshotTree $Provenance.index_tree -PartialSelection:$PartialSelection
 $QueueFiles = @($FilePlan.queue | Sort-Object path)
 $QueuePackages = @($QueueFiles | ForEach-Object { $_.package } | Where-Object { $_ } | Sort-Object -Unique)
@@ -1019,10 +1211,10 @@ $Commands = @($QueueFiles | ForEach-Object {
     [ordered]@{ path = $path; package = $package; category = Get-PackageCategory $package; worker_scope = "single_production_file"; mutation_filter = "file:$path"; target_dir = $manifestTarget; metadata_dir = $manifestMetadata; args = @($manifestArgs); command = Get-MutestCommandText -Arguments $manifestArgs; fallback_batch_size = 1; fallback_args = @($fallbackArgs); fallback_command = Get-MutestCommandText -Arguments $fallbackArgs }
 })
 $CommandHash = Get-CommandHash -Commands $Commands
-$RegistryDocument = [ordered]@{}
-foreach ($property in $Registry.PSObject.Properties) { $RegistryDocument[$property.Name] = $property.Value }
+$RegistryDocument = Convert-ToOrderedRecord -Object $Registry
 $RegistryDocument.schema_version = 3; $RegistryDocument.index_role = "mutation_wave_orchestrator"; $RegistryDocument.run_id = $RunId; $RegistryDocument.last_wave_id = $WaveId
 $RegistryDocument.snapshot_mode = if ($IncludeWorkingTree) { "working_tree" } else { "index" }; $RegistryDocument.snapshot_index_tree = $Provenance.index_tree
+$RegistryDocument.loc_policy = [ordered]@{ loc = "non_empty_source_lines"; loc_total = "physical_lines"; loc_hash = "content_hash_sha256"; excludes_blank_lines = $true; comments_included = $true }
 $RegistryDocument.config_hash = $ConfigHash; $RegistryDocument.threshold_percent = $Threshold; $RegistryDocument.full_rescan = [bool]$FullRescan
 $RegistryDocument.diff_scan = [ordered]@{ candidates = @($CandidateFiles).Count; queued = @($QueueFiles).Count; resumed = @($FilePlan.resumed).Count; deleted = @($FilePlan.deleted).Count; queue_policy = "one-file-workers-new-or-hash-changed-or-pending-flags" }
 $RegistryDocument.files = @($FilePlan.files)

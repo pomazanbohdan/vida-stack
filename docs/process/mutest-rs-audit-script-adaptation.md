@@ -66,6 +66,8 @@ Per-worker file reports and the aggregate report contain `generated`, `evaluated
 - Production mutation scope is `crates/<package>/src/**/*.rs`; generated/freezed/mock paths and files are excluded.
 - The default mode is a diff scan. Candidate files are hashed with SHA-256 and compared with `.vida/evidence/mutest-audit/file-registry.json`.
 - The registry is schema v3 with `index_role=mutation_wave_orchestrator`: exactly one row per normalized repo-relative production path, plus top-level wave summaries. It is the only authoritative per-file index.
+- Each file row exposes `loc` (non-empty source lines), `loc_total` (physical lines including blanks), and `loc_hash` (the content hash used for the LOC calculation). Sort the canonical rows by `loc` to select small files for fast follow-up work.
+- `-RefreshIndex -IncludeWorkingTree` refreshes LOC and content-hash metrics for the selected production files without starting mutation workers. Existing mutation results remain in place; content drift is marked `needs_rerun` with `queue_reason=content_hash_changed`.
 - Each row carries `last_wave_id`, `wave_status`, `wave_updated_at`, `wave_count`, and the current score/follow-up flags. A wave updates existing rows in place; it never appends duplicate file rows.
 - `manifest.json` and `parallel-report.json` contain aggregate data and registry/wave references only. Worker reports remain evidence and are not a second status index.
 - A completed record is compatible only when its content hash, configuration hash, status, and follow-up flags match. New/changed/pending records enter the queue; deleted snapshot files remain recorded as `deleted_from_snapshot`.

@@ -49,6 +49,18 @@ function Invoke-Plan {
     return ($raw -join "`n" | ConvertFrom-Json)
 }
 
+function Invoke-IndexRefresh {
+    param(
+        [string]$RegistryPath,
+        [string]$Package = "docflow-markdown",
+        [string]$FilesCsv = "crates/docflow-markdown/src/lib.rs"
+    )
+    $arguments = @("-NoProfile", "-File", $ScriptPath, "-RefreshIndex", "-IncludeWorkingTree", "-Json", "-Packages", $Package, "-Files", $FilesCsv, "-RegistryPath", $RegistryPath)
+    $raw = & pwsh @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Index refresh failed: $($raw -join ' ')" }
+    return ($raw -join "`n" | ConvertFrom-Json)
+}
+
 Add-Case "powershell_parser" {
     $tokens = $null; $errors = $null
     [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptPath), [ref]$tokens, [ref]$errors) | Out-Null
@@ -127,6 +139,46 @@ Add-Case "controlled_file_diff_registry_contract" {
     Assert-True ($second.file_scan.resumed_files -ge 0) "diff scan resume count missing"
     $third = Invoke-Plan -RegistryPath $registry -FullRescan
     Assert-True ($third.file_scan.queued_files -eq $third.file_scan.candidate_files) "FullRescan did not queue every candidate file"
+}
+
+Add-Case "per_file_loc_and_hash_refresh_contract" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
+        Assert-True ($source.Contains($needle)) "missing LOC/index-refresh contract: $needle"
+    }
+    $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-loc-contract-" + [guid]::NewGuid().ToString("N") + ".json")
+    $first = Invoke-IndexRefresh -RegistryPath $registry
+    Assert-True ($first.status -eq "index_refreshed") "index refresh did not return index_refreshed"
+    Assert-True (-not $first.mutation_workers_started) "index refresh started mutation workers"
+    $index = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $row = @($index.files | Where-Object { $_.path -eq "crates/docflow-markdown/src/lib.rs" })[0]
+    Assert-True ($null -ne $row) "LOC refresh did not create a file row"
+    Assert-True ([int]$row.loc -gt 0) "LOC is missing or zero for a non-empty source file"
+    Assert-True ([int]$row.loc_total -ge [int]$row.loc) "physical LOC is smaller than non-empty LOC"
+    Assert-True ([string]$row.loc_hash -eq [string]$row.content_hash_sha256) "LOC hash is not tied to content hash"
+    Assert-True ($index.loc_policy.loc -eq "non_empty_source_lines") "LOC policy is not persisted"
+
+    $seed = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $seed.files[0].hash = ("0" * 64)
+    $seed.files[0].content_hash_sha256 = ("0" * 64)
+    $seed.files[0].status = "completed"
+    $seed.files[0].needs_rerun = $false
+    $seed.files[0].needs_tests = $false
+    $seed.files[0].needs_rescan = $false
+    $seed.run_id = "seed-run"
+    $seed.last_wave_id = "seed-wave"
+    $seed.waves = @([ordered]@{ wave_id = "seed-wave"; status = "completed" })
+    $seed | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $registry -Encoding UTF8
+    $second = Invoke-IndexRefresh -RegistryPath $registry
+    Assert-True ($second.status -eq "index_refreshed") "second index refresh did not complete"
+    $changed = @((Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json).files | Where-Object { $_.path -eq "crates/docflow-markdown/src/lib.rs" })[0]
+    Assert-True ($changed.status -eq "queued") "hash drift did not queue the file"
+    Assert-True ($changed.queue_reason -eq "content_hash_changed") "hash drift queue reason is incorrect"
+    Assert-True ([bool]$changed.needs_rerun) "hash drift did not set needs_rerun"
+    $preserved = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    Assert-True ($preserved.run_id -eq "seed-run") "index refresh dropped top-level run_id"
+    Assert-True ($preserved.last_wave_id -eq "seed-wave") "index refresh dropped top-level last_wave_id"
+    Assert-True (@($preserved.waves).Count -eq 1) "index refresh dropped wave summaries"
 }
 
 Add-Case "single_index_wave_orchestrator_contract" {

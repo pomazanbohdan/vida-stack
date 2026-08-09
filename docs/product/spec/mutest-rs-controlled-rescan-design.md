@@ -161,6 +161,7 @@ Will implement / choose:
 - `events.jsonl`: run, worker, refill, test-update, rescan, drift, and defect-protocol events.
 - `parallel-report.json`: aggregate, worker evidence, and registry/wave references; no per-file status array.
 - `file-registry.json`: the single durable lifecycle, hash, and wave state index.
+- Every file row also carries `loc` (non-empty source lines), `loc_total` (physical lines), and `loc_hash`; `-RefreshIndex` backfills these metrics without launching mutest workers so small files can be selected first.
 - `defects.jsonl` and `defect-remediation.json`: confirmed mutation gaps and protocol actions.
 
 ## Rollout Strategy
