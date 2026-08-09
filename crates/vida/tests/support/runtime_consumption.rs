@@ -5,9 +5,9 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
 
 pub(crate) const RECEIPT_HELPER_STATE_DIR_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_STATE_DIR";
 pub(crate) const RECEIPT_HELPER_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RUN_ID";
@@ -520,6 +520,7 @@ struct TestRunGraphDispatchReceiptRow {
     activation_agent_type: Option<String>,
     activation_runtime_role: Option<String>,
     selected_backend: Option<String>,
+    policy_bundle_ref: Option<serde_json::Value>,
     recorded_at: String,
 }
 
@@ -714,6 +715,11 @@ fn persist_ready_downstream_receipt(
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some(dispatch_target.to_string()),
             selected_backend: Some("internal_subagents".to_string()),
+            policy_bundle_ref: Some(serde_json::json!({
+                "policy_id": "rhai.runtime.authority",
+                "version": 1,
+                "content_digest": "ea68c6540429d758b63af5562843fedd1b60c0680a624429d6da05bbec3c095a"
+            })),
             recorded_at: "2026-06-05T00:00:00Z".to_string(),
         };
         let _: Option<TestRunGraphDispatchReceiptRow> = db

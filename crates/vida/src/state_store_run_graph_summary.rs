@@ -7058,8 +7058,8 @@ mod tests {
         receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
             policy_id: "rhai.runtime.authority".to_string(),
             version: 2,
-            content_digest:
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            content_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
         });
         let error = StateStore::validate_policy_bundle_ref_for_summary(
             &serde_json::json!({
@@ -7168,26 +7168,9 @@ mod tests {
         .to_hex()
         .to_string();
         let request_id = format!("request-{run_id}");
-        let receipt_value =
-            serde_json::to_value(receipt).expect("test dispatch receipt should serialize");
-        let canonical_receipt = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
-            .iter()
-            .map(|field| {
-                (
-                    (*field).to_string(),
-                    receipt_value
-                        .get(*field)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null),
-                )
-            })
-            .collect();
         let precursor_fingerprint =
-            taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
-                &request_id,
-                &serde_json::Value::Object(canonical_receipt),
-            )
-            .expect("test precursor fingerprint should build");
+            StateStore::host_bridge_precursor_fingerprint(&request_id, receipt)
+                .expect("test precursor fingerprint should build");
         taskflow_host_bridge::HostBridgeReceiptIdentityV1 {
             schema_version: taskflow_host_bridge::HOST_BRIDGE_RECEIPT_IDENTITY_SCHEMA_VERSION
                 .to_string(),
@@ -7301,11 +7284,12 @@ mod tests {
         in_flight.dispatch_packet_path = Some(packet_path.to_string());
         in_flight.dispatch_status = "executing".to_string();
         in_flight.lane_status = "lane_running".to_string();
-        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
         store
-            .record_host_bridge_receipt_binding(&identity, &in_flight)
+            .record_run_graph_dispatch_receipt(&in_flight)
             .await
-            .expect("in-flight dispatch binding should persist");
+            .expect("in-flight dispatch receipt should persist");
+
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
         let mut pending = in_flight.clone();
         pending.dispatch_status = "bridge_request_pending".to_string();
         pending.dispatch_result_path = Some(identity.result_path.clone());
@@ -7345,11 +7329,12 @@ mod tests {
         in_flight.dispatch_packet_path = Some(packet_path.to_string());
         in_flight.dispatch_status = "executing".to_string();
         in_flight.lane_status = "lane_running".to_string();
-        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
         store
-            .record_host_bridge_receipt_binding(&identity, &in_flight)
+            .record_run_graph_dispatch_receipt(&in_flight)
             .await
-            .expect("in-flight dispatch binding should persist");
+            .expect("in-flight dispatch receipt should persist");
+
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &in_flight);
         let mut mismatched = in_flight.clone();
         mismatched.dispatch_status = "bridge_request_pending".to_string();
         mismatched.dispatch_command = Some("different-command".to_string());
@@ -7590,6 +7575,8 @@ mod tests {
             let packet_path = format!("/tmp/{run_id}.json");
             let mut receipt = sample_dispatch_receipt(run_id);
             receipt.dispatch_packet_path = Some(packet_path.clone());
+            receipt.dispatch_status = "executing".to_string();
+            receipt.lane_status = "lane_running".to_string();
             let compact: RunGraphDispatchReceiptStored = receipt.clone().into();
             let _: Option<RunGraphDispatchReceiptStored> = store
                 .db

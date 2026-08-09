@@ -554,7 +554,6 @@ pub(crate) async fn build_post_commit_diagnostics(
         .map_err(|error| format!("read current runtime projection: {error}"))?;
     let crate::status_surface::CurrentRuntimeProjection {
         current_session_status: latest_run_graph_status,
-        global_status: latest_global_run_graph_status,
         terminal_task_active_status: latest_terminal_task_active_run_graph_status,
         recovery: latest_run_graph_recovery,
         dispatch_receipt: latest_dispatch_receipt,
@@ -679,13 +678,41 @@ pub(crate) async fn build_post_commit_diagnostics(
             Some(_) => false,
             None => false,
         };
-    let global_closed_task_active_run_projection_mismatch = latest_run_graph_status.is_none()
-        && latest_global_run_graph_status.as_ref().is_some_and(|status| {
-            closed_task_ids.iter().any(|id| id == &status.task_id)
-                && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
-                    status,
+    let global_closed_task_active_run_projection_mismatch = if latest_run_graph_status.is_none() {
+        let mut mismatch = false;
+        for task_id in &closed_task_ids {
+            let Some(run_id) = store
+                .latest_run_graph_run_id_for_task(task_id)
+                .await
+                .map_err(|error| format!("read global run graph id for closed task: {error}"))?
+            else {
+                continue;
+            };
+            let status = store.run_graph_status(&run_id).await.map_err(|error| {
+                format!("read global run graph status for closed task: {error}")
+            })?;
+            if status.task_id != *task_id
+                || crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                    &status,
                 )
-        });
+            {
+                continue;
+            }
+            if !store
+                .run_graph_terminal_closure_has_task_close_truth(&status)
+                .await
+                .map_err(|error| {
+                    format!("read global run graph terminal closure evidence: {error}")
+                })?
+            {
+                mismatch = true;
+                break;
+            }
+        }
+        mismatch
+    } else {
+        false
+    };
     let closed_task_active_run_projection_mismatch =
         post_commit_closed_task_active_run_projection_mismatch(
             latest_run_graph_status.as_ref(),
