@@ -773,7 +773,18 @@ fn selected_flow_route_node(
             .into_iter()
             .any(|candidate| candidate == route_id)
         })
-        .map(|node| node.node.node_id.clone())?;
+        .map(|node| node.node.node_id.clone())
+        .or_else(|| {
+            let expected_task_class = match route_id {
+                "review_ensemble" | "verification_ensemble" | "verification" => "verification",
+                "coach" | "coach_validator" => "coach",
+                _ => return None,
+            };
+            authority
+                .ordered_nodes()
+                .find(|node| node.node.task_class == expected_task_class)
+                .map(|node| node.node.node_id.clone())
+        })?;
     authority.resolve_target(None, &node_id).ok()
 }
 

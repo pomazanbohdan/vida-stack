@@ -8434,6 +8434,42 @@ mod tests {
             .expect("canonical executor backend id")
             .to_string();
         let mut selected = None;
+        let accepted_targets: &[&str] = match dispatch_target {
+            "implementer" | "developer" => &[
+                "implementer",
+                "developer",
+                "development_implementer",
+                "coder",
+            ],
+            "verification" | "tester" => &["verification", "tester", "development_verifier"],
+            "alpha_gate" => &[
+                "alpha_gate",
+                "implementer",
+                "developer",
+                "development_implementer",
+                "coder",
+            ],
+            "coach" => &[
+                "coach",
+                "coach_validator",
+                "coach_implementation_gate",
+                "development_coach",
+            ],
+            "specification" | "analyst" => {
+                &["specification", "analyst", "development_specification"]
+            }
+            "architecture" | "architect" | "designer" => &[
+                "architecture",
+                "architect",
+                "designer",
+                "development_execution_preparation",
+                "development_escalation",
+            ],
+            "closure" | "release_closure" => {
+                &["closure", "release_closure", "development_release_closure"]
+            }
+            other => &[other],
+        };
         if let Some(flows) = bundle
             .get("team_flow_authority")
             .and_then(|value| value.get("resolved_all_flow_payload"))
@@ -8453,7 +8489,7 @@ mod tests {
                     .into_iter()
                     .flatten()
                     .filter_map(serde_json::Value::as_str)
-                    .any(|candidate| candidate == dispatch_target);
+                    .any(|candidate| accepted_targets.contains(&candidate));
                     if !matches_canonical_identity {
                         continue;
                     }

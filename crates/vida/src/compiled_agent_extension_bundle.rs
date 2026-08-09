@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
 fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
@@ -68,6 +69,41 @@ fn registry_catalog(
             Some((id, row))
         })
         .collect()
+}
+
+fn active_policy_pin_from_store(root: &Path) -> serde_json::Value {
+    let store_path = root
+        .join(crate::state_store::default_state_dir())
+        .join("policy-store.json");
+    let Ok(raw) = fs::read_to_string(store_path) else {
+        return serde_json::Value::Null;
+    };
+    let Ok(snapshot) =
+        serde_json::from_str::<crate::state_store::policy::PolicyLifecycleStoreSnapshot>(&raw)
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some(active_pointer) = snapshot.active_pointer.as_deref() else {
+        return serde_json::Value::Null;
+    };
+    let Some(bundle) = snapshot
+        .bundles
+        .iter()
+        .find(|bundle| bundle.bundle_id == active_pointer)
+    else {
+        return serde_json::Value::Null;
+    };
+    if !matches!(
+        bundle.lifecycle,
+        crate::state_store::policy::PolicyLifecycle::Active
+    ) {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "policy_id": bundle.policy_id,
+        "version": bundle.version,
+        "content_digest": bundle.content_digest,
+    })
 }
 
 pub(crate) fn build_compiled_agent_extension_bundle_for_root(
@@ -211,6 +247,7 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         })?
         .authority
     };
+    let active_policy_pin = active_policy_pin_from_store(root);
 
     let bundle = serde_json::json!({
         "ok": true,
@@ -232,6 +269,9 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "pack_catalog": pack_catalog,
         "command_catalog": command_catalog,
         "team_flow_authority": team_flow_authority,
+        "policy_runtime": {
+            "active": active_policy_pin,
+        },
         "taskflow": {
             "management_runtime": "always_on",
             "management_status": crate::taskflow_runtime::management_status_projection(),
@@ -335,8 +375,8 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_compiled_agent_extension_bundle_for_root, canonical_registry_json,
-        deterministic_content_id,
+        active_policy_pin_from_store, build_compiled_agent_extension_bundle_for_root,
+        canonical_registry_json, deterministic_content_id,
     };
     use crate::project_activator_surface::read_yaml_file_checked;
     use crate::run;
@@ -345,6 +385,50 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::process::ExitCode;
+
+    #[test]
+    fn active_policy_pin_projection_is_store_backed_and_fail_closed() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        assert_eq!(active_policy_pin_from_store(root), serde_json::Value::Null);
+
+        let state_dir = root.join(crate::state_store::default_state_dir());
+        fs::create_dir_all(&state_dir).expect("state dir should exist");
+        fs::write(
+            state_dir.join("policy-store.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "bundles": [{
+                    "bundle_id": "rhai.runtime.authority@1",
+                    "policy_id": "rhai.runtime.authority",
+                    "version": 1,
+                    "engine_abi": "rhai-policy-engine-v1",
+                    "source": "ctx.value",
+                    "content_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "lifecycle": "active"
+                }],
+                "test_receipts": [],
+                "evaluation_receipts": [],
+                "shadow_diffs": [],
+                "active_pointer": "rhai.runtime.authority@1",
+                "last_known_good": null,
+                "modes": [],
+                "run_pins": [],
+                "shadow_receipts": []
+            })
+            .to_string(),
+        )
+        .expect("policy store should exist");
+
+        assert_eq!(
+            active_policy_pin_from_store(root),
+            serde_json::json!({
+                "policy_id": "rhai.runtime.authority",
+                "version": 1,
+                "content_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            })
+        );
+    }
 
     #[test]
     fn compiled_agent_extension_bundle_merges_sidecar_overrides() {

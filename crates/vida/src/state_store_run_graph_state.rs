@@ -147,7 +147,7 @@ pub struct RunGraphDispatchReceipt {
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
     pub selected_backend: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_bundle_ref: Option<RunGraphPolicyPin>,
     pub recorded_at: String,
 }

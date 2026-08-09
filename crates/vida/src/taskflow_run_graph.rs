@@ -6853,7 +6853,20 @@ async fn seeded_implementation_lane_sequence(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "run_graph_dispatch_context_missing".to_string())?;
     let selection = rehydrate_dispatch_context_role_selection(store, &context).await?;
-    crate::runtime_dispatch_state::typed_lane_node_sequence(&selection, true).map(Some)
+    let mut sequence = crate::runtime_dispatch_state::typed_lane_node_sequence(&selection, true)?;
+    let selected_node = selection.execution_plan["development_flow"]["implementation"]
+        .get("team_flow_selected_node_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(selected_node) = selected_node {
+        let selected_index = sequence
+            .iter()
+            .position(|node| node.node_id == selected_node)
+            .ok_or_else(|| format!("team_flow_selected_node_id_unknown:{selected_node}"))?;
+        sequence.drain(..selected_index);
+    }
+    Ok(Some(sequence))
 }
 
 fn ensure_configured_lane_advance_allowed(
@@ -8397,6 +8410,32 @@ pub(crate) async fn persist_selected_node_for_run_graph_transition(
         .map_err(|error| format!("Failed to persist progressed TeamFlow selected node: {error}"))
 }
 
+fn is_external_run_graph_dispatch_target(status: &RunGraphStatus, target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() {
+        return false;
+    }
+    if matches!(
+        target,
+        "research-pack"
+            | "spec-pack"
+            | "work-pool-pack"
+            | "dev-pack"
+            | "bug-pool-pack"
+            | "reflection-pack"
+    ) {
+        return matches!(
+            status.task_class.as_str(),
+            "scope_discussion" | "pbi_discussion"
+        );
+    }
+    status.task_class == "implementation"
+        && matches!(
+            target,
+            "review_ensemble" | "verification" | "verification_ensemble" | "approval"
+        )
+}
+
 pub(crate) fn project_selected_node_for_run_graph_status(
     selection: &mut RuntimeConsumptionLaneSelection,
     status: &RunGraphStatus,
@@ -8405,6 +8444,7 @@ pub(crate) fn project_selected_node_for_run_graph_status(
     let selected_node_id = status
         .next_node
         .as_deref()
+        .filter(|target| !is_external_run_graph_dispatch_target(status, target))
         .or_else(|| (!status.active_node.trim().is_empty()).then_some(status.active_node.as_str()))
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -8416,21 +8456,51 @@ pub(crate) fn project_selected_node_for_run_graph_status(
             selection,
         )
         .map_err(|blocker| blocker.to_string())?;
-    let status_node = authority
-        .resolve_target(Some(&selection.execution_plan), selected_node_id)
-        .map_err(|blocker| blocker.to_string())?;
+    let status_node = crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+        &authority,
+        Some(&selection.execution_plan),
+        selected_node_id,
+    )
+    .or_else(|blocker| {
+        let verification_alias = matches!(
+            selected_node_id,
+            "review_ensemble" | "verification" | "verification_ensemble"
+        );
+        if !verification_alias || status.task_class != "implementation" {
+            return Err(blocker);
+        }
+        let candidates = authority
+            .ordered_nodes()
+            .filter(|projection| projection.node.task_class == "verification")
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return Err(blocker);
+        }
+        crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+            &authority,
+            Some(&selection.execution_plan),
+            &candidates[0].node.node_id,
+        )
+    })
+    .map_err(|blocker| blocker.to_string())?;
     if let Some(receipt_dispatch_target) = receipt_dispatch_target
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let receipt_node = authority
-            .resolve_target(Some(&selection.execution_plan), receipt_dispatch_target)
-            .map_err(|blocker| blocker.to_string())?;
-        if receipt_node.node_id != status_node.node_id {
-            return Err(format!(
-                "team_flow_selected_node_status_receipt_mismatch:{}:{}:{}",
-                status_node.node_id, status_node.dispatch_target, receipt_node.node_id
-            ));
+        if !is_external_run_graph_dispatch_target(status, receipt_dispatch_target) {
+            let receipt_node =
+                crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+                    &authority,
+                    Some(&selection.execution_plan),
+                    receipt_dispatch_target,
+                )
+                .map_err(|blocker| blocker.to_string())?;
+            if receipt_node.node_id != status_node.node_id {
+                return Err(format!(
+                    "team_flow_selected_node_status_receipt_mismatch:{}:{}:{}",
+                    status_node.node_id, status_node.dispatch_target, receipt_node.node_id
+                ));
+            }
         }
     }
     let plan = selection
@@ -9889,23 +9959,70 @@ fn seeded_run_graph_state_from_role_selection(
     let first_execution_node = if is_conversation {
         None
     } else {
-        Some(compiled_control.entry_execution_node_id.clone())
+        execution_plan["development_flow"]["implementation"]
+            .get("team_flow_selected_node_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|node_id| !node_id.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| Some(compiled_control.entry_execution_node_id.clone()))
     };
     let lane_node = first_execution_node
         .clone()
         .unwrap_or_else(|| selection.selected_role.clone());
-    let selected_backend =
+    let selected_backend = if is_conversation {
+        let configured_route = execution_plan["default_route"]
+            .as_object()
+            .filter(|route| !route.is_empty())
+            .cloned()
+            .map(serde_json::Value::Object)
+            .or_else(|| {
+                selection
+                    .tracked_flow_entry
+                    .as_deref()
+                    .and_then(|route_id| {
+                        selection.compiled_bundle["agent_system"]["routing"][route_id]
+                            .as_object()
+                            .filter(|route| !route.is_empty())
+                            .map(|route| serde_json::Value::Object(route.clone()))
+                    })
+            })
+            .or_else(|| {
+                selection.compiled_bundle["agent_system"]["routing"]["default"]
+                    .as_object()
+                    .filter(|route| !route.is_empty())
+                    .map(|route| serde_json::Value::Object(route.clone()))
+            });
+        configured_route
+            .as_ref()
+            .and_then(|route| {
+                crate::taskflow_routing::selected_backend_from_execution_plan_route(
+                    execution_plan,
+                    route,
+                )
+            })
+            .filter(|backend| {
+                selection.compiled_bundle["agent_system"]["subagents"][backend]["enabled"]
+                    .as_bool()
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
+                    execution_plan,
+                    lane_node.as_str(),
+                    json_raw_string_field(route, "activation_agent_type").as_deref(),
+                    None,
+                )
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
         crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
             execution_plan,
-            if is_conversation {
-                lane_node.as_str()
-            } else {
-                lane_node.as_str()
-            },
+            lane_node.as_str(),
             json_raw_string_field(route, "activation_agent_type").as_deref(),
             None,
         )
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| "unknown".to_string())
+    };
     let lane_id = if is_conversation {
         format!("{lane_node}_lane")
     } else {
@@ -10519,7 +10636,17 @@ pub(crate) async fn derive_advanced_run_graph_state(
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
     let compiled_control = compiled_run_graph_control(store).await?;
     let implementation = compiled_control.implementation;
-    let seeded_lane_sequence = seeded_implementation_lane_sequence(store, &existing.run_id).await?;
+    let compiled_route_uses_seeded_sequence = implementation["team_flow_selected_node_id"]
+        .as_str()
+        .is_none_or(|value| value.trim().is_empty());
+    let seeded_lane_sequence = if compiled_route_uses_seeded_sequence
+        && existing.task_class == "implementation"
+        && existing.route_task_class == "implementation"
+    {
+        seeded_implementation_lane_sequence(store, &existing.run_id).await?
+    } else {
+        None
+    };
     let dispatch_receipt = store
         .run_graph_dispatch_receipt(&existing.run_id)
         .await
@@ -10578,7 +10705,12 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 ),
             });
         }
-        let configured_writer_entry = implementation_writer_node(&implementation);
+        let configured_writer_entry = implementation["team_flow_selected_node_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| implementation_writer_node(&implementation));
         if existing.next_node.as_deref() == Some(direct_writer_entry.as_str())
             || existing.next_node.as_deref() == Some(configured_writer_entry.as_str())
         {
@@ -10591,6 +10723,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             let verification = compiled_control.verification.clone();
             let (next_node, policy_gate) =
                 implementation_verification_gate(&implementation, &verification);
+            let active_lane_id = existing.lane_id.clone();
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
                     &existing,
@@ -10602,7 +10735,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                     } else {
                         next_node
                     },
-                    format!("{active_entry}_lane"),
+                    active_lane_id,
                     format!("{active_entry}_active"),
                     policy_gate,
                     "execution_cursor".to_string(),

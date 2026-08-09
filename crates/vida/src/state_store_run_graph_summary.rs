@@ -2953,25 +2953,30 @@ impl StateStore {
         request_id: &str,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<taskflow_host_bridge::HostBridgePrecursorFingerprintV1, StateStoreError> {
-        let value =
+        let serialized =
             serde_json::to_value(receipt).map_err(|error| StateStoreError::InvalidTaskRecord {
                 reason: format!("host_bridge_precursor_fingerprint_serialize_failed:{error}"),
             })?;
-        let canonical_receipt = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
+        let object = serialized
+            .as_object()
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: "host_bridge_precursor_fingerprint_serialize_failed:receipt_not_object"
+                    .to_string(),
+            })?;
+        // `policy_bundle_ref` is state-store authority metadata, not part of the
+        // host-bridge v1 precursor contract. Keep the bridge fingerprint stable
+        // while retaining the policy pin in the persisted run-graph receipt.
+        let value = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
             .iter()
-            .map(|field| {
-                (
-                    (*field).to_string(),
-                    value
-                        .get(*field)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null),
-                )
+            .filter_map(|field| {
+                object
+                    .get(*field)
+                    .map(|value| ((*field).to_string(), value.clone()))
             })
-            .collect();
+            .collect::<serde_json::Map<_, _>>();
         taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
             request_id,
-            &serde_json::Value::Object(canonical_receipt),
+            &serde_json::Value::Object(value),
         )
         .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
     }
@@ -7053,14 +7058,15 @@ mod tests {
         receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
             policy_id: "rhai.runtime.authority".to_string(),
             version: 2,
-            content_digest: "digest-b".to_string(),
+            content_digest:
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         });
         let error = StateStore::validate_policy_bundle_ref_for_summary(
             &serde_json::json!({
                 "policy_bundle_ref": {
                     "policy_id": "rhai.runtime.authority",
                     "version": 1,
-                    "content_digest": "digest-a"
+                    "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 }
             }),
             &receipt,
@@ -7078,7 +7084,7 @@ mod tests {
         let pin_a = serde_json::json!({
             "policy_id": "rhai.runtime.authority",
             "version": 1,
-            "content_digest": "digest-a"
+            "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         });
         let mut receipt = sample_dispatch_receipt("run-policy-pin-bootstrap-mismatch");
         receipt.policy_bundle_ref = Some(serde_json::from_value(pin_a.clone()).unwrap());
@@ -7088,7 +7094,7 @@ mod tests {
                 "policy_bundle_ref": {
                     "policy_id": "rhai.runtime.authority",
                     "version": 2,
-                    "content_digest": "digest-b"
+                    "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }
             }),
             &receipt,

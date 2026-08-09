@@ -86,7 +86,13 @@ fn exact_downstream_successor_selection(
         current_node.dispatch_alias.as_str(),
     ]
     .into_iter()
-    .any(|candidate| candidate == current_dispatch_target.trim());
+    .any(|candidate| candidate == current_dispatch_target.trim())
+        || crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+            &authority,
+            Some(&role_selection.execution_plan),
+            current_dispatch_target,
+        )
+        .is_ok_and(|resolved| resolved.node_id == current_node.node_id);
     if !current_matches_receipt {
         return Err(format!(
             "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
@@ -284,6 +290,12 @@ impl DownstreamDispatchPacketContract {
             ]
             .into_iter()
             .any(|candidate| candidate == raw_dispatch_target.trim())
+                && !crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+                    &authority,
+                    Some(&role_selection.execution_plan),
+                    raw_dispatch_target,
+                )
+                .is_ok_and(|resolved| resolved.node_id == selected.node_id)
             {
                 return Err(format!(
                     "team_flow_selected_node_dispatch_target_mismatch:{}:{}",

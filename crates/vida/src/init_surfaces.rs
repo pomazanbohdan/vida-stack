@@ -7640,7 +7640,14 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     return ExitCode::from(2);
                 }
                 let resume_inputs = if packet_arg_count > 0 {
-                    match resume_inputs_from_agent_init_packet_arg_without_store(&args) {
+                    match super::taskflow_consume_resume::resolve_agent_init_packet_resume_inputs(
+                        &store,
+                        None,
+                        args.dispatch_packet.as_deref(),
+                        args.downstream_packet.as_deref(),
+                    )
+                    .await
+                    {
                         Ok(inputs) => {
                             match merge_persisted_dispatch_receipt_without_resume_gate(
                                 &store, inputs,
@@ -7961,7 +7968,14 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     let resume_inputs = if agent_init_execute_dispatch_worker_active()
                         && packet_arg_count > 0
                     {
-                        match resume_inputs_from_agent_init_packet_arg_without_store(&args) {
+                        match super::taskflow_consume_resume::resolve_agent_init_packet_resume_inputs(
+                            &store,
+                            None,
+                            args.dispatch_packet.as_deref(),
+                            args.downstream_packet.as_deref(),
+                        )
+                        .await
+                        {
                             Ok(inputs) => {
                                 match merge_persisted_dispatch_receipt_without_resume_gate(
                                     &store, inputs,

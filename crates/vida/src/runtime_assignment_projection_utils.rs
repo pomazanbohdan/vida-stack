@@ -150,6 +150,57 @@ pub(crate) fn infer_task_class_from_task_payload(task: &serde_json::Value) -> St
     {
         return "architecture".to_string();
     }
+
+    let owned_paths = task["planner_metadata"]["owned_paths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|path| path.to_ascii_lowercase().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    let owns_implementation_surface = owned_paths.iter().any(|path| {
+        !path.contains("/tests/")
+            && !path.contains("/fixtures/")
+            && !path.contains("/snapshots/")
+            && !path.ends_with("_test.rs")
+            && !path.ends_with(".test.ps1")
+            && !path.ends_with(".tests.ps1")
+    });
+    let implementation_terms = [
+        "implement",
+        "implementation",
+        "script",
+        "scheduler",
+        "hardening",
+        "mutest",
+        "mutation",
+        "code-shaped",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let implementation_label = labels.iter().any(|label| {
+        matches!(
+            label.as_str(),
+            "implementation" | "implementer" | "script" | "code" | "mutation" | "mutest"
+        )
+    });
+    if (implementation_label
+        || (owns_implementation_surface
+            && !crate::contains_keywords(&normalized, &implementation_terms).is_empty()))
+        && crate::contains_keywords(
+            &normalized,
+            &[
+                "verification".to_string(),
+                "proof".to_string(),
+                "review".to_string(),
+            ],
+        )
+        .is_empty()
+    {
+        return "implementation".to_string();
+    }
+
     if labels.iter().any(|label| {
         matches!(
             label.as_str(),
@@ -347,6 +398,27 @@ mod tests {
         for (task, expected) in cases {
             assert_eq!(super::infer_task_class_from_task_payload(&task), expected);
         }
+        assert_eq!(
+            super::infer_task_class_from_task_payload(&serde_json::json!({
+                "title": "Harden mutest audit scripts with bounded workers",
+                "planner_metadata": {
+                    "owned_paths": [
+                        "scripts/vida-mutest-audit.ps1",
+                        "scripts/tests/vida-mutest-audit.tests.ps1"
+                    ]
+                }
+            })),
+            "implementation"
+        );
+        assert_eq!(
+            super::infer_task_class_from_task_payload(&serde_json::json!({
+                "title": "Audit verifier proof coverage",
+                "planner_metadata": {
+                    "owned_paths": ["crates/vida/tests/boot_smoke.rs"]
+                }
+            })),
+            "verification"
+        );
         assert_eq!(
             super::infer_task_class_from_task_payload(&serde_json::json!({
                 "title": "ordinary work"

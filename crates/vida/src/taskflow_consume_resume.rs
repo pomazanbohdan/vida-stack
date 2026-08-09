@@ -5577,6 +5577,97 @@ async fn rehydrate_role_selection_from_packet(
     .await
 }
 
+async fn rehydrate_dispatch_packet_resume_inputs_without_state_gate(
+    store: &super::StateStore,
+    requested_run_id: Option<&str>,
+    packet_path: &str,
+) -> Result<ResumeInputs, String> {
+    let packet = read_dispatch_packet_for_store(store, packet_path)?;
+    let run_id = packet
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
+    if let Some(requested_run_id) = requested_run_id {
+        if requested_run_id != run_id {
+            return Err(format!(
+                "Requested run_id `{requested_run_id}` does not match persisted dispatch packet run_id `{run_id}`"
+            ));
+        }
+    }
+    let role_selection = rehydrate_role_selection_from_packet(
+        store,
+        decode_role_selection_from_packet(&packet, "dispatch packet")?,
+        run_id,
+    )
+    .await?;
+    let receipt = match store
+        .run_graph_dispatch_receipt_for_packet(run_id, packet_path)
+        .await
+    {
+        Ok(Some(receipt)) => receipt,
+        Ok(None) => {
+            return Err(format!(
+                "No persisted run-graph dispatch receipt exists for run_id `{run_id}` and dispatch packet `{packet_path}`. Re-materialize the lane-scoped dispatch packet before consuming it."
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to read persisted run-graph dispatch receipt: {error}"
+            ));
+        }
+    };
+    validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
+    Ok(build_resume_inputs(
+        receipt,
+        packet_path.to_string(),
+        packet,
+        role_selection,
+    ))
+}
+
+pub(crate) async fn resolve_agent_init_packet_resume_inputs(
+    store: &super::StateStore,
+    requested_run_id: Option<&str>,
+    requested_dispatch_packet_path: Option<&str>,
+    requested_downstream_packet_path: Option<&str>,
+) -> Result<ResumeInputs, String> {
+    if let Some(packet_path) = requested_dispatch_packet_path {
+        let mut inputs = rehydrate_dispatch_packet_resume_inputs_without_state_gate(
+            store,
+            requested_run_id,
+            packet_path,
+        )
+        .await?;
+        clear_downstream_dispatch_fields(&mut inputs.dispatch_receipt);
+        return Ok(inputs);
+    }
+    resolve_runtime_consumption_resume_inputs(
+        store,
+        requested_run_id,
+        None,
+        requested_downstream_packet_path,
+    )
+    .await
+}
+
+fn clear_downstream_dispatch_fields(
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) {
+    receipt.downstream_dispatch_target = None;
+    receipt.downstream_dispatch_command = None;
+    receipt.downstream_dispatch_note = None;
+    receipt.downstream_dispatch_ready = false;
+    receipt.downstream_dispatch_blockers.clear();
+    receipt.downstream_dispatch_packet_path = None;
+    receipt.downstream_dispatch_status = None;
+    receipt.downstream_dispatch_result_path = None;
+    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_executed_count = 0;
+    receipt.downstream_dispatch_active_target = None;
+    receipt.downstream_dispatch_last_target = None;
+}
+
 async fn resume_inputs_from_downstream_packet(
     store: &super::StateStore,
     requested_run_id: Option<&str>,
@@ -7676,56 +7767,20 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
     requested_downstream_packet_path: Option<&str>,
 ) -> Result<ResumeInputs, String> {
     let dispatch_packet = if let Some(packet_path) = requested_dispatch_packet_path {
-        let packet = read_dispatch_packet_for_store(store, packet_path)?;
-        let run_id = packet
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
-        let role_selection = rehydrate_role_selection_from_packet(
+        let mut inputs = rehydrate_dispatch_packet_resume_inputs_without_state_gate(
             store,
-            decode_role_selection_from_packet(&packet, "dispatch packet")?,
-            run_id,
+            requested_run_id,
+            packet_path,
         )
         .await?;
-        if let Some(requested_run_id) = requested_run_id {
-            if requested_run_id != run_id {
-                return Err(format!(
-                    "Requested run_id `{requested_run_id}` does not match persisted dispatch packet run_id `{run_id}`"
-                ));
-            }
-        }
-        let mut receipt = match store
-            .run_graph_dispatch_receipt_for_packet(run_id, packet_path)
-            .await
-        {
-            Ok(Some(receipt)) => receipt,
-            Ok(None) => {
-                return Err(format!(
-                    "No persisted run-graph dispatch receipt exists for run_id `{run_id}` and dispatch packet `{packet_path}`. Re-materialize the lane-scoped dispatch packet before consuming it."
-                ));
-            }
-            Err(error) => {
-                return Err(format!(
-                    "Failed to read persisted run-graph dispatch receipt: {error}"
-                ));
-            }
-        };
-        validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
-        validate_run_graph_resume_state_for_dispatch_receipt(store, run_id, &receipt).await?;
-        receipt.downstream_dispatch_target = None;
-        receipt.downstream_dispatch_command = None;
-        receipt.downstream_dispatch_note = None;
-        receipt.downstream_dispatch_ready = false;
-        receipt.downstream_dispatch_blockers.clear();
-        receipt.downstream_dispatch_packet_path = None;
-        receipt.downstream_dispatch_status = None;
-        receipt.downstream_dispatch_result_path = None;
-        receipt.downstream_dispatch_trace_path = None;
-        receipt.downstream_dispatch_executed_count = 0;
-        receipt.downstream_dispatch_active_target = None;
-        receipt.downstream_dispatch_last_target = None;
-        build_resume_inputs(receipt, packet_path.to_string(), packet, role_selection)
+        validate_run_graph_resume_state_for_dispatch_receipt(
+            store,
+            &inputs.dispatch_receipt.run_id,
+            &inputs.dispatch_receipt,
+        )
+        .await?;
+        clear_downstream_dispatch_fields(&mut inputs.dispatch_receipt);
+        inputs
     } else if let Some(packet_path) = requested_downstream_packet_path {
         return resume_inputs_from_downstream_packet(store, requested_run_id, packet_path).await;
     } else if let Some(run_id) = requested_run_id {
