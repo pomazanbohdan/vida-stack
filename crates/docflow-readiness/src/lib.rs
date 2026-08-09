@@ -83,6 +83,19 @@ mod tests {
     }
 
     #[test]
+    fn warning_only_verdict_is_preserved_by_summary() {
+        let rows = vec![docflow_contracts::ReadinessRow {
+            artifact_path: ArtifactPath("docs/process/a.md".into()),
+            verdict: ReadinessVerdict::Warning,
+            checked_at: CheckedAt::now_utc(),
+        }];
+        assert!(matches!(
+            summarize_verdict(&rows),
+            ReadinessVerdict::Warning
+        ));
+    }
+
+    #[test]
     fn ok_summary_when_no_issues_exist() {
         let rows: Vec<docflow_contracts::ReadinessRow> = vec![];
         assert!(matches!(summarize_verdict(&rows), ReadinessVerdict::Ok));

@@ -811,6 +811,8 @@ mod tests {
         release1_operator_contracts_consistency_error, render_operator_contract_envelope,
         render_vida_gate_result, render_vida_gate_result_from_operator_contracts,
         render_vida_gate_result_with_status, replace_release1_operator_output_artifact_refs,
+        shared_operator_has_canonical_blockers, shared_operator_has_canonical_next_actions,
+        shared_operator_has_canonical_status,
         shared_operator_output_contract_parity_error,
     };
     use serde_json::json;
@@ -1415,5 +1417,332 @@ mod tests {
             shared_operator_output_contract_parity_error(&summary_json),
             None
         );
+    }
+
+    #[test]
+    fn gate_result_preserves_artifact_refs_and_fallbacks() {
+        let result = render_vida_gate_result_with_status(
+            " gate ",
+            "unknown",
+            vec![" Migration_Required ".to_string()],
+            vec![" Warning_Code ".to_string()],
+            vec![" Failure_Code ".to_string()],
+            vec![],
+            vec![" Resolve migration ".to_string()],
+            json!({
+                "trace_id": "trace-1",
+                "workflow_class": "implementation",
+                "risk_tier": "high",
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "packet_id": "packet-1",
+                "evidence_refs": ["evidence-1"],
+                "affected_paths": ["crates/operator-output/src/lib.rs"]
+            }),
+        );
+
+        assert_eq!(result["gate_id"], "gate");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["ready"], false);
+        assert_eq!(result["blocking"], true);
+        assert_eq!(result["trace_id"], "trace-1");
+        assert_eq!(result["workflow_class"], "implementation");
+        assert_eq!(result["risk_tier"], "high");
+        assert_eq!(result["run_id"], "run-1");
+        assert_eq!(result["task_id"], "task-1");
+        assert_eq!(result["packet_id"], "packet-1");
+        assert_eq!(result["evidence_refs"], json!(["evidence-1"]));
+        assert_eq!(
+            result["affected_paths"],
+            json!(["crates/operator-output/src/lib.rs"])
+        );
+        assert_eq!(result["blocker_codes"], json!(["migration_required"]));
+        assert_eq!(result["warning_codes"], json!(["warning_code"]));
+        assert_eq!(result["failure_codes"], json!(["failure_code"]));
+
+        let fallback = render_vida_gate_result(
+            "fallback",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            json!({
+                "run_id": "fallback-run",
+                "dispatch_packet_path": "fallback-packet",
+                "proof_surfaces": ["proof-surface"]
+            }),
+        );
+        assert_eq!(fallback["task_id"], "fallback-run");
+        assert_eq!(fallback["packet_id"], "fallback-packet");
+        assert_eq!(fallback["evidence_refs"], json!(["proof-surface"]));
+    }
+
+    #[test]
+    fn gate_result_from_operator_contracts_rewrites_pass_for_failure_codes() {
+        let operator_contracts = render_operator_contract_envelope(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            "pass",
+            vec![],
+            vec![],
+            json!({"source": "original"}),
+        );
+        let result = render_vida_gate_result_from_operator_contracts(
+            "consume-final",
+            operator_contracts,
+            vec!["warning_code".to_string()],
+            vec!["failure_code".to_string()],
+            vec![json!({"code": "failure_code"})],
+            vec!["repair failure".to_string()],
+            json!({
+                "trace_id": "trace-rewritten",
+                "workflow_class": "verification",
+                "risk_tier": "medium",
+                "run_id": "run-rewritten",
+                "task_id": "task-rewritten",
+                "packet_id": "packet-rewritten"
+            }),
+        );
+
+        assert_eq!(result["status"], "fail");
+        assert_eq!(result["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            result["operator_contracts"]["blocker_codes"],
+            json!(["failure_code"])
+        );
+        assert_eq!(
+            result["operator_contracts"]["next_actions"],
+            json!(["repair failure"])
+        );
+        assert_eq!(result["trace_id"], serde_json::Value::Null);
+        assert_eq!(result["workflow_class"], serde_json::Value::Null);
+        assert_eq!(result["risk_tier"], serde_json::Value::Null);
+        assert_eq!(result["run_id"], "run-rewritten");
+        assert_eq!(result["task_id"], "task-rewritten");
+        assert_eq!(result["packet_id"], "packet-rewritten");
+    }
+
+    #[test]
+    fn gate_result_from_operator_contracts_copies_contract_metadata() {
+        let mut operator_contracts = render_operator_contract_envelope(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            "blocked",
+            vec!["migration_required".to_string()],
+            vec!["resolve migration".to_string()],
+            json!({"source": "contract"}),
+        );
+        operator_contracts["trace_id"] = json!("trace-contract");
+        operator_contracts["workflow_class"] = json!("recovery");
+        operator_contracts["risk_tier"] = json!("high");
+
+        let result = render_vida_gate_result_from_operator_contracts(
+            "consume-final",
+            operator_contracts,
+            vec![],
+            vec![],
+            vec![],
+            vec!["resolve migration".to_string()],
+            json!({"source": "caller"}),
+        );
+
+        assert_eq!(result["trace_id"], "trace-contract");
+        assert_eq!(result["workflow_class"], "recovery");
+        assert_eq!(result["risk_tier"], "high");
+    }
+
+    #[test]
+    fn consistency_error_covers_all_status_and_array_boundaries() {
+        let cases = [
+            (
+                "unknown",
+                vec![],
+                vec![],
+                "unsupported status",
+            ),
+            (
+                "pass",
+                vec!["migration_required".to_string()],
+                vec![],
+                "status=pass must not include blocker_codes",
+            ),
+            (
+                "pass",
+                vec![],
+                vec!["next".to_string()],
+                "status=pass must not include next_actions",
+            ),
+            (
+                "blocked",
+                vec![],
+                vec!["next".to_string()],
+                "status=blocked requires blocker_codes",
+            ),
+            (
+                "blocked",
+                vec!["migration_required".to_string()],
+                vec![],
+                "status=blocked requires next_actions",
+            ),
+            (
+                "blocked",
+                vec![" migration_required".to_string()],
+                vec!["next".to_string()],
+                "shared string arrays must contain only canonical",
+            ),
+        ];
+        for (status, blockers, next_actions, expected) in cases {
+            let error = release1_operator_contracts_consistency_error(
+                status,
+                &blockers,
+                &next_actions,
+            )
+            .expect("invalid contract shape should report an error");
+            assert!(error.contains(expected), "{error}");
+        }
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                "blocked",
+                &["migration_required".to_string()],
+                &["next".to_string()],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn parity_requires_each_mirror_and_raw_canonical_entries() {
+        let valid = || {
+            json!({
+                "status": "blocked",
+                "blocker_codes": ["migration_required"],
+                "next_actions": ["resolve migration"],
+                "shared_fields": {
+                    "status": "blocked",
+                    "blocker_codes": ["migration_required"],
+                    "next_actions": ["resolve migration"]
+                },
+                "operator_contracts": {
+                    "status": "blocked",
+                    "blocker_codes": ["migration_required"],
+                    "next_actions": ["resolve migration"]
+                }
+            })
+        };
+
+        let mut status_mismatch = valid();
+        status_mismatch["operator_contracts"]["status"] = json!("pass");
+        assert!(shared_operator_output_contract_parity_error(&status_mismatch).is_some());
+
+        let mut blocker_mismatch = valid();
+        blocker_mismatch["shared_fields"]["blocker_codes"] = json!(["other_blocker"]);
+        assert!(shared_operator_output_contract_parity_error(&blocker_mismatch).is_some());
+
+        let mut next_action_mismatch = valid();
+        next_action_mismatch["operator_contracts"]["next_actions"] = json!(["other action"]);
+        assert!(shared_operator_output_contract_parity_error(&next_action_mismatch).is_some());
+
+        let mut raw_drift = valid();
+        raw_drift["blocker_codes"] = json!([" migration_required "]);
+        raw_drift["shared_fields"]["blocker_codes"] = json!([" migration_required "]);
+        raw_drift["operator_contracts"]["blocker_codes"] = json!([" migration_required "]);
+        assert!(shared_operator_output_contract_parity_error(&raw_drift).is_some());
+
+        let empty = json!({});
+        assert!(shared_operator_has_canonical_status(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            &json!({"status": "pass"}),
+            &empty,
+            &empty,
+        ));
+        assert!(shared_operator_has_canonical_status(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            &empty,
+            &json!({"status": "pass"}),
+            &empty,
+        ));
+        assert!(shared_operator_has_canonical_status(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            &empty,
+            &empty,
+            &json!({"status": "pass"}),
+        ));
+        assert!(!shared_operator_has_canonical_status(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            &empty,
+            &empty,
+            &empty,
+        ));
+
+        let canonicalize = |entries: &[String]| canonical_default_blocker_codes(entries);
+        assert!(shared_operator_has_canonical_blockers(
+            &json!({"blocker_codes": ["migration_required"]}),
+            &empty,
+            &empty,
+            canonicalize,
+        ));
+        assert!(shared_operator_has_canonical_blockers(
+            &empty,
+            &json!({"blocker_codes": ["migration_required"]}),
+            &empty,
+            canonicalize,
+        ));
+        assert!(shared_operator_has_canonical_blockers(
+            &empty,
+            &empty,
+            &json!({"blocker_codes": ["migration_required"]}),
+            canonicalize,
+        ));
+        assert!(!shared_operator_has_canonical_blockers(
+            &empty,
+            &empty,
+            &empty,
+            canonicalize,
+        ));
+
+        assert!(shared_operator_has_canonical_next_actions(
+            &json!({"next_actions": ["next"]}),
+            &empty,
+            &empty,
+        ));
+        assert!(shared_operator_has_canonical_next_actions(
+            &empty,
+            &json!({"next_actions": ["next"]}),
+            &empty,
+        ));
+        assert!(shared_operator_has_canonical_next_actions(
+            &empty,
+            &empty,
+            &json!({"next_actions": ["next"]}),
+        ));
+        assert!(!shared_operator_has_canonical_next_actions(&empty, &empty, &empty));
+    }
+
+    #[test]
+    fn canonical_entry_helpers_reject_empty_non_string_and_duplicate_rows() {
+        assert!(canonical_release1_blocker_code_entries(&json!([""])).is_none());
+        assert!(canonical_release1_blocker_code_entries(&json!([1])).is_none());
+        assert!(canonical_release1_blocker_code_entries(
+            &json!(["migration_required", "migration_required"])
+        )
+        .is_none());
+        assert!(canonical_next_action_entries(&json!("next")).is_none());
+        assert!(canonical_next_action_entries(&json!([""])).is_none());
+        assert!(canonical_next_action_entries(&json!([1])).is_none());
+    }
+
+    #[test]
+    fn payload_build_and_artifact_replacement_fail_closed_for_invalid_shapes() {
+        let error = build_release1_operator_output_payload(
+            "vida task ready",
+            vec![],
+            vec![],
+            json!({}),
+            json!([]),
+        )
+        .expect_err("non-object extra fields should fail closed");
+        assert!(error.contains("extra_fields must be an object"));
+
+        let mut payload = json!([]);
+        assert!(replace_release1_operator_output_artifact_refs(&mut payload, json!({})).is_err());
     }
 }

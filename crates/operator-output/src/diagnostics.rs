@@ -109,7 +109,7 @@ mod tests {
     use super::OperatorContractDiagnostic;
     use crate::operator_contracts::{
         finalize_release1_operator_surface_verdict_with_status,
-        shared_operator_output_contract_parity_error,
+        shared_operator_output_contract_parity_error, OperatorSurfaceVerdict,
     };
 
     #[test]
@@ -180,5 +180,63 @@ mod tests {
             diagnostic.primary_help(),
             "repair the payload so it matches the published schema"
         );
+    }
+
+    #[test]
+    fn diagnostic_keeps_blocked_pass_status_with_nonempty_blockers() {
+        let verdict = OperatorSurfaceVerdict {
+            status: "pass".to_string(),
+            blocker_codes: vec!["migration_required".to_string()],
+            next_actions: vec!["run migration".to_string()],
+            artifact_refs: json!({"source": "operator"}),
+            shared_fields: json!({}),
+            operator_contracts: json!({}),
+        };
+        let diagnostic = OperatorContractDiagnostic::from_verdict("vida status", &verdict)
+            .expect("a pass verdict carrying blockers must remain diagnosable");
+
+        assert_eq!(diagnostic.status, "pass");
+        assert_eq!(diagnostic.blocker_codes, vec!["migration_required"]);
+        assert_eq!(diagnostic.next_actions, vec!["run migration"]);
+        assert_eq!(diagnostic.artifact_refs, json!({"source": "operator"}));
+        assert_eq!(diagnostic.primary_help(), "run migration");
+    }
+
+    #[test]
+    fn external_payload_diagnostic_converts_and_reports_all_fields() {
+        let cases = [
+            (
+                "external_payload_schema_invalid",
+                "repair the payload so it matches the published schema",
+            ),
+            (
+                "external_payload_typed_decode_failed",
+                "repair the payload type shape before domain validation",
+            ),
+            (
+                "external_payload_json_parse_failed",
+                "emit valid JSON before invoking the runtime boundary",
+            ),
+            (
+                "other_blocker",
+                "inspect the validation blocker code and schema reference",
+            ),
+        ];
+        for (blocker_code, help) in cases {
+            let diagnostic = super::ExternalPayloadDiagnostic::new(
+                String::from("command_envelope"),
+                String::from("typed_decode"),
+                String::from("$.request_id"),
+                String::from(blocker_code),
+                String::from("request_id is invalid"),
+                json!({"schema_id": "vida.command_envelope", "version": 1}),
+            );
+            assert_eq!(diagnostic.payload_kind, "command_envelope");
+            assert_eq!(diagnostic.stage, "typed_decode");
+            assert_eq!(diagnostic.path, "$.request_id");
+            assert_eq!(diagnostic.blocker_code, blocker_code);
+            assert_eq!(diagnostic.message, "request_id is invalid");
+            assert_eq!(diagnostic.primary_help(), help);
+        }
     }
 }
