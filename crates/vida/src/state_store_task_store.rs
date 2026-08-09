@@ -1422,28 +1422,24 @@ impl StateStore {
         })
     }
 
-    fn filter_auto_closed_parents_with_admitted_proof(
-        parents: Vec<TaskRecord>,
-        tasks: &[TaskRecord],
-    ) -> Vec<TaskRecord> {
-        parents
-            .into_iter()
-            .filter(|parent| Self::task_missing_structured_proof_targets(parent, tasks).is_empty())
-            .collect()
-    }
-
     async fn filter_auto_closed_parents_ready_for_close(
         &self,
         parents: Vec<TaskRecord>,
         tasks: &[TaskRecord],
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut ready = Vec::new();
-        for parent in Self::filter_auto_closed_parents_with_admitted_proof(parents, tasks) {
+        for parent in parents {
+            // Parents are ordered from the direct parent towards the root. Once a
+            // parent cannot close, none of its ancestors can close in this
+            // mutation because that parent will remain their open direct child.
+            if !Self::task_missing_structured_proof_targets(&parent, tasks).is_empty() {
+                break;
+            }
             if self
                 .auto_closed_parent_has_unresolved_run_graph(&parent.id)
                 .await?
             {
-                continue;
+                break;
             }
             ready.push(parent);
         }
@@ -3470,8 +3466,9 @@ impl StateStore {
                 Vec::new(),
             )
         };
+        let attempted_closed_parents = closed_parents;
         let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
+            .filter_auto_closed_parents_ready_for_close(attempted_closed_parents, &tasks)
             .await?;
         let mut touched_task_ids = reopened_parents
             .iter()
@@ -3838,14 +3835,14 @@ impl StateStore {
             task.updated_at = now.clone();
             moved_tasks.push(task.clone());
         }
-        let closed_parents = Self::close_emptied_parent_chain_after_reparent(
+        let attempted_closed_parents = Self::close_emptied_parent_chain_after_reparent(
             &mut tasks,
             Some(from_parent_id),
             &now,
             &format!("all direct child tasks moved from `{from_parent_id}` to `{to_parent_id}`"),
         );
         let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents, &tasks)
+            .filter_auto_closed_parents_ready_for_close(attempted_closed_parents, &tasks)
             .await?;
 
         let touched_task_ids = moved_tasks
@@ -4326,13 +4323,16 @@ impl StateStore {
             .expect("closed task should exist in authoritative state");
         reconciled_tasks[task_index] = task.clone();
         let parent_id = Self::parent_id_for_task(&task);
-        let closed_parents = Self::close_parent_chain_without_active_children(
+        let attempted_closed_parents = Self::close_parent_chain_without_active_children(
             &mut reconciled_tasks,
             parent_id.as_deref(),
             &task.updated_at,
             &format!("all direct child tasks closed after closing `{task_id}`"),
             Some(task_id),
         );
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(attempted_closed_parents, &reconciled_tasks)
+            .await?;
         let touched_task_ids = closed_parents
             .iter()
             .map(|parent| parent.id.clone())
@@ -4352,9 +4352,6 @@ impl StateStore {
                 ),
             });
         }
-        let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents, &reconciled_tasks)
-            .await?;
         let close_plan = plan_close_task(TaskCloseCommand {
             task: TaskAggregateTaskSnapshot {
                 id: task.id.clone(),
@@ -6136,6 +6133,120 @@ mod tests {
             .expect("validate")
             .is_empty());
         close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn auto_close_does_not_skip_blocked_parent_and_close_its_ancestor() {
+        for close_through_update in [false, true] {
+            let mode = if close_through_update {
+                "update"
+            } else {
+                "close"
+            };
+            let root = unique_task_store_temp_root(&format!(
+                "vida-auto-close-blocked-parent-chain-{mode}"
+            ));
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let grandparent_id = format!("{mode}-grandparent");
+            let parent_id = format!("{mode}-proof-parent");
+            let child_id = format!("{mode}-child");
+
+            for (task_id, issue_type, parent_id, planner_metadata) in [
+                (
+                    grandparent_id.as_str(),
+                    "epic",
+                    None,
+                    TaskPlannerMetadata::default(),
+                ),
+                (
+                    parent_id.as_str(),
+                    "epic",
+                    Some(grandparent_id.as_str()),
+                    TaskPlannerMetadata {
+                        proof_targets: vec!["cargo test required-parent-proof".to_string()],
+                        ..TaskPlannerMetadata::default()
+                    },
+                ),
+                (
+                    child_id.as_str(),
+                    "task",
+                    Some(parent_id.as_str()),
+                    TaskPlannerMetadata::default(),
+                ),
+            ] {
+                store
+                    .create_task(CreateTaskRequest {
+                        task_id,
+                        title: task_id,
+                        display_id: None,
+                        description: "",
+                        issue_type,
+                        status: "open",
+                        priority: 1,
+                        parent_id,
+                        labels: &[],
+                        execution_semantics: TaskExecutionSemantics::default(),
+                        planner_metadata,
+                        created_by: "test",
+                        source_repo: "",
+                    })
+                    .await
+                    .expect("create parent chain task");
+            }
+
+            if close_through_update {
+                store
+                    .update_task(UpdateTaskRequest {
+                        task_id: &child_id,
+                        title: None,
+                        status: Some("closed"),
+                        priority: None,
+                        notes: None,
+                        description: None,
+                        parent_id: None,
+                        add_labels: &[],
+                        remove_labels: &[],
+                        set_labels: None,
+                        execution_mode: None,
+                        order_bucket: None,
+                        parallel_group: None,
+                        conflict_domain: None,
+                        planner_metadata: None,
+                    })
+                    .await
+                    .expect("management update should close the leaf only");
+            } else {
+                store
+                    .close_task(&child_id, "child proof passed")
+                    .await
+                    .expect("close path should close the leaf only");
+            }
+
+            for task_id in [&grandparent_id, &parent_id] {
+                assert_eq!(
+                    store
+                        .show_task(task_id)
+                        .await
+                        .expect("load ancestor")
+                        .status,
+                    "open",
+                    "{task_id} must remain open when the intermediate parent cannot auto-close"
+                );
+            }
+            assert_eq!(
+                store.show_task(&child_id).await.expect("load child").status,
+                "closed"
+            );
+            let issues = store
+                .validate_task_graph()
+                .await
+                .expect("validate final persisted graph");
+            assert!(issues
+                .iter()
+                .all(|issue| issue.issue_type != "closed_parent_has_non_closed_child"));
+
+            close_store_and_remove_root(store, root).await;
+        }
     }
 
     #[tokio::test]
