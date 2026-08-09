@@ -45,6 +45,8 @@ The following `C:\project\vida-stack` paths are disposable generated artifacts:
 10. `tests\model\target`
 11. `tmp\*` except intentional retained references when a current task names them
 12. `tmp-task-notes` after the notes are no longer referenced by active TaskFlow work
+13. `crates/runtime-path-policy/result.bin`
+14. literal root `~/.cache/pre-commit` (`~\.cache\pre-commit` under the project root)
 
 ## Historical Runtime-State Cleanup
 

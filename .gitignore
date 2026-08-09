@@ -6,6 +6,8 @@ _vida/scripts-nim/vida-legacy
 _vida/
 .vida/data/
 **/.vida/data/**
+/crates/runtime-path-policy/result.bin
+/~/.cache/pre-commit/
 .hermes/
 .lean-ctx/
 .codex-remote-attachments/
