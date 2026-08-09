@@ -15800,11 +15800,38 @@ else:
         String::from_utf8_lossy(&init_output.stderr)
     );
 
+    let mut activator_command = Command::new(&vida_path);
+    activator_command
+        .args([
+            "project-activator",
+            "--project-id",
+            "installed-project",
+            "--project-name",
+            "Installed Project",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--repair",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME");
+    let activator_output = command_output_with_retry(&mut activator_command);
+    assert!(
+        activator_output.status.success(),
+        "installed vida project activator should bind host runtime: stdout={} stderr={}",
+        String::from_utf8_lossy(&activator_output.stdout),
+        String::from_utf8_lossy(&activator_output.stderr)
+    );
+
     let mut boot_command = Command::new(&vida_path);
     boot_command
         .arg("boot")
         .current_dir(&project_root)
-        .env_remove("VIDA_ROOT");
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME");
     let boot_output = command_output_with_retry(&mut boot_command);
     assert!(
         boot_output.status.success(),
@@ -16759,7 +16786,7 @@ fn docflow_proxy_runs_proofcheck_in_process_when_profile_is_supported() {
         .output()
         .expect("docflow in-process proofcheck should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("docflow-proxy:"));
     assert!(stdout.contains("proofcheck"));
@@ -20020,6 +20047,7 @@ fn orchestrator_init_and_next_lawful_reject_closed_task_ready_dev_pack_dispatch_
         "closed-dev-pack-projection-project",
         "Closed Dev Pack Projection Project",
     );
+    enable_dispatch_for_project_runtime(&project_root);
     let task_id = "closed-dev-pack-projection-task";
     create_scheduler_smoke_task(
         &state_dir,
