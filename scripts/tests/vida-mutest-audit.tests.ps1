@@ -194,39 +194,115 @@ Add-Case "single_index_wave_orchestrator_contract" {
 
 Add-Case "thin_index_compacts_duplicate_defects" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
-    foreach ($needle in @("Get-ThinDefects", "latest_wave_unique", "evidence_refs_max", 'history_path = "defects.jsonl"')) {
+    foreach ($needle in @("Get-ThinDefects", "Get-DefectKey", "active_per_file", "dedupe_key", "evidence_refs_max", 'history_path = "defects.jsonl"')) {
         Assert-True ($source.Contains($needle)) "missing thin-index contract: $needle"
     }
     $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-thin-index-" + [guid]::NewGuid().ToString("N") + ".json")
     $path = "crates/docflow-markdown/src/lib.rs"
+    $initial = Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path
+    $seed = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $seedRow = @($seed.files | Where-Object { $_.path -eq $path })[0]
+    $wave = "wave-mutest-20260809-000001-aaaa"
     $defect = [ordered]@{
-        defect_id = "old-id"; type = "mutation_compiler_error"; blocker_code = "mutest_driver_target_metadata"; blocker_family = "mutest_tool"
-        blocker_reason = "target metadata mismatch"; path = $path; package = "docflow-markdown"; wave_id = "wave-mutest-20260809-000001-aaaa"
-        evidence = @("a", "b", "c", "d", "e"); recommendation = "rerun"
+        type = "mutation_compiler_error"; blocker_code = "mutest_driver_target_metadata"; blocker_family = "mutest_tool"
+        blocker_reason = "target metadata mismatch"; path = $path; package = "docflow-markdown"; wave_id = $wave
+        observed_hash = $seedRow.hash; evidence_refs = @("a", "b", "c", "d", "e"); recommendation = "rerun"
     }
     $duplicate = [ordered]@{}
     foreach ($key in $defect.Keys) { $duplicate[$key] = $defect[$key] }
-    $duplicate.defect_id = "duplicate-id"
-    $seed = [ordered]@{
-        schema_version = 3; index_role = "mutation_wave_orchestrator"; registry_revision = 1; run_id = "seed-run"; last_wave_id = $defect.wave_id
-        waves = @([ordered]@{ wave_id = $defect.wave_id; status = "blocked" }); files = @([ordered]@{
-            path = $path; package = "docflow-markdown"; hash = ("0" * 64); content_hash_sha256 = ("0" * 64); status = "blocked"
-            updated_at = "2026-08-09T00:00:00Z"; last_wave_id = $defect.wave_id; defects = @($defect, $duplicate)
-            needs_tests = $false; needs_rerun = $true; needs_rescan = $false
-        })
-    }
+    $seedRow.status = "blocked"; $seedRow.last_wave_id = $wave; $seedRow.defects = @($defect, $duplicate); $seedRow.needs_rerun = $true
+    $seed.last_wave_id = $wave; $seed.waves = @([ordered]@{ wave_id = $wave; status = "blocked" })
     $seed | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $registry -Encoding UTF8
     $result = Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path
     Assert-True ($result.status -eq "index_refreshed") "thin-index refresh failed"
     $compact = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
     $row = @($compact.files | Where-Object { $_.path -eq $path })[0]
     Assert-True (@($row.defects).Count -eq 1) "duplicate defect summaries were not compacted"
-    Assert-True (@($row.defects[0].evidence).Count -le 4) "evidence references exceeded thin-index limit"
-    Assert-True ($compact.index_compaction.mode -eq "latest_wave_unique") "index compaction policy missing"
+    Assert-True ([string]$row.defects[0].defect_key -like "mut-*") "deterministic defect key missing"
+    Assert-True (@($row.defects[0].evidence_refs).Count -le 4) "evidence references exceeded thin-index limit"
+    Assert-True ($compact.index_compaction.mode -eq "active_per_file") "active per-file index policy missing"
+    Assert-True ($compact.index_compaction.clear_on_hash_change) "hash-change clearing policy missing"
+    Assert-True ($compact.index_compaction.clear_on_success) "success clearing policy missing"
+    Assert-True ($compact.summary.active_defects -eq 1) "active defect summary is not synchronized"
     $raw = Get-Content -LiteralPath $registry -Raw
     Assert-True (-not $raw.Contains('"SyncRoot"')) "dictionary adapter properties leaked into the index"
     Assert-True (-not $raw.Contains('"Values"')) "dictionary Values adapter leaked into the index"
     Assert-True ((Get-Item -LiteralPath $registry).Length -lt 20000) "thin index exceeded compact fixture size"
+}
+
+Add-Case "active_defect_key_is_stable_across_waves" {
+    $path = "crates/docflow-markdown/src/lib.rs"
+    $keys = New-Object System.Collections.Generic.List[string]
+    foreach ($wave in @("wave-mutest-20260809-010101-a", "wave-mutest-20260809-010102-b")) {
+        $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-key-wave-" + [guid]::NewGuid().ToString("N") + ".json")
+        [void](Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path)
+        $seed = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+        $row = @($seed.files | Where-Object { $_.path -eq $path })[0]
+        $row.status = "blocked"; $row.last_wave_id = $wave; $row.needs_rerun = $true
+        $row.defects = @([ordered]@{ type = "survived_mutants"; blocker_code = ""; path = $path; package = "docflow-markdown"; wave_id = $wave; observed_hash = $row.hash; mutation_identity = "line:42|operator:replace"; recommendation = "rerun" })
+        $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registry -Encoding UTF8
+        [void](Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path)
+        $compact = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+        $key = [string](@($compact.files | Where-Object { $_.path -eq $path })[0].defects[0].defect_key)
+        [void]$keys.Add($key)
+    }
+    Assert-True ($keys.Count -eq 2 -and $keys[0] -eq $keys[1]) "defect key changed when only wave_id changed"
+}
+
+Add-Case "package_partial_scan_preserves_unselected_rows" {
+    $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-package-partial-" + [guid]::NewGuid().ToString("N") + ".json")
+    $path = "crates/docflow-markdown/src/lib.rs"
+    [void](Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path)
+    $seed = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $extra = [ordered]@{ path = "crates/operator-output/src/diagnostics.rs"; package = "operator-output"; hash = ("1" * 64); content_hash_sha256 = ("1" * 64); status = "blocked"; needs_rerun = $true; defects = @([ordered]@{ type = "mutation_timeout"; blocker_code = "seed"; path = "crates/operator-output/src/diagnostics.rs"; package = "operator-output"; mutation_identity = "file-level" }) }
+    $seed.files = @($seed.files) + @([pscustomobject]$extra)
+    $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registry -Encoding UTF8
+    $plan = Invoke-Plan -RegistryPath $registry -Package "docflow-markdown"
+    Assert-True ([int]$plan.file_scan.deleted_files -eq 0) "package-scoped plan classified an unselected row as deleted"
+}
+
+Add-Case "full_snapshot_classifies_absent_rows" {
+    $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-full-snapshot-" + [guid]::NewGuid().ToString("N") + ".json")
+    $seed = [ordered]@{ schema_version = 3; files = @([ordered]@{ path = "crates/docflow-markdown/src/removed-for-contract.rs"; package = "docflow-markdown"; hash = ("0" * 64); content_hash_sha256 = ("0" * 64); status = "completed"; needs_rerun = $false; needs_tests = $false; needs_rescan = $false; defects = @() }) }
+    $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registry -Encoding UTF8
+    $raw = & pwsh -NoProfile -File $ScriptPath -PlanOnly -IncludeWorkingTree -Json -RegistryPath $registry 2>&1
+    Assert-True ($LASTEXITCODE -eq 0) "full snapshot plan failed: $($raw -join ' ')"
+    $plan = ($raw -join [Environment]::NewLine | ConvertFrom-Json)
+    Assert-True ([int]$plan.file_scan.deleted_files -eq 1) "full snapshot did not classify the absent row"
+}
+
+Add-Case "active_backlog_changes_only_selected_rows" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    foreach ($needle in @("Set-CurrentFileDefects", "Clear-CurrentFileDefects", "active_defects", "deleted_from_snapshot", "PartialSelection")) {
+        Assert-True ($source.Contains($needle)) "missing active-backlog contract: $needle"
+    }
+    $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-active-backlog-" + [guid]::NewGuid().ToString("N") + ".json")
+    $firstPath = "crates/operator-output/src/next_actions.rs"
+    $secondPath = "crates/operator-output/src/diagnostics.rs"
+    [void](Invoke-IndexRefresh -RegistryPath $registry -Package "operator-output" -FilesCsv "$firstPath,$secondPath")
+    $seed = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $first = @($seed.files | Where-Object { $_.path -eq $firstPath })[0]
+    $second = @($seed.files | Where-Object { $_.path -eq $secondPath })[0]
+    $second.status = "blocked"; $second.needs_rerun = $true; $second.last_wave_id = "wave-seed"
+    $second.defects = @([ordered]@{ type = "mutation_compiler_error"; blocker_code = "seed"; path = $secondPath; package = "operator-output"; wave_id = "wave-seed"; observed_hash = $second.hash; recommendation = "rerun" })
+    $first.hash = ("0" * 64); $first.content_hash_sha256 = ("0" * 64); $first.status = "blocked"; $first.needs_rerun = $true
+    $first.defects = @([ordered]@{ type = "mutation_timeout"; blocker_code = "old"; path = $firstPath; package = "operator-output"; wave_id = "wave-old"; observed_hash = ("0" * 64); recommendation = "rerun" })
+    $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registry -Encoding UTF8
+    [void](Invoke-IndexRefresh -RegistryPath $registry -Package "operator-output" -FilesCsv $firstPath)
+    $result = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $changed = @($result.files | Where-Object { $_.path -eq $firstPath })[0]
+    $untouched = @($result.files | Where-Object { $_.path -eq $secondPath })[0]
+    Assert-True ($changed.status -eq "queued") "changed row was not queued"
+    Assert-True (@($changed.defects).Count -eq 0) "changed row retained stale active defects"
+    Assert-True ($untouched.status -eq "blocked") "partial refresh changed an untouched row"
+    Assert-True (@($untouched.defects).Count -eq 1) "partial refresh removed an untouched defect"
+}
+
+Add-Case "defect_history_is_local_only" {
+    [void](& git check-ignore --quiet -- ".vida/evidence/mutest-audit/defects.jsonl")
+    Assert-True ($LASTEXITCODE -eq 0) "raw defect history is not ignored by Git"
+    $tracked = @(git ls-files -- ".vida/evidence/mutest-audit/defects.jsonl")
+    Assert-True ($tracked.Count -eq 0) "raw defect history must not be tracked"
 }
 
 Add-Case "plan_only_preserves_canonical_index" {

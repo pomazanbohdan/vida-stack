@@ -79,7 +79,9 @@ def main() -> None:
                 "decision": "block",
                 "reason": MESSAGE,
             },
-            ensure_ascii=False,
+            # Hook transport may decode stdout with a legacy Windows code page.
+            # Emit JSON Unicode escapes so the host reconstructs Ukrainian text losslessly.
+            ensure_ascii=True,
         )
     )
 
