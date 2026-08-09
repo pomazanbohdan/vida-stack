@@ -271,6 +271,7 @@ pub(crate) async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let blocked = payload["status"] == "blocked";
 
     if as_json {
         println!(
@@ -278,6 +279,45 @@ pub(crate) async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
             serde_json::to_string_pretty(&payload)
                 .expect("spec bootstrap payload should render as json")
         );
+    } else if blocked {
+        crate::print_surface_header(crate::RenderMode::Plain, "vida taskflow bootstrap-spec");
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "status",
+            payload["status"].as_str().unwrap_or("blocked"),
+        );
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "view_only",
+            if payload["view_only"].as_bool().unwrap_or(true) {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "executable",
+            if payload["executable"].as_bool().unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        let blockers = payload["blocker_codes"]
+            .as_array()
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        crate::print_surface_line(crate::RenderMode::Plain, "blocker_codes", &blockers);
+        if let Some(action) = payload["next"]["action"].as_str() {
+            crate::print_surface_line(crate::RenderMode::Plain, "next action", action);
+        }
     } else {
         crate::print_surface_header(crate::RenderMode::Plain, "vida taskflow bootstrap-spec");
         crate::print_surface_line(
@@ -333,7 +373,11 @@ pub(crate) async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
         }
     }
 
-    ExitCode::SUCCESS
+    if blocked {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn docflow_output_is_ok(output: &str) -> bool {
@@ -517,6 +561,48 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         );
     }
     let status = required_str(&tracked["status"], "tracked_flow_bootstrap.status")?;
+    if status == "blocked" {
+        let executable =
+            required_bool(&tracked["executable"], "tracked_flow_bootstrap.executable")?;
+        let view_only = required_bool(&tracked["view_only"], "tracked_flow_bootstrap.view_only")?;
+        if executable || !view_only {
+            return Err(
+                "tracked bootstrap evidence `tracked_flow_bootstrap` has invalid blocked execution posture"
+                    .to_string(),
+            );
+        }
+        reject_product_spec_index_symlink(
+            &project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX),
+        )?;
+        let blocker_codes = tracked["blocker_codes"]
+            .as_array()
+            .filter(|codes| !codes.is_empty())
+            .ok_or_else(|| {
+                "missing required tracked bootstrap evidence `tracked_flow_bootstrap.blocker_codes`"
+                    .to_string()
+            })?;
+        return Ok(serde_json::json!({
+            "surface": "vida taskflow bootstrap-spec",
+            "status": "blocked",
+            "required": required,
+            "executable": false,
+            "view_only": true,
+            "activation_semantics": tracked["activation_semantics"],
+            "blocker_codes": blocker_codes,
+            "schema_vocabulary": tracked["schema_vocabulary"],
+            "request": request_text,
+            "admission": {
+                "status": "blocked",
+                "admitted": false,
+                "consumed_evidence": [],
+            },
+            "tracked_flow_bootstrap": tracked,
+            "next": {
+                "action": "resolve the configured TeamFlow relation before retrying bootstrap-spec",
+            },
+            "changed_files": [],
+        }));
+    }
     if status != "pending" {
         return Err(format!(
             "tracked bootstrap evidence `tracked_flow_bootstrap.status` must be `pending`, got `{status}`"
