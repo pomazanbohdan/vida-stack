@@ -332,7 +332,22 @@ Add-Case "custom_mutest_launcher_and_schema_contract" {
     Assert-True ($plan.commands[0].command.Contains($expectedCargo)) "custom launcher path is absent from the command manifest"
 }
 
-Add-Case "automatic_launcher_environment_and_target_contract" {
+Add-Case "default_launcher_does_not_trust_project_executables" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    $resolverStart = $source.IndexOf("function Resolve-MutestCargoPath")
+    $resolverEnd = $source.IndexOf("function Get-CargoTargetArguments", $resolverStart)
+    Assert-True ($resolverStart -ge 0 -and $resolverEnd -gt $resolverStart) "mutest path resolver boundary is missing"
+    $resolver = $source.Substring($resolverStart, $resolverEnd - $resolverStart)
+    Assert-True (-not $resolver.Contains(".vida\tmp\mutest-rs-pathfix-bin")) "resolver trusts a project-controlled executable"
+    Assert-True (-not $resolver.Contains("mutest-rs\target")) "resolver trusts a sibling build executable"
+    Assert-True (-not $resolver.Contains('source = "auto"')) "resolver retains automatic direct-executable selection"
+
+    $plan = Invoke-Plan
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$plan.config.mutest_cargo_path)) "default plan selected a direct mutest executable"
+    Assert-True ($plan.config.mutest_cargo_path_source -eq "cargo-subcommand") "default plan did not use Cargo subcommand resolution"
+}
+
+Add-Case "launcher_environment_and_target_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @(
         "Resolve-MutestCargoPath", "mutest_cargo_path_source", "Get-CargoTargetArguments",
