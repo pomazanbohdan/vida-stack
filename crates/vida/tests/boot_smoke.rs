@@ -3916,6 +3916,7 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
         "agent-dispatch-next-preview-alignment",
         "Agent Dispatch Next Preview Alignment",
     );
+    enable_dispatch_for_project_runtime(&project_root);
     seed_scheduler_execute_smoke_tasks(&state_dir);
 
     let scheduler_output = bounded_vida_output(
