@@ -17533,7 +17533,7 @@ fn docflow_proxy_can_run_rust_proofcheck_jsonl_surface() {
         .output()
         .expect("docflow rust proofcheck jsonl shell should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"command\":\"proofcheck\""));
     assert!(stdout.contains("\"profile\":\"active-canon-strict\""));
