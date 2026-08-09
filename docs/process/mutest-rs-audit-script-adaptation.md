@@ -66,16 +66,16 @@ Per-worker file reports and the aggregate report contain `generated`, `evaluated
 - Production mutation scope is `crates/<package>/src/**/*.rs`; generated/freezed/mock paths and files are excluded.
 - The default mode is a diff scan. Candidate files are hashed with SHA-256 and compared with `.vida/evidence/mutest-audit/file-registry.json`.
 - The registry is schema v3 with `index_role=mutation_wave_orchestrator`: exactly one row per normalized repo-relative production path, plus top-level wave summaries. It is the only authoritative per-file index.
-- The canonical index is intentionally thin: each row keeps only latest-wave unique defect summaries and up to four evidence references; full defect history remains in `defects.jsonl` and worker evidence.
+- The canonical index is the committed active per-file defect backlog: each row keeps only current unresolved defect summaries, deduplicated by deterministic `defect_key`, with up to four relative `evidence_refs`; a green terminal rescan clears that row's defects. Full raw history remains local in `defects.jsonl` and worker evidence and is not committed.
 - Each file row exposes `loc` (non-empty source lines), `loc_total` (physical lines including blanks), and `loc_hash` (the content hash used for the LOC calculation). Sort the canonical rows by `loc` to select small files for fast follow-up work.
-- `-RefreshIndex -IncludeWorkingTree` refreshes LOC and content-hash metrics for the selected production files without starting mutation workers. Existing mutation results remain in place; content drift is marked `needs_rerun` with `queue_reason=content_hash_changed`.
+- `-RefreshIndex -IncludeWorkingTree` refreshes LOC and content-hash metrics for the selected production files without starting mutation workers. Unchanged rows keep their status and active defects; only content-drifted rows are cleared and marked `needs_rerun` with `queue_reason=content_hash_changed`.
 - Each row carries `last_wave_id`, `wave_status`, `wave_updated_at`, `wave_count`, and the current score/follow-up flags. A wave updates existing rows in place; it never appends duplicate file rows.
 - `manifest.json` and `parallel-report.json` contain aggregate data and registry/wave references only. Worker reports remain evidence and are not a second status index.
-- A completed record is compatible only when its content hash, configuration hash, status, and follow-up flags match. New/changed/pending records enter the queue; deleted snapshot files remain recorded as `deleted_from_snapshot`.
+- A completed record is compatible only when its content hash, configuration hash, status, and follow-up flags match. New/changed/pending records enter the queue; deleted snapshot files remain recorded as `deleted_from_snapshot`. `-Files` and `-Packages` are partial selections and preserve unselected rows; only an unfiltered snapshot/diff plan classifies absent rows as deleted.
 - `-FullRescan` is an explicit invalidation mode and queues every candidate file. It never restores or reconciles TaskFlow state.
-- Registry rows carry `status`, `mutation_score`, `killed`, `survived`, `timeout`, `no_coverage`, `needs_tests`, `needs_rerun`, `needs_rescan`, `last_scan_hash`, defect ids, recommendations, and wave fields. Mutest metadata is filtered to the exact source file, so no package aggregate is copied across multiple file rows.
+- Registry rows carry `status`, `mutation_score`, `killed`, `survived`, `timeout`, `no_coverage`, `needs_tests`, `needs_rerun`, `needs_rescan`, `last_scan_hash`, deterministic defect keys, recommendations, and wave fields. Mutest metadata is filtered to the exact source file, so no package aggregate is copied across multiple file rows.
 - The score gate is strict: `mutation_score_percent > 90` by default (the configured threshold must stay at least 90); exactly 90, lower, a zero denominator, or no coverage produces `needs_tests` and a defect entry. With `-AutoUpdateTests -TestUpdateCommand '<command with {file} and {package}>'`, a successful update sets `needs_rescan` and starts one bounded package rescan; a still-low result returns to `needs_tests`.
-- The run writes `defects.jsonl` plus `defect-remediation.json`, linking each issue to `docs/process/project-error-search-runtime-diagnostics-protocol.md` and test changes to `docs/process/zombie-d-test-writing-protocol.md`.
+- The run writes local `defects.jsonl` plus `defect-remediation.json`, linking each issue to `docs/process/project-error-search-runtime-diagnostics-protocol.md` and test changes to `docs/process/zombie-d-test-writing-protocol.md`; neither raw worker history nor closed defects are committed.
 
 ## Recommended sequence
 
@@ -83,7 +83,7 @@ Per-worker file reports and the aggregate report contain `generated`, `evaluated
 2. Run `-PlanOnly -IncludeWorkingTree -Json` and review the file diff queue and registry.
 3. Run the audit with the default requested five workers (or a lower explicit cap if resources require it); workers consume only queued files for changed/pending rows.
 4. Apply focused ZOMBIE-D test updates through the explicit hook, then let the recorded file rescan close the loop.
-5. Process `defect-remediation.json`/`defects.jsonl` using the runtime defect protocol; preserve manifests, registry, JSONL events, checkpoints, timings, and ignored-test list.
+5. Process local `defect-remediation.json`/`defects.jsonl` using the runtime defect protocol; commit only the active per-file summaries in the registry, not raw manifests, JSONL events, checkpoints, or worker evidence.
 
 Explicit full audit:
 

@@ -26,6 +26,7 @@ Status: `implemented`
 ### Functional Requirements
 - Production scope filter: `crates/<package>/src/**/*.rs`, excluding path/name segments containing `generated`, `freezed`, or `mock`.
 - Registry fields: `path`, `package`, `hash`/`content_hash_sha256`, `status`, `mutation_score`, `killed`, `survived`, `timeout`, `no_coverage`, `needs_tests`, `needs_rerun`, `needs_rescan`, `last_scan_hash`, `last_scan_run_id`, `last_wave_id`, `wave_status`, `wave_updated_at`, `wave_count`, `defects`, `recommendations`, `test_update_status`, and provenance/config hashes.
+- Active defect fields: deterministic `defect_key`, type/blocker fields, `observed_hash`, `wave_id`, score/counters, recommendation, and at most four relative `evidence_refs`; no random defect ids or wave-based deduplication.
 - Diff queue reasons: `new_file`, `content_hash_changed`, `needs_tests`, `needs_rescan`, `needs_rerun`, `incompatible_config`, or `full_rescan`.
 - Compatible resume requires identical SHA-256 content hash, mutation configuration hash, completed status, and all follow-up flags false.
 - Every worker keeps stdout/stderr, metadata, isolated target, per-file report, events, and checkpoint evidence.
@@ -35,6 +36,7 @@ Status: `implemented`
 - Preserve the existing default `MaxWorkers=5`; CPU and free-memory caps remain authoritative.
 - Queue refill is immediate after a terminal worker; timeout kills the complete process tree.
 - Registry writes are atomic; a partial run remains resumable after interruption.
+- Partial selection (`-Files` or `-Packages`) changes only selected file rows; unchanged rows retain status/hash/defects, while hash changes clear only the changed row before queueing it. Only an unfiltered snapshot/diff plan may classify absent rows as `deleted_from_snapshot`.
 - Test updates are opt-in and controlled by `-AutoUpdateTests -TestUpdateCommand`; no arbitrary source mutation is silently performed.
 
 ## Ownership And Canonical Surfaces
@@ -48,7 +50,7 @@ Status: `implemented`
 ### 1. Registry is the wave orchestrator and source of file-level continuity
 Will implement / choose:
 - Store one schema-v3 JSON document at `.vida/evidence/mutest-audit/file-registry.json` with `index_role=mutation_wave_orchestrator`, exactly one row per normalized path, and top-level wave summaries without file arrays.
-- Compact rows to latest-wave unique defect summaries with at most four evidence references; retain complete defect history in `defects.jsonl` and worker evidence.
+- Treat `files[].defects` as the committed active per-file backlog: replace the selected file's current summaries after each terminal result, deduplicate by deterministic `defect_key`, keep at most four relative `evidence_refs`, and clear the list after a green rescan. Raw `defects.jsonl` and worker evidence remain local and untracked.
 - Update the same row atomically on queue, worker start, worker completion, test update, and rescan; append only compact wave summary metadata.
 - Why: package reports alone cannot support hash-based partial resume, dynamic file waves, or file-level follow-up state.
 - Trade-offs: worker reports are diagnostic evidence, while the registry remains the only status authority.
@@ -163,7 +165,7 @@ Will implement / choose:
 - `parallel-report.json`: aggregate, worker evidence, and registry/wave references; no per-file status array.
 - `file-registry.json`: the single durable lifecycle, hash, and wave state index.
 - Every file row also carries `loc` (non-empty source lines), `loc_total` (physical lines), and `loc_hash`; `-RefreshIndex` backfills these metrics without launching mutest workers so small files can be selected first.
-- `defects.jsonl` and `defect-remediation.json`: confirmed mutation gaps and protocol actions.
+- `defects.jsonl` and `defect-remediation.json`: local confirmed mutation gaps and protocol actions; only the active summaries in `file-registry.json` are committed.
 
 ## Rollout Strategy
 - Start with PlanOnly and inspect the diff queue.

@@ -64,10 +64,11 @@ Examples:
 The default run is a Git-snapshot diff scan. A compatible completed file record is
 resumed by SHA-256 content hash; -FullRescan explicitly invalidates all file records.
 Use -RefreshIndex to update the canonical file index with per-file LOC/hash metrics
-without starting mutation workers; this preserves existing wave results and flags
-content drift for the next mutation wave. The index is intentionally thin: each row
-retains only the latest-wave unique defect summaries; full defect history remains in
-defects.jsonl and worker evidence artifacts.
+without starting mutation workers; this preserves unchanged rows and flags only
+content-drifted files for the next mutation wave. The index is the active per-file
+defect backlog: each row replaces its current defect summaries after a terminal
+wave, clears them after a green rescan, and deduplicates by deterministic defect_key.
+The raw defect history remains local in defects.jsonl and worker evidence artifacts.
 Files at or below the threshold are recorded as needs_tests; a file is green only when
 mutation_score_percent > threshold_percent (default: > 90%). To run a controlled test-update hook,
 pass -AutoUpdateTests -TestUpdateCommand with {file} and {package} placeholders.
@@ -478,21 +479,75 @@ function Get-OptionalProperty {
     return $property.Value
 }
 
+function Get-DeterministicHash {
+    param([string]$Value)
+    $bytes = [Text.Encoding]::UTF8.GetBytes([string]$Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-DefectMutationIdentity {
+    param([object]$Defect)
+    foreach ($name in @("mutation_identity", "mutation_id", "mutant_id", "operator", "source_location", "line")) {
+        $value = Get-OptionalProperty -Object $Defect -Name $name
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { return [string]$value }
+    }
+    return "file-level"
+}
+
+function Get-DefectKey {
+    param([object]$Defect)
+    $path = [string](Get-OptionalProperty -Object $Defect -Name "path" "")
+    $package = [string](Get-OptionalProperty -Object $Defect -Name "package" "")
+    $type = [string](Get-OptionalProperty -Object $Defect -Name "type" "")
+    $blocker = [string](Get-OptionalProperty -Object $Defect -Name "blocker_code" "")
+    $identity = Get-DefectMutationIdentity -Defect $Defect
+    $basis = @($path.ToLowerInvariant(), $package.ToLowerInvariant(), $type.ToLowerInvariant(), $blocker.ToLowerInvariant(), $identity) -join '|'
+    return "mut-$(Get-DeterministicHash -Value $basis)"
+}
+
+function Convert-ToEvidenceRef {
+    param([object]$Value)
+    if ($null -eq $Value) { return $null }
+    $candidate = if ($Value -is [string]) { [string]$Value } else {
+        $path = Get-OptionalProperty -Object $Value -Name "path"
+        if ($null -eq $path) { $path = Get-OptionalProperty -Object $Value -Name "Path" }
+        if ($null -ne $path) { [string]$path } else { return $null }
+    }
+    if ([string]::IsNullOrWhiteSpace($candidate)) { return $null }
+    try {
+        if ([System.IO.Path]::IsPathRooted($candidate)) {
+            $absolute = [System.IO.Path]::GetFullPath($candidate)
+            $rootPrefix = $RepoRoot.TrimEnd('\') + '\'
+            if ($absolute.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                return $absolute.Substring($RepoRoot.Length + 1).Replace('\', '/')
+            }
+            return $null
+        }
+    } catch { }
+    return $candidate.Replace('\', '/')
+}
+
 function Convert-ToThinDefect {
     param([object]$Defect)
     if ($null -eq $Defect) { return $null }
     $record = [ordered]@{}
     foreach ($name in @(
-        "defect_id", "type", "blocker_code", "blocker_family", "blocker_reason", "path", "package", "wave_id",
-        "score_percent", "killed", "survived", "no_coverage", "recommendation"
+        "defect_key", "type", "blocker_code", "blocker_family", "blocker_reason", "path", "package", "wave_id",
+        "observed_hash", "mutation_identity", "score_percent", "killed", "survived", "no_coverage", "recommendation"
     )) {
         $value = Get-OptionalProperty -Object $Defect -Name $name
         if ($null -ne $value) { $record[$name] = $value }
     }
-    $evidence = @(Get-OptionalProperty -Object $Defect -Name "evidence" @() | ForEach-Object {
-        if (-not [string]::IsNullOrWhiteSpace([string]$_)) { [string]$_ }
-    } | Select-Object -Last 4)
-    if ($evidence.Count -gt 0) { $record.evidence = $evidence }
+    if (-not $record.Contains("mutation_identity")) { $record.mutation_identity = Get-DefectMutationIdentity -Defect $Defect }
+    if (-not $record.Contains("defect_key") -or [string]::IsNullOrWhiteSpace([string]$record.defect_key)) {
+        $record.defect_key = Get-DefectKey -Defect ([pscustomobject]$record)
+    }
+    $evidenceSource = Get-OptionalProperty -Object $Defect -Name "evidence_refs"
+    if ($null -eq $evidenceSource) { $evidenceSource = Get-OptionalProperty -Object $Defect -Name "evidence" @() }
+    $evidence = @($evidenceSource | ForEach-Object { Convert-ToEvidenceRef -Value $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Last 4)
+    if ($evidence.Count -gt 0) { $record.evidence_refs = $evidence }
     if (-not $record.Contains("path") -or -not $record.Contains("type")) { return $null }
     return [pscustomobject]$record
 }
@@ -509,15 +564,57 @@ function Get-ThinDefects {
     foreach ($defect in $source) {
         $compact = Convert-ToThinDefect -Defect $defect
         if ($null -eq $compact) { continue }
-        $key = @(
-            [string](Get-OptionalProperty $compact "path" ""),
-            [string](Get-OptionalProperty $compact "type" ""),
-            [string](Get-OptionalProperty $compact "blocker_code" ""),
-            [string](Get-OptionalProperty $compact "wave_id" "")
-        ) -join "|"
+        $key = [string](Get-OptionalProperty $compact "defect_key" (Get-DefectKey -Defect $compact))
         if (-not $unique.ContainsKey($key)) { $unique[$key] = $compact }
     }
     return @($unique.Values | Sort-Object @{ Expression = { [string](Get-OptionalProperty $_ "path" "") } }, @{ Expression = { [string](Get-OptionalProperty $_ "type" "") } })
+}
+
+function Set-CurrentFileDefects {
+    param([object]$FileRecord, [object[]]$Defects, [string]$ObservedHash = "", [string]$WaveId = "")
+    $normalized = New-Object System.Collections.Generic.List[object]
+    foreach ($defect in @($Defects)) {
+        if ($null -eq $defect) { continue }
+        $record = [ordered]@{}
+        if ($defect -is [System.Collections.IDictionary]) {
+            foreach ($key in $defect.Keys) { $record[[string]$key] = $defect[$key] }
+        } else {
+            foreach ($property in $defect.PSObject.Properties) { $record[$property.Name] = $property.Value }
+        }
+        if (-not $record.Contains("path")) { $record.path = [string](Get-OptionalProperty $FileRecord "path" "") }
+        if (-not $record.Contains("package")) { $record.package = [string](Get-OptionalProperty $FileRecord "package" "") }
+        if (-not $record.Contains("observed_hash") -and -not [string]::IsNullOrWhiteSpace($ObservedHash)) { $record.observed_hash = $ObservedHash }
+        if (-not $record.Contains("wave_id") -and -not [string]::IsNullOrWhiteSpace($WaveId)) { $record.wave_id = $WaveId }
+        $compact = Convert-ToThinDefect -Defect ([pscustomobject]$record)
+        if ($null -ne $compact) { [void]$normalized.Add($compact) }
+    }
+    $FileRecord.defects = @(Get-ThinDefects -Defects $normalized.ToArray())
+    return $FileRecord.defects
+}
+
+function Clear-CurrentFileDefects {
+    param([object]$FileRecord)
+    $FileRecord.defects = @()
+    $FileRecord.recommendations = @()
+    return $FileRecord.defects
+}
+
+function Get-ActiveDefectSummary {
+    param([object[]]$Rows)
+    $counts = [ordered]@{}
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
+    $count = 0
+    foreach ($row in @($Rows)) {
+        foreach ($defect in @((Get-OptionalProperty $row "defects" @()))) {
+            if ($null -eq $defect) { continue }
+            $count++
+            [void]$paths.Add([string](Get-OptionalProperty $defect "path" [string](Get-OptionalProperty $row "path" "")))
+            $type = [string](Get-OptionalProperty $defect "type" "unknown")
+            if (-not $counts.Contains($type)) { $counts[$type] = 0 }
+            $counts[$type]++
+        }
+    }
+    return [ordered]@{ active_defects = $count; active_defect_counts = $counts; active_defect_paths = $paths.Count }
 }
 
 function Convert-ToOrderedRecord {
@@ -575,7 +672,24 @@ function Convert-ToCanonicalFileRow {
     if (-not $record.Contains("loc")) { $record["loc"] = $null }
     if (-not $record.Contains("loc_total")) { $record["loc_total"] = $null }
     if (-not $record.Contains("loc_hash")) { $record["loc_hash"] = $null }
-    $record.defects = @(Get-ThinDefects -Defects (Get-OptionalProperty $record "defects" @()) -LatestWaveId ([string]$record.last_wave_id))
+    $defectRows = New-Object System.Collections.Generic.List[object]
+    foreach ($defect in @((Get-OptionalProperty $record "defects" @()))) {
+        if ($null -eq $defect) { continue }
+        $defectRecord = [ordered]@{}
+        if ($defect -is [System.Collections.IDictionary]) {
+            foreach ($key in $defect.Keys) { $defectRecord[[string]$key] = $defect[$key] }
+        } else {
+            foreach ($property in $defect.PSObject.Properties) { $defectRecord[$property.Name] = $property.Value }
+        }
+        if (-not $defectRecord.Contains("path")) { $defectRecord.path = $record.path }
+        if (-not $defectRecord.Contains("package")) { $defectRecord.package = [string](Get-OptionalProperty $record "package" "") }
+        if (-not $defectRecord.Contains("observed_hash")) {
+            $rowHash = Get-OptionalProperty $record "hash" (Get-OptionalProperty $record "content_hash_sha256" "")
+            if (-not [string]::IsNullOrWhiteSpace([string]$rowHash)) { $defectRecord.observed_hash = [string]$rowHash }
+        }
+        [void]$defectRows.Add([pscustomobject]$defectRecord)
+    }
+    $record.defects = @(Get-ThinDefects -Defects $defectRows.ToArray() -LatestWaveId ([string]$record.last_wave_id))
     return [pscustomobject]$record
 }
 
@@ -604,7 +718,10 @@ function New-MutationRegistry {
         updated_at = $null; repo_root = $RepoRoot; run_id = $null; last_wave_id = $null
         snapshot_mode = $null; snapshot_index_tree = $null; config_hash = $null; threshold_percent = $Threshold
         full_rescan = $false; diff_scan = [ordered]@{ candidates = 0; queued = 0; resumed = 0; deleted = 0; queue_policy = "new_or_hash_changed_or_pending_flags" }
-        index_compaction = [ordered]@{ mode = "latest_wave_unique"; evidence_refs_max = 4; history_path = "defects.jsonl" }
+        index_compaction = [ordered]@{
+            mode = "active_per_file"; dedupe_key = "path|package|type|blocker_code|mutation_identity"; evidence_refs_max = 4
+            clear_on_hash_change = $true; clear_on_success = $true; history = "local_untracked"; history_path = "defects.jsonl"
+        }
         waves = @(); files = @(); needs_tests = @(); needs_rerun = @(); needs_rescan = @()
     }
 }
@@ -642,14 +759,21 @@ function Get-IndexRefreshRows {
             $record.loc_total = [int]$metrics.loc_total
             $record.loc_hash = $hash
             $record.snapshot_index_tree = $SnapshotTree
-            if ([string]::IsNullOrWhiteSpace($oldHash) -or $oldHash -ne $hash) {
+            $hashChanged = [string]::IsNullOrWhiteSpace($oldHash) -or $oldHash -ne $hash
+            if ($hashChanged) {
                 $record.status = "queued"
                 $record.queue_reason = if ([string]::IsNullOrWhiteSpace($oldHash)) { "missing_content_hash" } else { "content_hash_changed" }
                 $record.needs_rerun = $true
                 $record.wave_status = "queued"
                 $record.wave_updated_at = [DateTime]::UtcNow.ToString("o")
+                $record.defects = @()
+                $record.recommendations = @()
+                $record.mutation_score = $null
+                $record.mutation_score_ratio = $null
+                $record.killed = 0; $record.survived = 0; $record.timeout = 0; $record.no_coverage = 0; $record.compile_error = 0
+                $record.blocker_code = $null; $record.blocker_family = $null; $record.blocker_reason = $null; $record.next_action = $null
+                $record.updated_at = [DateTime]::UtcNow.ToString("o")
             }
-            $record.updated_at = [DateTime]::UtcNow.ToString("o")
             [void]$rows.Add([pscustomobject]$record)
             continue
         }
@@ -732,12 +856,24 @@ function Write-CanonicalRegistry {
     $Registry.files = @(Get-UniqueFileRows -Rows @($Registry.files))
     $Registry.schema_version = 3
     $Registry.index_role = "mutation_wave_orchestrator"
-    $Registry.index_compaction = [ordered]@{ mode = "latest_wave_unique"; evidence_refs_max = 4; history_path = "defects.jsonl" }
+    $Registry.index_compaction = [ordered]@{
+        mode = "active_per_file"; dedupe_key = "path|package|type|blocker_code|mutation_identity"; evidence_refs_max = 4
+        clear_on_hash_change = $true; clear_on_success = $true; history = "local_untracked"; history_path = "defects.jsonl"
+    }
     $Registry.registry_revision = [int](Get-OptionalProperty $Registry "registry_revision" 0) + 1
     $Registry.updated_at = [DateTime]::UtcNow.ToString("o")
     $Registry.needs_tests = @($Registry.files | Where-Object { $_.needs_tests } | ForEach-Object { $_.path })
     $Registry.needs_rerun = @($Registry.files | Where-Object { $_.needs_rerun } | ForEach-Object { $_.path })
     $Registry.needs_rescan = @($Registry.files | Where-Object { $_.needs_rescan } | ForEach-Object { $_.path })
+    $summary = Get-OptionalProperty $Registry "summary" $null
+    if ($null -eq $summary) { $summary = [ordered]@{} }
+    $activeSummary = Get-ActiveDefectSummary -Rows @($Registry.files)
+    if ($summary -is [System.Collections.IDictionary]) {
+        foreach ($key in $activeSummary.Keys) { $summary[$key] = $activeSummary[$key] }
+    } else {
+        foreach ($key in $activeSummary.Keys) { $summary | Add-Member -NotePropertyName $key -NotePropertyValue $activeSummary[$key] -Force }
+    }
+    $Registry.summary = $summary
     Write-AtomicJson -Path $Path -Value $Registry
 }
 
@@ -787,7 +923,7 @@ function Get-FileRegistryPlan {
             hash = $hash; content_hash_sha256 = $hash; loc = [int]$metrics.loc; loc_total = [int]$metrics.loc_total; loc_hash = $hash
             status = "queued"; queue_reason = $reason
             mutation_score = $null; mutation_score_ratio = $null; killed = 0; survived = 0; timeout = 0; no_coverage = 0
-            compile_error = 0; defects = @(); recommendations = @(); needs_tests = $false; needs_rerun = $true; needs_rescan = $false
+            compile_error = 0; defects = if ($null -ne $old -and -not $FullRescan -and $oldHash -eq $hash) { @((Get-OptionalProperty $old "defects" @())) } else { @() }; recommendations = if ($null -ne $old -and -not $FullRescan -and $oldHash -eq $hash) { @((Get-OptionalProperty $old "recommendations" @())) } else { @() }; needs_tests = $false; needs_rerun = $true; needs_rescan = $false
             blocker_code = $null; blocker_family = $null; blocker_reason = $null; next_action = $null
             last_scan_hash = Get-OptionalProperty $old "last_scan_hash"; last_scan_run_id = Get-OptionalProperty $old "last_scan_run_id"
             snapshot_index_tree = $SnapshotTree; config_hash = $ConfigHash; resume_source = "queued"; scan_count = if ((Get-OptionalProperty $old "scan_count" 0)) { [int](Get-OptionalProperty $old "scan_count" 0) } else { 0 }
@@ -811,7 +947,7 @@ function Get-FileRegistryPlan {
         if ($null -ne $old.path -and -not $seen.Contains([string]$old.path)) {
             $deleted = [ordered]@{}
             foreach ($property in $old.PSObject.Properties) { $deleted[$property.Name] = $property.Value }
-            $deleted.status = "deleted_from_snapshot"; $deleted.needs_rerun = $false; $deleted.needs_tests = $false; $deleted.needs_rescan = $false
+            $deleted.status = "deleted_from_snapshot"; $deleted.needs_rerun = $false; $deleted.needs_tests = $false; $deleted.needs_rescan = $false; $deleted.defects = @(); $deleted.recommendations = @()
             $deleted.updated_at = [DateTime]::UtcNow.ToString("o")
             [void]$rows.Add([pscustomobject]$deleted)
         }
@@ -819,7 +955,7 @@ function Get-FileRegistryPlan {
     }
     $allRows = @($rows.ToArray())
     $queuedRows = @($queue.ToArray())
-    [pscustomobject]@{ files = $allRows; queue = $queuedRows; resumed = @($allRows | Where-Object { $_.resume_source -eq "compatible_registry" }); changed = $queuedRows; deleted = @($allRows | Where-Object { $_.status -eq "deleted_from_snapshot" }) }
+    [pscustomobject]@{ files = $allRows; queue = $queuedRows; resumed = @($allRows | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -eq "compatible_registry" }); changed = $queuedRows; deleted = @($allRows | Where-Object { [string](Get-OptionalProperty $_ "status" "") -eq "deleted_from_snapshot" }) }
 }
 
 function Get-FileScorePercent {
@@ -915,7 +1051,9 @@ function Convert-ToJsonSafeValue {
         return [pscustomobject]$record
     }
     if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
-        return @($Value | ForEach-Object { Convert-ToJsonSafeValue -Value $_ })
+        $items = New-Object System.Collections.Generic.List[object]
+        foreach ($item in $Value) { [void]$items.Add((Convert-ToJsonSafeValue -Value $item)) }
+        return ,([object[]]$items.ToArray())
     }
     if ($Value -is [pscustomobject]) {
         $record = [ordered]@{}
@@ -933,7 +1071,9 @@ function Write-AtomicJson {
     $parent = Split-Path -Parent $Path
     [void](New-Item -ItemType Directory -Force -Path $parent)
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    (Convert-ToJsonSafeValue -Value $Value) | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $temp -Encoding UTF8
+    $json = (Convert-ToJsonSafeValue -Value $Value) | ConvertTo-Json -Depth 40
+    $json = $json -replace "`r`n", "`n"
+    [IO.File]::WriteAllText($temp, "$json`n", (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
 
@@ -1230,7 +1370,7 @@ $ConfigHash = Get-CommandHash -Commands @([ordered]@{
     target_selector_policy = "auto-lib-bin-v1"; temp_environment_policy = "worker-private-tmp-v1"
 })
 $Registry = Read-FileRegistry -Path $RegistryPathAbsolute
-$PartialSelection = @($Files).Count -gt 0
+$PartialSelection = @($Files).Count -gt 0 -or @($Packages).Count -gt 0
 if ($RefreshIndex) {
     $RefreshId = "index-refresh-$(Get-Date -Format yyyyMMdd-HHmmss)-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     $refreshedRows = Get-IndexRefreshRows -CandidateFiles $CandidateFiles -KnownPackages $WorkspacePackages -Registry $Registry -SnapshotTree $Provenance.index_tree -PartialSelection:$PartialSelection
@@ -1474,7 +1614,7 @@ while ($RetryFiles.Count -gt 0 -or $PendingFiles.Count -gt 0 -or $Active.Count -
 
 $Defects = New-Object System.Collections.Generic.List[object]
 $RescanFiles = New-Object System.Collections.Generic.List[object]
-foreach ($fileRecord in @($FilePlan.files | Where-Object { $_.resume_source -ne "compatible_registry" -and $_.status -ne "deleted_from_snapshot" })) {
+foreach ($fileRecord in @($FilePlan.files | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -ne "compatible_registry" -and [string](Get-OptionalProperty $_ "status" "") -ne "deleted_from_snapshot" })) {
     $fileResult = @($Results | Where-Object { ([string](Get-OptionalProperty $_ "path" "")).ToLowerInvariant() -eq ([string]$fileRecord.path).ToLowerInvariant() } | Select-Object -Last 1)
     if (@($fileResult).Count -eq 0) {
         $fileRecord.status = "blocked"; $fileRecord.wave_status = "blocked"; $fileRecord.needs_rerun = $true; $fileRecord.updated_at = [DateTime]::UtcNow.ToString("o")
@@ -1502,13 +1642,15 @@ foreach ($fileRecord in @($FilePlan.files | Where-Object { $_.resume_source -ne 
         $fileRecord.blocker_family = if ($fileReport.timed_out) { "runtime" } else { $blocker.family }
         $fileRecord.blocker_reason = if ($fileReport.timed_out) { "worker deadline exceeded" } else { $blocker.reason }
         $fileRecord.next_action = if ($fileReport.timed_out) { "inspect process-tree evidence and rerun the file" } else { $blocker.next_action }
-        $defectRecord = [ordered]@{ defect_id = [guid]::NewGuid().ToString("N"); type = if ($fileReport.timed_out) { "mutation_timeout" } elseif ($compilerError) { "mutation_compiler_error" } else { "mutation_no_evidence" }; blocker_code = $fileRecord.blocker_code; blocker_family = $fileRecord.blocker_family; blocker_reason = $fileRecord.blocker_reason; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; evidence = @($fileReport.stderr, $fileReport.stdout); recommendation = $fileRecord.next_action }
-        $fileRecord.defects = @(Get-ThinDefects -Defects (@($fileRecord.defects) + @($defectRecord)) -LatestWaveId $WaveId); [void]$Defects.Add($defectRecord)
+        $defectRecord = [ordered]@{ type = if ($fileReport.timed_out) { "mutation_timeout" } elseif ($compilerError) { "mutation_compiler_error" } else { "mutation_no_evidence" }; blocker_code = $fileRecord.blocker_code; blocker_family = $fileRecord.blocker_family; blocker_reason = $fileRecord.blocker_reason; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; evidence_refs = @($fileReport.stderr, $fileReport.stdout); recommendation = $fileRecord.next_action }
+        $currentDefects = @(Set-CurrentFileDefects -FileRecord $fileRecord -Defects @($defectRecord) -ObservedHash $fileRecord.hash -WaveId $WaveId)
+        foreach ($currentDefect in $currentDefects) { [void]$Defects.Add($currentDefect) }
     } elseif ($lowCoverage) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true; $fileRecord.needs_rerun = $false; $fileRecord.needs_rescan = $false
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
-        $defectRecord = [ordered]@{ defect_id = [guid]::NewGuid().ToString("N"); type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
-        $fileRecord.defects = @(Get-ThinDefects -Defects (@($fileRecord.defects) + @($defectRecord)) -LatestWaveId $WaveId); [void]$Defects.Add($defectRecord)
+        $defectRecord = [ordered]@{ type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
+        $currentDefects = @(Set-CurrentFileDefects -FileRecord $fileRecord -Defects @($defectRecord) -ObservedHash $fileRecord.hash -WaveId $WaveId)
+        foreach ($currentDefect in $currentDefects) { [void]$Defects.Add($currentDefect) }
         $update = Invoke-TestUpdateHook -FileRecord $fileRecord -RunEvidenceRoot $RunEvidenceRoot -EventPath $EventPath
         $fileRecord.test_update_status = $update.status
         if ($update.status -eq "completed") {
@@ -1517,6 +1659,8 @@ foreach ($fileRecord in @($FilePlan.files | Where-Object { $_.resume_source -ne 
         }
     } else {
         $fileRecord.status = "completed"; $fileRecord.wave_status = "completed"; $fileRecord.needs_tests = $false; $fileRecord.needs_rerun = $false; $fileRecord.needs_rescan = $false; $fileRecord.test_update_status = "not_needed"
+        [void](Clear-CurrentFileDefects -FileRecord $fileRecord)
+        $fileRecord.blocker_code = $null; $fileRecord.blocker_family = $null; $fileRecord.blocker_reason = $null; $fileRecord.next_action = $null
     }
     $fileRecord.wave_updated_at = [DateTime]::UtcNow.ToString("o")
 }
@@ -1524,20 +1668,44 @@ foreach ($fileRecord in @($FilePlan.files | Where-Object { $_.resume_source -ne 
 foreach ($fileRecord in @($RescanFiles.ToArray())) {
     Write-Event -Path $EventPath -Event "rescan_started" -Data ([ordered]@{ package = $fileRecord.package; path = $fileRecord.path; wave_id = $WaveId; reason = "test_update_completed" })
     $rescan = Invoke-SynchronousRescan -Package $fileRecord.package -FilePath $fileRecord.path -WaveId $WaveId -RunTargetRoot $RunTargetRoot -RunMetadataRoot $RunMetadataRoot -RunEvidenceRoot $RunEvidenceRoot -EventPath $EventPath
-    $fileRecord.status = [string]$rescan.status
-        $fileRecord.wave_status = if ($rescan.status -eq "completed") { "completed" } else { [string]$rescan.status }
-        $fileRecord.needs_rescan = $false
-        $fileRecord.needs_rerun = $rescan.status -ne "completed"
-        $fileRecord.needs_tests = $false
-        $fileRecord.rescan_run_id = $RunId
-        $score = Get-FileScorePercent -Stats $rescan.stats
-        $fileRecord.mutation_score = $score
-        $fileRecord.mutation_score_ratio = $rescan.stats.mutation_score
-        $fileRecord.killed = [int]$rescan.stats.killed; $fileRecord.survived = [int]$rescan.stats.survived; $fileRecord.no_coverage = [int]$rescan.stats.no_coverage
-        if ($rescan.status -eq "completed" -and (($null -eq $score) -or ($score -le $Threshold) -or $fileRecord.no_coverage -gt 0)) {
-            $fileRecord.status = "needs_tests"; $fileRecord.needs_tests = $true; $fileRecord.needs_rerun = $false
-        }
-        $fileRecord.last_wave_id = $WaveId; $fileRecord.wave_updated_at = [DateTime]::UtcNow.ToString("o")
+    $rescanStats = Get-OptionalProperty $rescan "stats" ([ordered]@{ generated = 0; evaluated = 0; killed = 0; survived = 0; no_coverage = 0; compile_error = 0; timeout = 0; mutation_score = $null })
+    $fileRecord.rescan_run_id = $RunId
+    $fileRecord.needs_rescan = $false
+    $fileRecord.needs_tests = $false
+    $fileRecord.needs_rerun = $false
+    $score = Get-FileScorePercent -Stats $rescanStats
+    $fileRecord.mutation_score = $score
+    $fileRecord.mutation_score_ratio = $rescanStats.mutation_score
+    $fileRecord.killed = [int]$rescanStats.killed; $fileRecord.survived = [int]$rescanStats.survived; $fileRecord.no_coverage = [int]$rescanStats.no_coverage
+    $rescanStderrPath = [string](Get-OptionalProperty $rescan "stderr" "")
+    $rescanStdoutPath = [string](Get-OptionalProperty $rescan "stdout" "")
+    $rescanStderrText = if (-not [string]::IsNullOrWhiteSpace($rescanStderrPath) -and (Test-Path -LiteralPath $rescanStderrPath)) { Get-Content -LiteralPath $rescanStderrPath -Raw } else { [string](Get-OptionalProperty $rescan "error" "") }
+    $rescanNoEvidence = ([int](Get-OptionalProperty $rescanStats "metadata_files" 0) -eq 0 -and [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0)
+    $rescanCompilerError = $rescanStderrText -match '(?i)(internal compiler error|rustc.*panic|compiler unexpectedly|could not compile|cannot find target)'
+    $rescanDefects = New-Object System.Collections.Generic.List[object]
+    if ([bool](Get-OptionalProperty $rescan "timed_out" $false) -or [string]$rescan.status -ne "completed" -or $rescanNoEvidence -or $rescanCompilerError) {
+        $blocker = Get-ExecutionBlocker -Text $rescanStderrText
+        $fileRecord.status = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "timeout" } else { "blocked" }
+        $fileRecord.wave_status = $fileRecord.status; $fileRecord.needs_rerun = $true
+        $fileRecord.blocker_code = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "mutation_timeout" } else { $blocker.code }
+        $fileRecord.blocker_family = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "runtime" } else { $blocker.family }
+        $fileRecord.blocker_reason = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "worker deadline exceeded" } else { $blocker.reason }
+        $fileRecord.next_action = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "inspect process-tree evidence and rerun the file" } else { $blocker.next_action }
+        [void]$rescanDefects.Add([ordered]@{ type = if ($fileRecord.status -eq "timeout") { "mutation_timeout" } elseif ($rescanCompilerError) { "mutation_compiler_error" } else { "mutation_no_evidence" }; blocker_code = $fileRecord.blocker_code; blocker_family = $fileRecord.blocker_family; blocker_reason = $fileRecord.blocker_reason; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; evidence_refs = @($rescanStderrPath, $rescanStdoutPath); recommendation = $fileRecord.next_action })
+    } elseif (($null -eq $score) -or ([double]$score -le $Threshold) -or $fileRecord.no_coverage -gt 0) {
+        $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true
+        $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
+        [void]$rescanDefects.Add([ordered]@{ type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" })
+    } else {
+        $fileRecord.status = "completed"; $fileRecord.wave_status = "completed"; $fileRecord.test_update_status = "completed"
+        $fileRecord.blocker_code = $null; $fileRecord.blocker_family = $null; $fileRecord.blocker_reason = $null; $fileRecord.next_action = $null
+        [void](Clear-CurrentFileDefects -FileRecord $fileRecord)
+    }
+    if ($rescanDefects.Count -gt 0) {
+        $currentRescanDefects = @(Set-CurrentFileDefects -FileRecord $fileRecord -Defects $rescanDefects.ToArray() -ObservedHash $fileRecord.hash -WaveId $WaveId)
+        foreach ($currentDefect in $currentRescanDefects) { [void]$Defects.Add($currentDefect) }
+    }
+    $fileRecord.last_wave_id = $WaveId; $fileRecord.wave_updated_at = [DateTime]::UtcNow.ToString("o")
     Write-Event -Path $EventPath -Event "rescan_completed" -Data ([ordered]@{ package = $fileRecord.package; path = $fileRecord.path; wave_id = $WaveId; status = $fileRecord.status; mutation_score = $fileRecord.mutation_score })
 }
 
@@ -1581,11 +1749,24 @@ foreach ($defect in @($Defects.ToArray())) {
     if (-not $DefectCounts.Contains($defectType)) { $DefectCounts[$defectType] = 0 }
     $DefectCounts[$defectType]++
 }
+$ActiveDefects = New-Object System.Collections.Generic.List[object]
+$ActiveDefectCounts = [ordered]@{}
+$ActiveDefectPaths = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
+foreach ($row in @($FilePlan.files)) {
+    foreach ($defect in @((Get-OptionalProperty $row "defects" @()))) {
+        if ($null -eq $defect) { continue }
+        [void]$ActiveDefects.Add($defect)
+        [void]$ActiveDefectPaths.Add([string](Get-OptionalProperty $defect "path" [string](Get-OptionalProperty $row "path" "")))
+        $activeType = [string](Get-OptionalProperty $defect "type" "unknown")
+        if (-not $ActiveDefectCounts.Contains($activeType)) { $ActiveDefectCounts[$activeType] = 0 }
+        $ActiveDefectCounts[$activeType]++
+    }
+}
 $final = [ordered]@{
     schema_version = 3; run_id = $RunId; wave_id = $WaveId; status = $WaveSummary.status; provenance = $Provenance; resources = $ResourcePlan
     workers = @($Results.ToArray()); aggregate = $aggregate; categories = [ordered]@{ production = $production; test_support = $testSupport }; ignored_tests = @(Get-IgnoredTests); command_hash = $CommandHash; config_hash = $ConfigHash; commands = $Commands
     file_scan = $Manifest.file_scan; registry_path = $RegistryPathAbsolute; registry_revision = [int](Get-OptionalProperty $RegistryDocument "registry_revision" 0); wave = $WaveSummary; index = [ordered]@{ role = "mutation_wave_orchestrator"; path = $RegistryPathAbsolute; row_count = @($FilePlan.files).Count; unique_path_count = @($FilePlan.files | ForEach-Object path | Sort-Object -Unique).Count }; defect_log_path = $DefectLogPathAbsolute; defect_protocol = $DefectProtocol
-    defects = @($Defects.ToArray()); defect_counts = $DefectCounts
+    defects = @($Defects.ToArray()); defect_counts = $DefectCounts; active_defects = $ActiveDefects.Count; active_defect_counts = $ActiveDefectCounts; active_defect_paths = $ActiveDefectPaths.Count
     recommendations = @($FilePlan.files | ForEach-Object { @($_.recommendations) } | Where-Object { $_ } | Sort-Object -Unique)
     limitations = @("safe mutation contexts only", "compile/infra/equivalent cases excluded from mutation score", "registry dependencies are not mutation targets", "file-registry.json is the only authoritative per-file index; worker reports are evidence")
 }
@@ -1595,7 +1776,7 @@ $RegistryDocument.summary = [ordered]@{
     timeout = $aggregate.timeout; compile_error = $aggregate.compile_error; files_total = @($FilePlan.files).Count
     files_completed = $FinalStatusCounts.completed; files_needs_tests = $FinalStatusCounts.needs_tests; files_blocked = $FinalStatusCounts.blocked
     files_timeout = $FinalStatusCounts.timeout; files_needs_rerun = $FinalStatusCounts.needs_rerun; files_needs_rescan = $FinalStatusCounts.needs_rescan
-    defects = @($Defects.ToArray()).Count; defect_counts = $DefectCounts; evidence_root = $RunEvidenceRoot; report_path = (Join-Path $RunEvidenceRoot "parallel-report.json"); defect_protocol_path = $defectProtocolPath
+    defects = @($Defects.ToArray()).Count; defect_counts = $DefectCounts; active_defects = $ActiveDefects.Count; active_defect_counts = $ActiveDefectCounts; active_defect_paths = $ActiveDefectPaths.Count; evidence_root = $RunEvidenceRoot; report_path = (Join-Path $RunEvidenceRoot "parallel-report.json"); defect_protocol_path = $defectProtocolPath
 }
 Write-CanonicalRegistry -Registry $RegistryDocument -Path $RegistryPathAbsolute
 Write-AtomicJson -Path (Join-Path $RunEvidenceRoot "parallel-report.json") -Value $final
