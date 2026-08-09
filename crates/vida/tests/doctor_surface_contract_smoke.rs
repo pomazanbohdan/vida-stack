@@ -642,7 +642,7 @@ fn canonical_development_flow_dispatch_contract(
         ),
         (
             "release_closure",
-            "development_verifier",
+            "development_release_closure",
             "release_readiness",
             "prover",
             "",
@@ -754,35 +754,77 @@ fn canonical_development_flow_dispatch_contract(
 }
 
 fn canonical_host_bridge_role_selection_full(
-    request: &str,
-    selected_role: &str,
+    project_root: &str,
+    state_dir: &str,
     selected_node_id: &str,
     dispatch_contract: serde_json::Value,
 ) -> serde_json::Value {
+    let request_text = if selected_node_id == "tester" {
+        "implement bounded code change with verification proof"
+    } else {
+        "implement bounded code change"
+    };
+    let mut command = vida();
+    let output = command
+        .arg("agent-init")
+        .arg(request_text)
+        .arg("--state-dir")
+        .arg(state_dir)
+        .arg("--json")
+        .current_dir(project_root)
+        .env("VIDA_STATE_DIR", state_dir)
+        .env("VIDA_ROOT", project_root)
+        .output()
+        .expect("agent-init should run for host bridge fixture");
+    assert_success(&output, "agent-init host bridge fixture");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent-init json should parse");
+    let mut selection = payload
+        .get("selection")
+        .cloned()
+        .expect("agent-init should expose full role selection");
     let flow_id = dispatch_contract["selected_flow_set"]
         .as_str()
-        .unwrap_or("adaptive-task-flow");
-    serde_json::json!({
-        "ok": true,
-        "activation_source": "test_fixture",
-        "selection_mode": "test",
-        "fallback_role": "orchestrator",
-        "request": request,
-        "selected_role": selected_role,
-        "conversational_mode": null,
-        "single_task_only": true,
-        "tracked_flow_entry": flow_id,
-        "allow_freeform_chat": false,
-        "confidence": "high",
-        "matched_terms": [format!("dev_team_flow_id:{flow_id}")],
-        "compiled_bundle": {"team_flow_authority": dispatch_contract.clone()},
-        "reason": "test fixture",
-        "execution_plan": {
-            "team_flow_authority_selected_flow_id": flow_id,
-            "team_flow_authority_selected_node_id": selected_node_id,
-            "development_flow": {"dispatch_contract": dispatch_contract}
+        .unwrap_or("adaptive-task-flow")
+        .to_string();
+    let mut dispatch_contract = dispatch_contract;
+    let generated_catalog = selection["execution_plan"]["development_flow"]["dispatch_contract"]
+        ["lane_catalog"]
+        .clone();
+    if let (Some(generated_catalog), Some(catalog)) = (
+        generated_catalog.as_object(),
+        dispatch_contract["lane_catalog"].as_object_mut(),
+    ) {
+        for (node_id, lane) in catalog {
+            let Some(lane) = lane.as_object_mut() else {
+                continue;
+            };
+            let Some(generated_lane) = generated_catalog.get(node_id) else {
+                continue;
+            };
+            for key in ["evidence_requirements", "proof_gates"] {
+                if lane.get(key).is_none_or(serde_json::Value::is_null)
+                    || lane[key]
+                        .as_array()
+                        .is_some_and(|values| values.is_empty())
+                    || lane[key]
+                        .as_object()
+                        .is_some_and(|values| values.is_empty())
+                {
+                    if let Some(value) = generated_lane.get(key) {
+                        lane.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
         }
-    })
+    }
+    selection["ok"] = serde_json::json!(true);
+    selection["execution_plan"]["team_flow_authority_selected_flow_id"] =
+        serde_json::json!(flow_id);
+    selection["execution_plan"]["team_flow_authority_selected_node_id"] =
+        serde_json::json!(selected_node_id);
+    selection["execution_plan"]["development_flow"]["dispatch_contract"] = dispatch_contract;
+    selection
 }
 
 fn is_canonical_operator_status(value: &str) -> bool {
@@ -3530,6 +3572,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
     dispatch_packet_path: &str,
     downstream_packet_path: &str,
     activation_result_path: &str,
+    downstream_trace_path: &str,
     dispatch_target: &str,
 ) {
     let closure_gate = canonical_host_bridge_closure_gate();
@@ -3606,6 +3649,10 @@ fn persist_host_bridge_lane_receipt_with_helper(
         .env(
             runtime_consumption::RECEIPT_HELPER_RESULT_PATH_ENV,
             activation_result_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_TRACE_PATH_ENV,
+            downstream_trace_path,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_STATUS_ENV,
@@ -3714,26 +3761,13 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
         "adaptive-task-flow",
         selected_node_id,
     );
-    let runtime_role = dispatch_contract
-        .get("lane_catalog")
-        .and_then(|catalog| catalog.get(selected_node_id))
-        .and_then(|lane| lane.get("runtime_role"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| match dispatch_target {
-            "tester" | "reviewer" => "verifier".to_owned(),
-            "coach" | "coach_validator" => "coach".to_owned(),
-            "architect" => "solution_architect".to_owned(),
-            "release_closure" => "prover".to_owned(),
-            _ => "worker".to_owned(),
-        });
+    let project_root = format!("{state_dir}/../../..");
     let role_selection_full = canonical_host_bridge_role_selection_full(
-        "test fixture",
-        &runtime_role,
+        &project_root,
+        state_dir,
         selected_node_id,
         dispatch_contract,
     );
-    let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let downstream_packet_dir =
         format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
@@ -4045,8 +4079,8 @@ fn create_host_bridge_lane_fixture_for_target(
         &team_flow_authority,
     );
     let role_selection_full = canonical_host_bridge_role_selection_full(
-        &format!("dispatch target {dispatch_target}"),
-        runtime_role,
+        &project_root,
+        &state_dir,
         selected_node_id,
         dispatch_contract,
     );
@@ -4175,6 +4209,36 @@ fn create_host_bridge_lane_fixture_for_target(
     .expect("request should be written");
 
     let completion_receipt_id = format!("{run_id}-{dispatch_target}-completion");
+    let team_flow_inclusion = role_selection_full
+        .pointer("/execution_plan/team_flow_inclusion")
+        .expect("host bridge fixture should persist TeamFlow inclusion");
+    let config_hash = team_flow_inclusion
+        .pointer("/receipts/0/request/config_authority_hash")
+        .and_then(serde_json::Value::as_str)
+        .expect("TeamFlow inclusion should persist config authority hash");
+    let snapshot_ref = team_flow_inclusion
+        .get("snapshot_ref")
+        .and_then(serde_json::Value::as_str)
+        .expect("TeamFlow inclusion should persist post-overlay snapshot ref");
+    let team_flow_evidence = role_selection_full["execution_plan"]["development_flow"]
+        ["dispatch_contract"]["lane_catalog"][selected_node_id]["evidence_requirements"]
+        .as_array()
+        .filter(|values| !values.is_empty())
+        .cloned()
+        .map(serde_json::Value::Array)
+        .unwrap_or_else(|| {
+            serde_json::json!(match dispatch_target {
+                "coder" => vec!["changed_files", "verification_notes", "explicit_blockers"],
+                "tester" => vec!["verification_evidence", "failing_or_passing_checks"],
+                "coach" | "coach_validator" => vec![
+                    "root_cause_validation",
+                    "false_green_risk_review",
+                    "rework_or_approve_decision"
+                ],
+                "architect" => vec!["implementation_plan", "architecture_decisions", "explicit_blockers"],
+                _ => vec!["changed_files"],
+            })
+        });
     std::fs::write(
         &activation_result_path,
         serde_json::json!({
@@ -4192,17 +4256,8 @@ fn create_host_bridge_lane_fixture_for_target(
             "verdict": if pass_case { "pass" } else { "rework" },
             "completion_verdict": if pass_case { "pass" } else { "rework" },
             "completion_receipt_id": &completion_receipt_id,
-            "proof_outputs": match dispatch_target {
-                "coder" => vec!["changed_files", "verification_notes", "explicit_blockers"],
-                "tester" => vec!["verification_evidence", "failing_or_passing_checks"],
-                "coach" | "coach_validator" => vec![
-                    "root_cause_validation",
-                    "false_green_risk_review",
-                    "rework_or_approve_decision"
-                ],
-                "architect" => vec!["implementation_plan", "architecture_decisions", "explicit_blockers"],
-                _ => Vec::<&str>::new(),
-            },
+            "proof_outputs": team_flow_evidence.clone(),
+            "artifact_refs": [&packet_path, &result_path, &bridge_receipt_path],
             "execution_evidence": {
                 "receipt_backed": true,
                 "receipt_id": &completion_receipt_id,
@@ -4221,12 +4276,96 @@ fn create_host_bridge_lane_fixture_for_target(
     )
     .expect("activation result should be written");
 
+    let transition_result_path = format!(
+        "{activation_dir}/{run_id}-{dispatch_target}-transition.json"
+    );
+    let transition_trace_path = format!("{activation_dir}/{run_id}-{dispatch_target}-trace.json");
+    std::fs::write(
+        &transition_result_path,
+        serde_json::json!({
+            "artifact_kind": if pass_case { "runtime_lane_completion_result" } else { "runtime_dispatch_result" },
+            "run_id": run_id,
+            "dispatch_target": dispatch_target,
+            "completed_target": dispatch_target,
+            "source_dispatch_packet_path": &packet_path,
+            "status": if pass_case { "pass" } else { "blocked" },
+            "execution_state": if pass_case { "executed" } else { "blocked" },
+            "decision": if pass_case { "approve" } else { "rework" },
+            "verdict": if pass_case { "pass" } else { "rework" },
+            "completion_verdict": if pass_case { "pass" } else { "rework" },
+            "completion_receipt_id": &completion_receipt_id,
+            "artifact_refs": [&packet_path, &result_path, &bridge_receipt_path],
+            "proof_outputs": team_flow_evidence.clone(),
+            "activation_semantics": {
+                "activation_kind": "execution_evidence",
+                "view_only": false,
+                "executes_packet": true,
+                "records_completion_receipt": pass_case
+            },
+            "execution_evidence": {
+                "receipt_id": &completion_receipt_id,
+                "receipt_backed": true
+            },
+            "team_flow_receipt": {
+                "receipt_id": &completion_receipt_id,
+                "node_id": selected_node_id,
+                "status": if pass_case { "pass" } else { "rework" },
+                "evidence": team_flow_evidence.clone(),
+                "config_hash": config_hash,
+                "snapshot_ref": snapshot_ref
+            }
+        })
+        .to_string(),
+    )
+    .expect("transition result should be written");
+    std::fs::write(
+        &transition_trace_path,
+        serde_json::json!({
+            "artifact_kind": "runtime_downstream_dispatch_trace",
+            "run_id": run_id,
+            "steps": [{
+                "run_id": run_id,
+                "dispatch_target": dispatch_target,
+                "dispatch_status": if pass_case { "executed" } else { "blocked" },
+                "lane_status": if pass_case { "lane_completed" } else { "lane_blocked" },
+                "supersedes_receipt_id": null,
+                "exception_path_receipt_id": null,
+                "dispatch_kind": "taskflow_pack",
+                "dispatch_surface": "vida lane complete --host-bridge-request",
+                "dispatch_command": "vida lane complete",
+                "dispatch_packet_path": &packet_path,
+                "dispatch_result_path": &transition_result_path,
+                "blocker_code": null,
+                "downstream_dispatch_target": downstream_target,
+                "downstream_dispatch_command": "vida taskflow consume continue",
+                "downstream_dispatch_note": "receipt-backed transition fixture",
+                "downstream_dispatch_ready": pass_case,
+                "downstream_dispatch_blockers": if pass_case { Vec::<&str>::new() } else { vec!["pending_host_bridge_completion"] },
+                "downstream_dispatch_packet_path": &packet_path,
+                "downstream_dispatch_status": if pass_case { "packet_ready" } else { "blocked" },
+                "downstream_dispatch_result_path": null,
+                "downstream_dispatch_trace_path": null,
+                "downstream_dispatch_executed_count": 0,
+                "downstream_dispatch_active_target": downstream_target,
+                "downstream_dispatch_last_target": dispatch_target,
+                "activation_agent_type": runtime_role,
+                "activation_runtime_role": runtime_role,
+                "selected_backend": canonical_host_bridge_backend_id(),
+                "policy_bundle_ref": null,
+                "recorded_at": "2026-06-05T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("transition trace should be written");
+
     persist_host_bridge_lane_receipt_with_helper(
         &state_dir,
         &run_id,
         &packet_path,
         &packet_path,
         &activation_result_path,
+        &transition_trace_path,
         dispatch_target,
     );
 

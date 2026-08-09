@@ -7979,6 +7979,26 @@ pub(crate) async fn rehydrate_persisted_role_selection(
             "team_flow_authority_selected_flow_id".to_string(),
             serde_json::Value::String(flow_id.to_string()),
         );
+        let dispatch_contract = plan["development_flow"]["dispatch_contract"].clone();
+        if dispatch_contract["status"] == "blocked" {
+            let blockers = dispatch_contract["blocker_codes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            if !blockers.is_empty() {
+                return Err(format!(
+                    "team_flow_authority_rehydrated_dispatch_contract_blocked:{}",
+                    blockers.join(",")
+                ));
+            }
+            return Err(
+                "team_flow_authority_rehydrated_execution_plan_blocked".to_string(),
+            );
+        }
         let contract_flow =
             plan["development_flow"]["dispatch_contract"]["selected_flow_set"].as_str();
         if contract_flow != Some(flow_id) {

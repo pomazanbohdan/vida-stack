@@ -31,6 +31,8 @@ pub(crate) const RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_BLOCKERS";
 pub(crate) const RECEIPT_HELPER_DOWNSTREAM_ACTIVE_TARGET_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_ACTIVE_TARGET";
+pub(crate) const RECEIPT_HELPER_DOWNSTREAM_TRACE_PATH_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_TRACE_PATH";
 pub(crate) const RECEIPT_HELPER_DISPATCH_STATUS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_STATUS";
 pub(crate) const RECEIPT_HELPER_LANE_STATUS_ENV: &str =
@@ -708,7 +710,10 @@ fn persist_ready_downstream_receipt(
             downstream_dispatch_packet_path: Some(downstream_packet_path.to_string()),
             downstream_dispatch_status: Some(downstream_status.to_string()),
             downstream_dispatch_result_path: Some(result_path.to_string()),
-            downstream_dispatch_trace_path: None,
+            downstream_dispatch_trace_path: std::env::var(RECEIPT_HELPER_DOWNSTREAM_TRACE_PATH_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             downstream_dispatch_executed_count: 0,
             downstream_dispatch_active_target: downstream_active_target,
             downstream_dispatch_last_target: Some(dispatch_target.to_string()),
