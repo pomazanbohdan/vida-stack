@@ -215,7 +215,32 @@ pub(crate) async fn current_runtime_projection(
     );
     let current_session_scope_is_explicit =
         store.current_session_identity_is_explicit()? || explicit_binding_matches_current;
-    let global_status = store.latest_run_graph_status().await?;
+    let global_status = match store.latest_run_graph_status().await? {
+        Some(status) => Some(status),
+        None => {
+            let mut stale_closed_status = None;
+            for task in store.list_tasks(None, true).await? {
+                if !StateStore::task_status_is_closed_like(&task.status) {
+                    continue;
+                }
+                let Some(run_id) = store.latest_run_graph_run_id_for_task(&task.id).await? else {
+                    continue;
+                };
+                let Ok(status) = store.run_graph_status(&run_id).await else {
+                    continue;
+                };
+                if status.task_id == task.id
+                    && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                        &status,
+                    )
+                {
+                    stale_closed_status = Some(status);
+                    break;
+                }
+            }
+            stale_closed_status
+        }
+    };
     let mut competing_run_id = (!explicit_binding_matches_current)
         .then_some(())
         .and_then(|_| global_status.as_ref())

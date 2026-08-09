@@ -722,6 +722,33 @@ fn bootstrap_project_runtime(project_id: &str, project_name: &str) -> (String, S
     (project_root, state_dir)
 }
 
+fn set_dispatch_for_project_runtime(project_root: &str, enabled: bool) {
+    let path = format!("{project_root}/vida.config.yaml");
+    let config = fs::read_to_string(&path).expect("project runtime config should be readable");
+    let (from, to) = if enabled {
+        (
+            "taskflow:\n  dispatch:\n    enabled: false",
+            "taskflow:\n  dispatch:\n    enabled: true",
+        )
+    } else {
+        (
+            "taskflow:\n  dispatch:\n    enabled: true",
+            "taskflow:\n  dispatch:\n    enabled: false",
+        )
+    };
+    let updated = config.replacen(from, to, 1);
+    assert_ne!(updated, config, "test runtime config must expose dispatch flag");
+    fs::write(path, updated).expect("test runtime config should be writable");
+}
+
+fn enable_dispatch_for_project_runtime(project_root: &str) {
+    set_dispatch_for_project_runtime(project_root, true);
+}
+
+fn disable_dispatch_for_project_runtime(project_root: &str) {
+    set_dispatch_for_project_runtime(project_root, false);
+}
+
 fn project_bound_taskflow_consume_final_with_timeout(
     project_root: &str,
     state_dir: &str,
@@ -18267,19 +18294,14 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
         "Boot Diagnostics Closed Run Projection",
     );
     let task_id = "boot-diagnostics-closeout-task";
-    let recovery = zombie_d_prepare_bridge_pending_task(
+    let seeded = zombie_d_prepare_closed_run_projection(
         &project_root,
         &state_dir,
         task_id,
         "Boot diagnostics closeout task",
     );
-    assert_eq!(recovery["recovery"]["run_id"], task_id);
-    zombie_d_close_task(
-        &project_root,
-        &state_dir,
-        task_id,
-        "closed-run parity proof",
-    );
+    assert_eq!(seeded["payload"]["status"]["run_id"], task_id);
+    enable_dispatch_for_project_runtime(&project_root);
 
     let diagnostics = bounded_vida_output_with_state_lock_retry(
         &["-k", "5s", "20s"],
@@ -18826,6 +18848,42 @@ fn zombie_d_prepare_bridge_pending_task(
         "handoff_pending"
     );
     recovery
+}
+
+fn zombie_d_prepare_closed_run_projection(
+    project_root: &str,
+    state_dir: &str,
+    task_id: &str,
+    title: &str,
+) -> serde_json::Value {
+    create_zombie_d_default_route_task(state_dir, task_id, title);
+    enable_dispatch_for_project_runtime(project_root);
+    let (seed, seed_success) = zombie_d_run_graph_json_command(
+        project_root,
+        state_dir,
+        task_id,
+        &[
+            "taskflow",
+            "run-graph",
+            "seed",
+            task_id,
+            "continue development",
+            "--json",
+        ],
+        "ZOMBIE-D stale closed-run seed",
+    );
+    assert!(
+        seed_success,
+        "ZOMBIE-D stale closed-run seed should succeed: {seed}"
+    );
+    disable_dispatch_for_project_runtime(project_root);
+    zombie_d_close_task(
+        project_root,
+        state_dir,
+        task_id,
+        "closed-run parity proof",
+    );
+    seed
 }
 
 fn zombie_d_close_task(project_root: &str, state_dir: &str, task_id: &str, reason: &str) {

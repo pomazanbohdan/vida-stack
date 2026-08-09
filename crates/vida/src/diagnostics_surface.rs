@@ -554,6 +554,7 @@ pub(crate) async fn build_post_commit_diagnostics(
         .map_err(|error| format!("read current runtime projection: {error}"))?;
     let crate::status_surface::CurrentRuntimeProjection {
         current_session_status: latest_run_graph_status,
+        global_status: latest_global_run_graph_status,
         terminal_task_active_status: latest_terminal_task_active_run_graph_status,
         recovery: latest_run_graph_recovery,
         dispatch_receipt: latest_dispatch_receipt,
@@ -678,13 +679,21 @@ pub(crate) async fn build_post_commit_diagnostics(
             Some(_) => false,
             None => false,
         };
+    let global_closed_task_active_run_projection_mismatch = latest_run_graph_status.is_none()
+        && latest_global_run_graph_status.as_ref().is_some_and(|status| {
+            closed_task_ids.iter().any(|id| id == &status.task_id)
+                && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                    status,
+                )
+        });
     let closed_task_active_run_projection_mismatch =
         post_commit_closed_task_active_run_projection_mismatch(
             latest_run_graph_status.as_ref(),
             latest_terminal_task_active_run_graph_task_stale,
             &closed_task_ids,
             latest_run_graph_terminal_closure_has_truth,
-        ) || latest_run_graph_terminal_closure_without_truth;
+        ) || latest_run_graph_terminal_closure_without_truth
+            || global_closed_task_active_run_projection_mismatch;
     if closed_task_active_run_projection_mismatch {
         blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
     }
