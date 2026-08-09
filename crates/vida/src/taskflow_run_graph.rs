@@ -16263,7 +16263,7 @@ agent_system:
         let payload = derive_seeded_run_graph_state(
             &store,
             "runtime-rehydrate-progressed-node",
-            "Continue the configured implementation flow from its persisted execution cursor.",
+            "Continue the configured implementation flow from its persisted execution cursor with verification proof.",
         )
         .await
         .expect("seed should be generated");
