@@ -19,6 +19,8 @@ const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(all(test, windows))]
 static INJECT_WINDOWS_MOVE_FAILURE: AtomicBool = AtomicBool::new(false);
+#[cfg(all(test, windows))]
+static INJECT_WINDOWS_ATTRIBUTE_FAILURE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AtomicReplaceLimit(u64);
@@ -470,7 +472,7 @@ impl OwnedTempFile {
     }
 
     fn rename_into(
-        self,
+        mut self,
         parent_dir: &Dir,
         destination: &Path,
         absolute_destination: &Path,
@@ -487,55 +489,51 @@ impl OwnedTempFile {
         {
             let restore_readonly =
                 destination_exists && original_permissions.is_some_and(Permissions::readonly);
-            if restore_readonly {
-                let mut writable = original_permissions
-                    .expect("readonly destination has original permissions")
-                    .clone();
-                writable.set_readonly(false);
-                if let Err(source) = parent_dir.set_permissions(destination, writable) {
-                    return Err(AtomicRenameFailure { source, temp: self });
-                }
-            }
             let temp_path = absolute_destination
                 .parent()
-                .and_then(|parent| parent.canonicalize().ok())
                 .map(|parent| parent.join(&self.name));
-            let result = match temp_path {
+            let result = match temp_path.as_deref() {
                 Some(temp_path) => {
                     debug_assert!(self.file.is_some());
-                    if take_windows_move_failure_injection() {
+                    drop(self.file.take());
+                    if restore_readonly {
+                        if let Err(source) = prepare_windows_readonly_replace(
+                            parent_dir,
+                            destination,
+                            temp_path,
+                            absolute_destination,
+                        ) {
+                            return Err(AtomicRenameFailure { source, temp: self });
+                        }
+                    }
+                    if take_windows_move_failure_injection(absolute_destination) {
                         Err(io::Error::new(
                             io::ErrorKind::Other,
                             "injected Windows atomic move failure",
                         ))
                     } else {
-                        replace_file_windows(&temp_path, absolute_destination)
+                        replace_file_windows(temp_path, absolute_destination)
                     }
                 }
                 None => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
+                    io::ErrorKind::InvalidInput,
                     "atomic replacement requires an absolute canonical parent",
                 )),
             };
             return match result {
                 Ok(()) => Ok(()),
-                Err(mut source) => {
-                    if restore_readonly {
-                        if let Err(restore_error) = restore_windows_destination_permissions(
+                Err(source) => {
+                    let source = if restore_readonly && temp_path.is_some() {
+                        rollback_windows_readonly_replace(
                             parent_dir,
                             destination,
-                            original_permissions
-                                .expect("readonly destination has original permissions")
-                                .clone(),
-                        ) {
-                            source = io::Error::new(
-                                restore_error.kind(),
-                                format!(
-                                    "Windows atomic move failed: {source}; permission restoration failed: {restore_error}"
-                                ),
-                            );
-                        }
-                    }
+                            temp_path.as_deref().expect("checked temporary path"),
+                            absolute_destination,
+                            source,
+                        )
+                    } else {
+                        source
+                    };
                     Err(AtomicRenameFailure { source, temp: self })
                 }
             };
@@ -557,31 +555,118 @@ impl OwnedTempFile {
 }
 
 #[cfg(all(test, windows))]
-fn take_windows_move_failure_injection() -> bool {
-    INJECT_WINDOWS_MOVE_FAILURE.swap(false, Ordering::SeqCst)
+fn take_windows_move_failure_injection(path: &Path) -> bool {
+    path.to_string_lossy().contains("windows-readonly-restore")
+        && INJECT_WINDOWS_MOVE_FAILURE.swap(false, Ordering::SeqCst)
 }
 
 #[cfg(all(not(test), windows))]
-fn take_windows_move_failure_injection() -> bool {
+fn take_windows_move_failure_injection(_path: &Path) -> bool {
     false
 }
 
 #[cfg(windows)]
-fn restore_windows_destination_permissions(
+fn prepare_windows_readonly_replace(
     parent_dir: &Dir,
     destination: &Path,
-    permissions: Permissions,
+    temporary: &Path,
+    absolute_destination: &Path,
 ) -> io::Result<()> {
-    match parent_dir.symlink_metadata(destination) {
+    set_windows_readonly_attribute(temporary, true)
+        .and_then(|()| set_windows_readonly_attribute(absolute_destination, false))
+        .map_err(|source| {
+            rollback_windows_readonly_replace(
+                parent_dir,
+                destination,
+                temporary,
+                absolute_destination,
+                source,
+            )
+        })
+}
+
+#[cfg(windows)]
+fn rollback_windows_readonly_replace(
+    parent_dir: &Dir,
+    destination: &Path,
+    temporary: &Path,
+    absolute_destination: &Path,
+    source: io::Error,
+) -> io::Error {
+    let source = append_windows_rollback_error(
+        source,
+        "temporary read-only cleanup failed",
+        set_windows_readonly_attribute(temporary, false),
+    );
+    let restore = match parent_dir.symlink_metadata(destination) {
         Ok(metadata) if !metadata_is_link_like(&metadata) && metadata.is_file() => {
-            parent_dir.set_permissions(destination, permissions)
+            set_windows_readonly_attribute(absolute_destination, true)
         }
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "refusing to restore permissions through a replaced destination",
         )),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(source),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    };
+    append_windows_rollback_error(source, "destination read-only restoration failed", restore)
+}
+
+#[cfg(windows)]
+fn append_windows_rollback_error(
+    source: io::Error,
+    action: &str,
+    rollback: io::Result<()>,
+) -> io::Error {
+    match rollback {
+        Ok(()) => source,
+        Err(error) => io::Error::new(source.kind(), format!("{source}; {action}: {error}")),
+    }
+}
+
+/// Updates only the Windows read-only attribute while preserving all other file attributes.
+///
+/// Safety: the UTF-16 path is NUL-free and remains alive for both FFI calls; the Win32 calls
+/// operate only on the validated absolute destination path and their return values are checked.
+#[cfg(windows)]
+fn set_windows_readonly_attribute(path: &Path, readonly: bool) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_READONLY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+    };
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if !path.is_absolute() || wide.is_empty() || wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows attribute transition requires an absolute NUL-free path",
+        ));
+    }
+    wide.push(0);
+    let mut attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(io::Error::last_os_error());
+    }
+    if readonly {
+        attributes |= FILE_ATTRIBUTE_READONLY;
+    } else {
+        attributes &= !FILE_ATTRIBUTE_READONLY;
+    }
+    #[cfg(all(test, windows))]
+    if path.ends_with("result.bin")
+        && path.to_string_lossy().contains("windows-attribute-failure")
+        && INJECT_WINDOWS_ATTRIBUTE_FAILURE.swap(false, Ordering::SeqCst)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "injected Windows attribute update failure",
+        ));
+    }
+    let succeeded = unsafe { SetFileAttributesW(wide.as_ptr(), attributes) != 0 };
+    if succeeded {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -1100,15 +1185,30 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn atomic_replace_windows_write_through_replaces_with_live_temp_handle() {
+    fn atomic_replace_windows_readonly_source_keeps_writable_destination() {
         let root = temp_root("windows-write-through");
+        let source = root.join("source.bin");
         let destination = root.join("result.bin");
+        std::fs::write(&source, b"replacement").unwrap();
+        let mut source_permissions = std::fs::metadata(&source).unwrap().permissions();
+        source_permissions.set_readonly(true);
+        std::fs::set_permissions(&source, source_permissions).unwrap();
         std::fs::write(&destination, b"old").unwrap();
 
-        atomic_replace_bounded(&destination, b"replacement").unwrap();
+        atomic_replace_bounded_from_file(&destination, &source, AtomicReplaceLimit::default())
+            .unwrap();
 
         assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert!(
+            !std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+        assert!(std::fs::metadata(&source).unwrap().permissions().readonly());
+        let mut source_permissions = std::fs::metadata(&source).unwrap().permissions();
+        source_permissions.set_readonly(false);
+        std::fs::set_permissions(&source, source_permissions).unwrap();
     }
 
     #[cfg(windows)]
@@ -1126,6 +1226,33 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
         let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
         assert!(permissions.readonly());
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&destination, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_replace_windows_attribute_failure_rolls_back_before_move() {
+        let root = temp_root("windows-attribute-failure");
+        let destination = root.join("result.bin");
+        std::fs::write(&destination, b"old").unwrap();
+        let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&destination, permissions).unwrap();
+        INJECT_WINDOWS_ATTRIBUTE_FAILURE.store(true, Ordering::SeqCst);
+
+        let error = atomic_replace_bounded(&destination, b"replacement")
+            .expect_err("injected destination attribute failure must abort before replacement");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected Windows attribute update failure")
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"old");
+        let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
+        assert!(permissions.readonly());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
         permissions.set_readonly(false);
         std::fs::set_permissions(&destination, permissions).unwrap();
     }
@@ -1151,6 +1278,7 @@ mod tests {
             Path::new("result.bin"),
         )
         .unwrap();
+        let temp_name = temp.name.clone();
         temp.file_mut().write_all(b"replacement").unwrap();
         temp.file()
             .set_permissions(original_permissions.clone())
@@ -1178,13 +1306,18 @@ mod tests {
         let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
         assert!(permissions.readonly());
         failure.temp.cleanup(&parent_dir);
+        assert!(
+            parent_dir
+                .symlink_metadata(&temp_name)
+                .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        );
         permissions.set_readonly(false);
         std::fs::set_permissions(&destination, permissions).unwrap();
     }
 
     #[cfg(windows)]
     #[test]
-    fn atomic_replace_windows_write_through_creates_with_live_temp_handle() {
+    fn atomic_replace_windows_write_through_creates_destination() {
         let root = temp_root("windows-write-through-new");
         let destination = root.join("result.bin");
 
