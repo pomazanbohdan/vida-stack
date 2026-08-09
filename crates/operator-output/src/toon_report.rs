@@ -282,4 +282,60 @@ mod tests {
         assert!(selected["continuation_binding"]["primary_path"].is_null());
         assert!(selected["next_lawful_dispatch_action"]["command"].is_null());
     }
+
+    #[test]
+    fn render_skips_empty_keys_and_sanitizes_nested_values() {
+        let output = render(
+            "operator_report\nforged",
+            vec![
+                OperatorToonField::text("", "must be omitted"),
+                OperatorToonField::text("bad\nkey", "bad\x1bvalue"),
+                OperatorToonField::value(
+                    "nested\nkey",
+                    serde_json::json!({"child\nkey": "child\x1bvalue"}),
+                ),
+            ],
+        );
+
+        assert!(!output.contains("must be omitted"));
+        assert!(!output.contains('\x1b'));
+        assert!(output.contains("bad"));
+        assert!(output.contains("nested"));
+        assert!(output.contains("child"));
+        assert_eq!(output.lines().next(), Some("operator_report\\nforged"));
+    }
+
+    #[test]
+    fn select_fields_handles_empty_requests_non_objects_and_dotted_boundaries() {
+        let value = serde_json::json!({
+            "status": "pass",
+            "nested": {"leaf": "value"}
+        });
+        assert_eq!(select_fields(value.clone(), None), value);
+        assert_eq!(select_fields(value.clone(), Some(" ,  ")), value);
+        assert_eq!(select_fields(serde_json::json!("scalar"), Some("status")), "scalar");
+
+        let selected = select_fields(
+            value,
+            Some("nested.leaf,nested.,.nested,missing,nested.leaf"),
+        );
+        assert_eq!(selected["nested"]["leaf"], "value");
+        assert!(selected["nested"][""].is_null());
+        assert!(selected["missing"].is_null());
+    }
+
+    #[test]
+    fn dotted_insert_builds_nested_objects_and_replaces_scalar_intermediates() {
+        let mut selected = serde_json::Map::new();
+        insert_dotted_field(&mut selected, "outer.inner", serde_json::json!("value"));
+        assert_eq!(selected["outer"]["inner"], "value");
+
+        selected.insert("outer".to_string(), serde_json::json!("stale"));
+        insert_dotted_field(&mut selected, "outer.replaced", serde_json::json!(true));
+        assert_eq!(selected["outer"]["replaced"], true);
+
+        let mut object = serde_json::Map::new();
+        insert_dotted_segments(&mut object, &[], serde_json::json!("ignored"));
+        assert!(object.is_empty());
+    }
 }

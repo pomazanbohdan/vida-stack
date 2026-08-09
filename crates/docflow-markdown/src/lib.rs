@@ -87,6 +87,13 @@ mod tests {
     }
 
     #[test]
+    fn splits_body_without_footer_and_trims_trailing_whitespace() {
+        let artifact = split_footer("body line  \n\n").expect("split should succeed");
+        assert_eq!(artifact.body, "body line");
+        assert!(artifact.footer.is_none());
+    }
+
+    #[test]
     fn rejects_empty_footer_block() {
         let error = split_footer(&format!("body\n{FOOTER_DELIMITER}\n"))
             .expect_err("empty footer should fail");
@@ -106,6 +113,18 @@ mod tests {
     #[test]
     fn appends_jsonl_changelog_rows() {
         let rendered = append_changelog_row("{\"a\":1}", "{\"b\":2}");
+        assert_eq!(rendered, "{\"a\":1}\n{\"b\":2}\n");
+    }
+
+    #[test]
+    fn changelog_whitespace_only_is_replaced_by_the_new_row() {
+        let rendered = append_changelog_row("  \n\t", "{\"b\":2}");
+        assert_eq!(rendered, "{\"b\":2}\n");
+    }
+
+    #[test]
+    fn changelog_existing_rows_trim_trailing_whitespace() {
+        let rendered = append_changelog_row("{\"a\":1}  \n\t", "{\"b\":2}");
         assert_eq!(rendered, "{\"a\":1}\n{\"b\":2}\n");
     }
 
