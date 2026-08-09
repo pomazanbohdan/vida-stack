@@ -2581,6 +2581,7 @@ pub(crate) mod test_support {
     pub(crate) struct ScenarioSpec {
         pub(crate) compiled_bundle: Value,
         pub(crate) dev_task_id: String,
+        pub(crate) flow_ref_override: Option<String>,
         pub(crate) lane_catalog_override: Option<Map<String, Value>>,
         pub(crate) lane_sequence_override: Option<Vec<String>>,
     }
@@ -2650,6 +2651,7 @@ pub(crate) mod test_support {
         ScenarioSpec {
             compiled_bundle,
             dev_task_id: dev_task_id.to_string(),
+            flow_ref_override: None,
             lane_catalog_override: Some(lane_catalog),
             lane_sequence_override: Some(lane_sequence),
         }

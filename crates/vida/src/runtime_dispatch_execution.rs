@@ -132,8 +132,8 @@ fn dispatch_target_capability(
     };
     if selected_node_id.is_some() {
         let requested = requested_target.trim();
-        if !requested.is_empty()
-            && ![
+        if !requested.is_empty() {
+            let selected_node_matches_requested = [
                 node.node_id.as_str(),
                 node.dispatch_target.as_str(),
                 node.dispatch_alias.as_str(),
@@ -142,11 +142,18 @@ fn dispatch_target_capability(
             ]
             .into_iter()
             .any(|candidate| candidate == requested)
-        {
+                || crate::runtime_dispatch_state::resolve_team_flow_target_for_selection(
+                    &authority,
+                    Some(&role_selection.execution_plan),
+                    requested,
+                )
+                .is_ok_and(|resolved| resolved.node_id == node.node_id);
+            if !selected_node_matches_requested {
             return Err(format!(
                 "team_flow_selected_node_dispatch_target_mismatch:{}:{}",
                 node.node_id, requested
             ));
+            }
         }
     }
     let lane = DispatchContractLane {
