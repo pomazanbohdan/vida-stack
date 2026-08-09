@@ -48,6 +48,7 @@ Status: `implemented`
 ### 1. Registry is the wave orchestrator and source of file-level continuity
 Will implement / choose:
 - Store one schema-v3 JSON document at `.vida/evidence/mutest-audit/file-registry.json` with `index_role=mutation_wave_orchestrator`, exactly one row per normalized path, and top-level wave summaries without file arrays.
+- Compact rows to latest-wave unique defect summaries with at most four evidence references; retain complete defect history in `defects.jsonl` and worker evidence.
 - Update the same row atomically on queue, worker start, worker completion, test update, and rescan; append only compact wave summary metadata.
 - Why: package reports alone cannot support hash-based partial resume, dynamic file waves, or file-level follow-up state.
 - Trade-offs: worker reports are diagnostic evidence, while the registry remains the only status authority.
@@ -108,7 +109,7 @@ Will implement / choose:
 - `Write-DefectProtocolPlan`: defect handoff to the canonical runtime diagnostics and ZOMBIE-D protocols.
 
 ### Data / State Model
-- Registry top-level: `schema_version=3`, `index_role`, `registry_revision`, `run_id`, `last_wave_id`, `snapshot_mode`, `snapshot_index_tree`, `config_hash`, `threshold_percent`, `full_rescan`, `diff_scan`, `waves`, `needs_*`, and unique `files`.
+- Registry top-level: `schema_version=3`, `index_role`, `index_compaction`, `registry_revision`, `run_id`, `last_wave_id`, `snapshot_mode`, `snapshot_index_tree`, `config_hash`, `threshold_percent`, `full_rescan`, `diff_scan`, `waves`, `needs_*`, and unique `files`.
 - File lifecycle: `queued -> running -> completed | needs_tests | needs_rescan | blocked | timeout` with wave metadata on the same row.
 - A compatible completed record is retained with `resume_source=compatible_registry`; changed/new records carry a queue reason.
 - Deleted snapshot files are retained as `deleted_from_snapshot` with all rerun flags cleared.
