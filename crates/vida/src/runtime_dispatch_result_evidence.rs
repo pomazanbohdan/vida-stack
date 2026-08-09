@@ -441,11 +441,11 @@ fn team_flow_authority_from_rehydrated_selection(
             vec![error],
         )
     })?;
-    if let Some(plan_authority_id) =
-        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
+        ["team_flow_authority_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         if plan_authority_id != projection.authority_id {
             return Err(rework_authority_blocker(
@@ -512,11 +512,11 @@ fn packet_team_flow_authority(
             vec![error],
         )
     })?;
-    if let Some(plan_authority_id) =
-        execution_plan["development_flow"]["dispatch_contract"]["team_flow_authority_id"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+    if let Some(plan_authority_id) = execution_plan["development_flow"]["dispatch_contract"]
+        ["team_flow_authority_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         if plan_authority_id != projection.authority_id {
             return Err(rework_authority_blocker(
@@ -854,7 +854,9 @@ mod tests {
             &root.join("missing.json").display().to_string()
         )
         .is_none());
-        assert!(read_bounded_dispatch_evidence_json(&malformed_path.display().to_string()).is_none());
+        assert!(
+            read_bounded_dispatch_evidence_json(&malformed_path.display().to_string()).is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1504,11 +1506,9 @@ mod tests {
             outcome_blocker.code,
             taskflow_authority::team_flow_transition::BLOCKER_RECEIPT_NOT_COMPLETED
         );
-        assert!(
-            outcome_blocker
-                .candidates
-                .iter()
-                .any(|code| code == "host_bridge_result_decision_verdict_mismatch")
-        );
+        assert!(outcome_blocker
+            .candidates
+            .iter()
+            .any(|code| code == "host_bridge_result_decision_verdict_mismatch"));
     }
 }

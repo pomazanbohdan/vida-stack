@@ -92,6 +92,8 @@ Canonical entrypoints:
     - runtime protocol for refreshing TaskFlow graph ownership, dependencies, ordering, duplicate handling, and parallel-safe versus sequential coherent pack classification from live evidence
 38. `docs/process/agent-extensions/requirement-analysis-method-skills.md`
     - project-owned requirement-analysis method skills and activation evidence
+39. `docs/process/rhai-policy-authoring-runbook.md`
+    - project-owned runbook for authoring, validating, promoting, rolling back, and resuming versioned Rhai policies
 
 -----
 artifact_path: process/index

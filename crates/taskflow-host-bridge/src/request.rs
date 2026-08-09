@@ -189,6 +189,7 @@ pub struct HostBridgeRequest {
     pub request_path: PathBuf,
     pub result_path: PathBuf,
     pub receipt_path: PathBuf,
+    pub required_proof_outputs: Vec<String>,
     pub required_result_fields: Vec<String>,
     pub owned_paths: Vec<PathBuf>,
     pub raw: Value,
@@ -226,6 +227,7 @@ impl HostBridgeRequest {
             request_path: required_path(&raw, "request_path")?,
             result_path: required_path(&raw, "result_path")?,
             receipt_path: required_path(&raw, "receipt_path")?,
+            required_proof_outputs: host_bridge_required_proof_outputs(&raw),
             required_result_fields: host_bridge_required_result_fields(&raw),
             owned_paths: path_array(&raw, "owned_paths"),
             raw,
@@ -243,7 +245,16 @@ pub fn default_host_bridge_required_result_fields() -> Vec<String> {
 
 #[must_use]
 pub fn host_bridge_required_result_fields(request: &Value) -> Vec<String> {
-    canonical_host_bridge_required_result_fields(string_array(request, "required_result_fields"))
+    let mut fields = string_array(request, "required_result_fields");
+    if !host_bridge_required_proof_outputs(request).is_empty() {
+        fields.extend(["proof_outputs".to_string(), "artifact_refs".to_string()]);
+    }
+    canonical_host_bridge_required_result_fields(fields)
+}
+
+#[must_use]
+pub fn host_bridge_required_proof_outputs(request: &Value) -> Vec<String> {
+    string_array(request, "required_proof_outputs")
 }
 
 #[must_use]
@@ -957,6 +968,7 @@ mod tests {
 
         assert_eq!(loaded.request_id, "req-1");
         assert_eq!(loaded.owned_paths.len(), 1);
+        assert!(loaded.required_proof_outputs.is_empty());
         assert_eq!(loaded.invocation_mode, "parent_host_tool_api");
         assert_eq!(
             loaded.required_result_fields,
@@ -977,6 +989,22 @@ mod tests {
             default_host_bridge_required_result_fields().as_slice()
         );
         assert!(fields.iter().any(|field| field == "custom_evidence"));
+    }
+
+    #[test]
+    fn request_with_proof_requirements_requires_structured_proof_arrays() {
+        let request = serde_json::json!({
+            "required_proof_outputs": ["changed_files", "verification_notes"],
+            "required_result_fields": ["decision"]
+        });
+
+        assert_eq!(
+            host_bridge_required_proof_outputs(&request),
+            ["changed_files", "verification_notes"]
+        );
+        let fields = host_bridge_required_result_fields(&request);
+        assert!(fields.iter().any(|field| field == "proof_outputs"));
+        assert!(fields.iter().any(|field| field == "artifact_refs"));
     }
 
     #[test]

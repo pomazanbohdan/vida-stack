@@ -29,7 +29,9 @@ Run this checklist in order:
    - `AGENTS.sidecar.md`
    - `vida/root-map.md`
 4. read `docs/process/project-orchestrator-startup-bundle.md` for routine project routing context,
-5. read active product control maps needed by the current work line:
+5. when a defect event or open contour exists, restore its authoritative family
+   ledger before counting, scheduling contours, or selecting a point fix,
+6. read active product control maps needed by the current work line:
    - `active runtime contract/profile specs` when Release 1 is active
    - current runtime contract profile when closure, handoff, or hardening is active
 
@@ -38,7 +40,9 @@ Run this checklist in order:
 Before shaping work, all of the following must be true:
 
 1. `vida status --json` resolves to this repository root,
-2. TaskFlow lifecycle truth is `.vida/state/taskflow-state.db`,
+2. TaskFlow lifecycle truth is the config/runtime-resolved authoritative state
+   root reported by the project runtime; do not hardcode an unresolvable,
+   installed, or legacy path in session instructions,
 3. installed shim roots are not the active TaskFlow runtime path,
 4. the runtime is not relying on `.beads/issues.jsonl` or other legacy task artifacts.
 
@@ -60,6 +64,8 @@ After the checklist, the orchestrator must be able to state explicitly:
 10. when the user asked for both reporting/diagnosis and continued development, which path is primary: `diagnosis_path` or `normal_delivery_path`.
 11. when continuation is requested, why this bounded unit rather than some other ready candidate is the lawful current binding.
 12. which binding source proves the current bounded unit: explicit user wording, active runtime state, or continuation receipt.
+13. whether open defect families/contours were restored, their family keys, and
+    their contour-pool scheduling posture.
 
 If any of those are missing, the session is not ready for write-producing work.
 
@@ -137,5 +143,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-session-start-protocol.md
 created_at: '2026-03-13T18:55:00+02:00'
-updated_at: 2026-06-13T01:35:00+03:00
+updated_at: 2026-07-27T00:00:00+03:00
 changelog_ref: project-orchestrator-session-start-protocol.changelog.jsonl

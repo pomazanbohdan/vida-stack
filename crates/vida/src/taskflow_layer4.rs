@@ -892,7 +892,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida taskflow dispatch status [--json]");
             println!("  vida taskflow dispatch adopt --dry-run [--run-id <id>] [--task-id <id>] [--json]");
-            println!("  vida taskflow dispatch adopt --apply --run-id <id> --task-id <id> [--json]");
+            println!(
+                "  vida taskflow dispatch adopt --apply --run-id <id> --task-id <id> [--json]"
+            );
             println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] --json");
             println!("  vida taskflow recovery status <run-id> --json");
             println!("  vida taskflow packet render <run-id> --json");

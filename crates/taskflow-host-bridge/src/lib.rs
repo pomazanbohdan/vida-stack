@@ -311,6 +311,7 @@ pub(crate) mod tests {
             request_path: PathBuf::from("host-tool-bridge/requests/request.json"),
             result_path: PathBuf::from("host-tool-bridge/results/result.json"),
             receipt_path: PathBuf::from("host-tool-bridge/receipts/receipt.json"),
+            required_proof_outputs: Vec::new(),
             required_result_fields: crate::request::default_host_bridge_required_result_fields(),
             owned_paths: vec![PathBuf::from("crates/taskflow-host-bridge")],
             raw: json!({}),

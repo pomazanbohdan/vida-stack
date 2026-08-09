@@ -534,14 +534,39 @@ pub fn host_bridge_result_verdict_contract_blockers(
     result: &Value,
     required_result_fields: &[String],
 ) -> Vec<String> {
+    host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+        result,
+        required_result_fields,
+        &[],
+    )
+}
+
+#[must_use]
+pub fn host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+    result: &Value,
+    required_result_fields: &[String],
+    required_proof_outputs: &[String],
+) -> Vec<String> {
     let required_fields = crate::request::canonical_host_bridge_required_result_fields(
         required_result_fields.to_vec(),
     );
     let mut blockers = Vec::new();
     for field in required_fields {
         if !result.get(field.as_str()).is_some_and(|value| {
-            if field == "blocker_codes" {
-                value.as_array().is_some()
+            if matches!(
+                field.as_str(),
+                "blocker_codes" | "proof_outputs" | "artifact_refs"
+            ) {
+                value.as_array().is_some_and(|values| {
+                    field == "blocker_codes"
+                        || !values.is_empty()
+                            && values.iter().all(|value| {
+                                value
+                                    .as_str()
+                                    .map(str::trim)
+                                    .is_some_and(|value| !value.is_empty())
+                            })
+                })
             } else if field == "rework_target" {
                 value.is_null()
                     || value
@@ -565,6 +590,28 @@ pub fn host_bridge_result_verdict_contract_blockers(
         }) {
             push_unique_blocker(&mut blockers, "host_bridge_result_missing_verdict_field");
         }
+    }
+
+    let proof_outputs = result
+        .get("proof_outputs")
+        .and_then(Value::as_array)
+        .map(|outputs| {
+            outputs
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|output| !output.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if required_proof_outputs.iter().any(|required| {
+        let required = required.trim();
+        required.is_empty() || !proof_outputs.contains(&required)
+    }) {
+        push_unique_blocker(
+            &mut blockers,
+            "host_bridge_result_missing_required_proof_output",
+        );
     }
 
     let decision = result
@@ -928,6 +975,55 @@ mod tests {
         assert_eq!(
             host_bridge_result_verdict_contract_blockers(&result, &downgraded_required_fields),
             vec!["host_bridge_result_missing_verdict_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn strict_result_contract_requires_every_proof_output_and_artifact_ref() {
+        let required_fields = vec!["proof_outputs".to_string(), "artifact_refs".to_string()];
+        let required_outputs = vec![
+            "changed_files".to_string(),
+            "verification_notes".to_string(),
+        ];
+        let mut result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": "coach",
+            "proof_outputs": ["changed_files"],
+            "artifact_refs": ["artifacts/focused-proof.txt"]
+        });
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+                &result,
+                &required_fields,
+                &required_outputs,
+            ),
+            vec!["host_bridge_result_missing_required_proof_output"]
+        );
+
+        result["proof_outputs"] = serde_json::json!(["changed_files", "verification_notes"]);
+        assert!(
+            host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+                &result,
+                &required_fields,
+                &required_outputs,
+            )
+            .is_empty()
+        );
+
+        result["artifact_refs"] = serde_json::json!([]);
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+                &result,
+                &required_fields,
+                &required_outputs,
+            ),
+            vec!["host_bridge_result_missing_verdict_field"]
         );
     }
 

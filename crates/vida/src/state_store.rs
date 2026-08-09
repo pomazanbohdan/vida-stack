@@ -19,6 +19,8 @@ mod state_store_open;
 #[path = "state_store_policy.rs"]
 pub(crate) mod policy;
 pub(crate) use state_store_open::state_root_lifecycle_guard_path;
+#[path = "state_store_policy.rs"]
+pub mod policy;
 #[path = "state_store_orchestrator_claim.rs"]
 mod state_store_orchestrator_claim;
 #[path = "state_store_patching.rs"]
@@ -92,8 +94,8 @@ pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, HostBridgePrecursorFingerprintStored,
     HostBridgeReceiptIdentityStored, ResumabilityCapsuleRow, RoutedRunStateRow,
     RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
-    RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
-    RunGraphPolicyPin, RunGraphReplayLineageReceipt,
+    RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphPolicyPin,
+    RunGraphProjectionCheckpointRecord, RunGraphReplayLineageReceipt,
 };
 
 pub(crate) fn policy_bundle_ref_from_execution_plan(

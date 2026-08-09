@@ -1,3 +1,4 @@
+use crate::runtime_assignment_policy::{effective_minimum_write_scope, MinimumWriteScope};
 use crate::semantic_routing_features::{
     extract_semantic_routing_features, score_semantic_route, SemanticRoutingFeatureInput,
     SemanticScoreInputs,
@@ -1942,6 +1943,27 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         })
         .collect::<Vec<_>>();
 
+    let hard_minimum_write_scope = effective_minimum_write_scope(compiled_bundle, task_class);
+    candidates.retain(|candidate| {
+        let write_scope = candidate.profile["write_scope"]
+            .as_str()
+            .or_else(|| candidate.role["write_scope"].as_str())
+            .unwrap_or_default();
+        let admitted = hard_minimum_write_scope.is_some_and(|minimum| {
+            MinimumWriteScope::from_write_scope(write_scope)
+                .is_some_and(|candidate_scope| candidate_scope >= minimum)
+        });
+        if !admitted {
+            rejected_candidates.push(serde_json::json!({
+                "carrier_id": candidate.role["role_id"],
+                "model_profile_id": candidate.profile["profile_id"],
+                "reasons": ["hard_capability_registry_denied"],
+                "reason": "hard_capability_registry_denied"
+            }));
+        }
+        admitted
+    });
+
     let has_exact_match = candidates.iter().any(|candidate| {
         candidate.supports_runtime_role
             && candidate.supports_task_class
@@ -2564,10 +2586,7 @@ pub(crate) fn attach_policy_bundle_ref(
     policy_bundle_ref: &serde_json::Value,
 ) {
     if let Some(assignment) = assignment.as_object_mut() {
-        assignment.insert(
-            "policy_bundle_ref".to_string(),
-            policy_bundle_ref.clone(),
-        );
+        assignment.insert("policy_bundle_ref".to_string(), policy_bundle_ref.clone());
     }
 }
 

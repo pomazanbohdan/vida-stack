@@ -94,11 +94,7 @@ pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
         &mut assignment,
         &expected_policy_bundle_ref,
     );
-    validate_policy_bundle_ref(
-        &role_selection.execution_plan,
-        compiled_bundle,
-        &assignment,
-    )?;
+    validate_policy_bundle_ref(&role_selection.execution_plan, compiled_bundle, &assignment)?;
     let execution_plan = role_selection
         .execution_plan
         .as_object_mut()
