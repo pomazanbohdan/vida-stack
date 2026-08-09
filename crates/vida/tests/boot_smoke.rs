@@ -337,7 +337,11 @@ fn unique_project_state_dir() -> String {
     }
     let config = fs::read_to_string(PathBuf::from(repo_root()).join("vida.config.yaml"))
         .expect("run-graph project config should load")
-        .replacen("    enabled: false", "    enabled: true", 1);
+        .replacen(
+            "    enabled: false  # `true` заборонено через дефекти в роботі runtime-диспетчера задач.",
+            "    enabled: true",
+            1,
+        );
     assert!(
         config.contains("taskflow:\n  dispatch:\n    enabled: true"),
         "run-graph fixture must enable taskflow dispatch"
@@ -3377,6 +3381,9 @@ fn seed_current_session_run_graph_claim(
     session_id: &str,
     run_id: &str,
 ) {
+    // Management-only task lifecycle updates remain lawful while dispatch is enabled.
+    // Restore dispatch before asserting continuation-gate behavior.
+    disable_dispatch_for_project_runtime(project_root);
     let mark_active = bounded_vida_output(
         &["-k", "5s", "20s"],
         "scheduler continuation fixture should mark current task active",
@@ -3441,9 +3448,11 @@ fn seed_current_session_run_graph_claim(
         String::from_utf8_lossy(&reopen.stdout),
         String::from_utf8_lossy(&reopen.stderr)
     );
+    enable_dispatch_for_project_runtime(project_root);
 }
 
 fn seed_scheduler_continuation_gate_fixture(project_root: &str, state_dir: &str, session_id: &str) {
+    enable_dispatch_for_project_runtime(project_root);
     seed_scheduler_execute_smoke_tasks(state_dir);
     create_scheduler_smoke_task(
         state_dir,
@@ -4020,6 +4029,7 @@ fn agent_dispatch_next_dev_team_continuation_gate_preserves_diagnostic_packet_pr
         "agent-dispatch-next-continuation-gate-diagnostics",
         "Agent Dispatch Next Continuation Gate Diagnostics",
     );
+    enable_dispatch_for_project_runtime(&project_root);
     seed_scheduler_execute_smoke_tasks(&state_dir);
     create_scheduler_smoke_task(
         &state_dir,
@@ -5613,6 +5623,7 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
         "agent-init-view-only-activation",
         "Agent Init View Only Activation",
     );
+    enable_dispatch_for_project_runtime(&project_root);
 
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -7903,6 +7914,7 @@ fn agent_init_execute_dispatch_downstream_packet_does_not_actualize_forged_role_
         "downstream-forged-role-selection",
         "Downstream Forged Role Selection",
     );
+    enable_dispatch_for_project_runtime(&project_root);
 
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -7996,11 +8008,12 @@ fn agent_init_execute_dispatch_downstream_packet_does_not_actualize_forged_role_
 fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("dispatch-packet-validation", "Dispatch Packet Validation");
+    enable_dispatch_for_project_runtime(&project_root);
 
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
         &state_dir,
-        "fix dispatch packet validation",
+        "clarify the scope and write the specification before implementation",
     );
     assert!(
         !initial.stdout.is_empty(),
@@ -9104,6 +9117,7 @@ struct SpecDesignParityFixture {
 
 fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesignParityFixture {
     let (project_root, state_dir) = bootstrap_project_runtime(project_id, project_name);
+    enable_dispatch_for_project_runtime(&project_root);
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
         &state_dir,
@@ -19125,6 +19139,7 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         "agent-dispatch-next-initial-implementation-zombie-d",
         "Agent Dispatch Next Initial Implementation ZOMBIE-D",
     );
+    enable_dispatch_for_project_runtime(&project_root);
     let task_id = "agent-dispatch-next-initial-implementation-zombie-d-task";
     create_zombie_d_dispatch_matrix_task(
         &state_dir,
@@ -19327,6 +19342,11 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         attached_success,
         "matrix proof attach should pass: {attached}"
     );
+
+    // Management closure is only lawful after the dispatch runtime releases
+    // execution-bound ownership; keep the close guard intact.
+    disable_dispatch_for_project_runtime(&project_root);
+
     let (closed, closed_success) = zombie_d_json_command(
         &project_root,
         &state_dir,
@@ -20991,6 +21011,8 @@ fn agent_assignment_admissibility_zombie_d_public_matrix() {
                     "task",
                     "update",
                     task_id,
+                    "--add-label",
+                    "implementation",
                     "--execution-mode",
                     "parallel_safe",
                     "--order-bucket",
