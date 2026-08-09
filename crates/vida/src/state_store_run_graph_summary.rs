@@ -2963,9 +2963,9 @@ impl StateStore {
                 reason: "host_bridge_precursor_fingerprint_serialize_failed:receipt_not_object"
                     .to_string(),
             })?;
-        // `policy_bundle_ref` is state-store authority metadata, not part of the
-        // host-bridge v1 precursor contract. Keep the bridge fingerprint stable
-        // while retaining the policy pin in the persisted run-graph receipt.
+        // Project through the shared host-bridge contract so every
+        // security-relevant receipt field, including `policy_bundle_ref`, is
+        // bound identically during fingerprint creation and validation.
         let value = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
             .iter()
             .filter_map(|field| {
@@ -7224,6 +7224,79 @@ mod tests {
             precursor_fingerprint: Some(precursor_fingerprint),
             recorded_at: "2026-07-18T00:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn host_bridge_precursor_fingerprint_rejects_cross_policy_receipt() {
+        let root = temp_run_graph_root("vida-host-bridge-cross-policy");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-cross-policy";
+        let packet_path = "/tmp/host-bridge-cross-policy.json";
+        let mut receipt = sample_dispatch_receipt(run_id);
+        receipt.dispatch_packet_path = Some(packet_path.to_string());
+        receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
+            policy_id: "rhai.runtime.authority".to_string(),
+            version: 1,
+            content_digest:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        });
+        let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
+        let baseline = identity
+            .precursor_fingerprint
+            .as_ref()
+            .expect("identity should bind its precursor receipt");
+
+        let mut cross_policy = receipt;
+        cross_policy.policy_bundle_ref = Some(RunGraphPolicyPin {
+            policy_id: "rhai.runtime.authority".to_string(),
+            version: 2,
+            content_digest:
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        });
+        let cross_policy_fingerprint =
+            StateStore::host_bridge_precursor_fingerprint(&identity.request_id, &cross_policy)
+                .expect("cross-policy fingerprint should build");
+
+        assert_ne!(baseline.fingerprint(), cross_policy_fingerprint.fingerprint());
+        assert_ne!(
+            baseline.exact_binding_key(),
+            cross_policy_fingerprint.exact_binding_key()
+        );
+        assert_ne!(
+            baseline.compact_binding_key(),
+            cross_policy_fingerprint.compact_binding_key()
+        );
+        assert_eq!(
+            baseline
+                .validate_candidate_receipt(&cross_policy_fingerprint.receipt)
+                .expect_err("cross-policy receipt must fail closed"),
+            "host_bridge_precursor_fingerprint_conflict"
+        );
+
+        let error = store
+            .record_host_bridge_receipt_binding(&identity, &cross_policy)
+            .await
+            .expect_err("cross-policy binding must fail before persistence");
+        assert!(
+            error
+                .to_string()
+                .contains("host_bridge_precursor_fingerprint_conflict"),
+            "error={error:?}"
+        );
+        assert!(
+            store
+                .host_bridge_receipt_identity(
+                    &identity.run_id,
+                    &identity.dispatch_target,
+                    &identity.packet_path,
+                    &identity.request_id,
+                )
+                .await
+                .expect("identity lookup should succeed")
+                .is_none()
+        );
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]

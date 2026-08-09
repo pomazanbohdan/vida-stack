@@ -41,6 +41,7 @@ pub const HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS: &[&str] = &[
     "activation_agent_type",
     "activation_runtime_role",
     "selected_backend",
+    "policy_bundle_ref",
     "recorded_at",
 ];
 
@@ -789,6 +790,11 @@ mod tests {
             "activation_agent_type": "worker",
             "activation_runtime_role": "implementer",
             "selected_backend": "internal_subagents",
+            "policy_bundle_ref": {
+                "policy_id": "rhai.runtime.authority",
+                "version": 1,
+                "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
             "recorded_at": "2026-07-28T00:00:00Z"
         })
     }
@@ -851,6 +857,14 @@ mod tests {
             ("activation_agent_type", serde_json::json!("reviewer")),
             ("activation_runtime_role", serde_json::json!("verification")),
             ("selected_backend", serde_json::json!("external")),
+            (
+                "policy_bundle_ref",
+                serde_json::json!({
+                    "policy_id": "rhai.runtime.authority",
+                    "version": 2,
+                    "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }),
+            ),
             ("recorded_at", serde_json::json!("2026-07-28T00:00:01Z")),
         ];
 
