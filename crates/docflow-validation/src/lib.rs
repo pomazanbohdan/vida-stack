@@ -85,5 +85,23 @@ mod tests {
         }]);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].code, "missing_artifact_type");
+        assert_eq!(
+            issues[0].message,
+            "registry row is missing artifact_type"
+        );
+    }
+
+    #[test]
+    fn registry_validation_trims_artifact_type_before_checking() {
+        let issues = validate_registry_rows(&[RegistryRow {
+            artifact_path: ArtifactPath("docs/process/test.md".into()),
+            artifact_type: " \t ".into(),
+        }]);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, "missing_artifact_type");
+        assert_eq!(
+            issues[0].message,
+            "registry row is missing artifact_type"
+        );
     }
 }

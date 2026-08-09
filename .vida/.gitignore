@@ -1,3 +1,8 @@
 # vida-v0 runtime workspace
 *
 !.gitignore
+!evidence/
+evidence/*
+!evidence/mutest-audit/
+evidence/mutest-audit/*
+!evidence/mutest-audit/file-registry.json

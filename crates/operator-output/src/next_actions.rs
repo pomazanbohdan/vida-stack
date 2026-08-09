@@ -808,4 +808,276 @@ mod tests {
             &serde_json::to_string(&decorated).expect("decorated projection should serialize")
         ));
     }
+
+    #[test]
+    fn reduce_next_action_normalizes_blockers_and_builds_default_after_success() {
+        let reduced = reduce_next_action(NextActionReducerInput {
+            status: "blocked".to_string(),
+            current_unit: None,
+            lane: None,
+            next_action: None,
+            projection_cache: None,
+            packet_refs: NextActionReferences {
+                packet_path: Some(" packet.json ".to_string()),
+                ..NextActionReferences::default()
+            },
+            context_refs: NextActionReferences::default(),
+            blocker_codes: vec![
+                " Migration_Required ".to_string(),
+                " ".to_string(),
+                "Second_Blocker".to_string(),
+            ],
+            next_actions: vec![
+                " Resolve migration ".to_string(),
+                " ".to_string(),
+                "Inspect second blocker".to_string(),
+            ],
+            after_success: None,
+        });
+
+        assert_eq!(
+            reduced.blocker_codes,
+            vec!["migration_required", "second_blocker"]
+        );
+        assert_eq!(
+            reduced.next_actions,
+            vec!["Resolve migration", "Inspect second blocker"]
+        );
+        assert_eq!(
+            reduced.blockers,
+            vec![
+                NextActionBlocker {
+                    code: "migration_required".to_string(),
+                    next_action: Some("Resolve migration".to_string()),
+                },
+                NextActionBlocker {
+                    code: "second_blocker".to_string(),
+                    next_action: Some("Inspect second blocker".to_string()),
+                },
+            ]
+        );
+        assert_eq!(reduced.after_success.next_command, "vida task next");
+        assert!(reduced.after_success.requires_receipt);
+        assert!(reduced
+            .after_success
+            .invariant
+            .contains("receipt-backed result"));
+    }
+
+    #[test]
+    fn reduce_projection_preserves_authoritative_refs_and_action_contract() {
+        let reduced = reduce_projection(&serde_json::json!({
+            "status": "ready",
+            "current_unit": {
+                "id": "unit-id",
+                "title": "Unit title",
+                "status": "in_progress"
+            },
+            "lane": {
+                "id": "lane-id",
+                "role": "coder",
+                "task_class": "implementation",
+                "status": "active"
+            },
+            "dispatch": {
+                "run_id": "dispatch-run",
+                "dispatch_packet_path": "dispatch-packet",
+                "dispatch_result_path": "dispatch-result",
+                "receipt_path": "receipt-path"
+            },
+            "run_id": "root-run",
+            "packet_materialization": {
+                "artifacts": [{
+                    "dispatch_packet_path": "packet-path",
+                    "dispatch_result_path": "packet-result"
+                }]
+            },
+            "scope_task_id": "scope-task",
+            "flow_projection": {
+                "flow_id": "flow-id",
+                "current_step": {"approval_required": false}
+            },
+            "candidate_task_context": {"admissibility_gate": "admissible"},
+            "projection_source": "projection-source",
+            "truth_source": "truth-source",
+            "source_surfaces": ["source-surface"],
+            "blocker_codes": [" Blocked_Code "],
+            "next_actions": [" Resolve blocker "],
+            "next_action": {
+                "command": "vida task bind",
+                "kind": "bind",
+                "surface": "vida task bind",
+                "reason": "bind the selected unit",
+                "expected_output": ["status", "task_id"],
+                "approval_required": true
+            },
+            "projection_cache": {"status": "hit", "mode": "auto"},
+            "artifact_refs": {"source": "authoritative"}
+        }));
+
+        assert_eq!(
+            reduced.current_unit,
+            Some(NextActionUnit {
+                id: "unit-id".to_string(),
+                title: Some("Unit title".to_string()),
+                status: Some("in_progress".to_string()),
+            })
+        );
+        assert_eq!(
+            reduced.lane,
+            Some(NextActionLane {
+                id: Some("lane-id".to_string()),
+                role: Some("coder".to_string()),
+                task_class: Some("implementation".to_string()),
+                status: Some("active".to_string()),
+            })
+        );
+        assert_eq!(reduced.packet_refs.run_id.as_deref(), Some("dispatch-run"));
+        assert_eq!(reduced.packet_refs.task_id.as_deref(), Some("unit-id"));
+        assert_eq!(reduced.packet_refs.packet_path.as_deref(), Some("packet-path"));
+        assert_eq!(reduced.packet_refs.result_path.as_deref(), Some("packet-result"));
+        assert_eq!(reduced.packet_refs.receipt_path.as_deref(), Some("receipt-path"));
+        assert_eq!(reduced.packet_refs.source_refs, vec!["source-surface"]);
+        assert_eq!(
+            reduced.context_refs.source_refs,
+            vec!["scope-task", "admissible", "projection-source"]
+        );
+        assert_eq!(reduced.blocker_codes, vec!["blocked_code"]);
+        assert_eq!(reduced.next_actions, vec!["Resolve blocker"]);
+        let action = reduced.next_action.expect("action should be present");
+        assert_eq!(action.kind, NextActionKind::Bind);
+        assert_eq!(action.command, "vida task bind");
+        assert_eq!(action.expected_output, vec!["status", "task_id"]);
+        assert!(action.approval_required);
+        assert_eq!(action.artifact_refs, serde_json::json!({"source": "authoritative"}));
+        assert_eq!(action.reason, "bind the selected unit");
+        assert!(reduced.after_success.requires_receipt);
+    }
+
+    #[test]
+    fn reduce_projection_uses_fallback_sources_and_infers_action_kinds() {
+        let current_cases = [
+            (
+                serde_json::json!({"primary_ready_task": {"task_id": "primary"}}),
+                "primary",
+            ),
+            (
+                serde_json::json!({
+                    "candidate_task_context": {"ready_head": [{"id": "candidate"}]}
+                }),
+                "candidate",
+            ),
+            (
+                serde_json::json!({"selected_lanes": [{"id": "selected"}]}),
+                "selected",
+            ),
+        ];
+        for (projection, expected_id) in current_cases {
+            assert_eq!(
+                reduce_projection(&projection)
+                    .current_unit
+                    .expect("fallback current unit should be selected")
+                    .id,
+                expected_id
+            );
+        }
+
+        let selected_lane = reduce_projection(&serde_json::json!({
+            "selected_lanes": [{
+                "lane_id": "selected-lane",
+                "runtime_role": "worker",
+                "task_class": "verification",
+                "lane_status": "ready"
+            }]
+        }))
+        .lane
+        .expect("selected lane should be selected");
+        assert_eq!(selected_lane.id.as_deref(), Some("selected-lane"));
+        assert_eq!(selected_lane.role.as_deref(), Some("worker"));
+        assert_eq!(selected_lane.task_class.as_deref(), Some("verification"));
+        assert_eq!(selected_lane.status.as_deref(), Some("ready"));
+
+        let dispatch_lane = reduce_projection(&serde_json::json!({
+            "dispatch": {"dispatch_target": "dispatch-lane", "dispatch_status": "queued"}
+        }))
+        .lane
+        .expect("dispatch lane should be selected");
+        assert_eq!(dispatch_lane.id.as_deref(), Some("dispatch-lane"));
+        assert_eq!(dispatch_lane.role.as_deref(), Some("dispatch-lane"));
+        assert_eq!(dispatch_lane.status.as_deref(), Some("queued"));
+
+        let action_cases = [
+            ("vida task bind", NextActionKind::Bind),
+            ("vida taskflow continue", NextActionKind::Continue),
+            ("vida task recover", NextActionKind::Recover),
+            ("vida task refresh", NextActionKind::Recompute),
+            ("vida agent dispatch", NextActionKind::Execute),
+            ("vida task inspect", NextActionKind::Inspect),
+        ];
+        for (command, expected_kind) in action_cases {
+            let reduced = reduce_projection(&serde_json::json!({
+                "next_action": {"command": command}
+            }));
+            assert_eq!(
+                reduced.next_action.expect("command should produce action").kind,
+                expected_kind
+            );
+        }
+    }
+
+    #[test]
+    fn decorate_projection_overwrites_stale_reduced_fields() {
+        let decorated = decorate_projection(serde_json::json!({
+            "status": "blocked",
+            "current_unit": "stale",
+            "lane": "stale",
+            "next_action": {"command": "vida task continue", "surface": "continue"},
+            "projection_cache": "stale",
+            "packet_refs": "stale",
+            "context_refs": "stale",
+            "blockers": "stale",
+            "after_success": "stale",
+            "projection_cache_source": {"status": "hit"}
+        }));
+
+        assert_eq!(
+            decorated["next_action_reducer_version"],
+            NEXT_ACTION_REDUCER_SCHEMA_VERSION
+        );
+        for key in [
+            "current_unit",
+            "lane",
+            "next_action",
+            "projection_cache",
+            "packet_refs",
+            "context_refs",
+            "blockers",
+            "after_success",
+        ] {
+            assert_eq!(
+                decorated[key], decorated["next_action_reducer"][key],
+                "decorated field {key} should mirror reducer output"
+            );
+        }
+    }
+
+    #[test]
+    fn first_object_handles_arrays_objects_and_empty_values() {
+        assert_eq!(
+            first_object(&serde_json::json!({"rows": [{"id": "first"}]}), &["rows"]),
+            Some(serde_json::json!({"id": "first"}))
+        );
+        assert_eq!(
+            first_object(&serde_json::json!({"row": {"id": "object"}}), &["row"]),
+            Some(serde_json::json!({"id": "object"}))
+        );
+        assert_eq!(
+            first_object(&serde_json::json!({"rows": []}), &["rows"]),
+            None
+        );
+        assert_eq!(
+            first_object(&serde_json::json!({"rows": "not-an-object"}), &["rows"]),
+            None
+        );
+    }
 }

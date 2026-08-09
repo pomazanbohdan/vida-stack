@@ -293,4 +293,140 @@ mod tests {
         assert!(verdict.blocker_codes.is_empty());
         assert_eq!(verdict.verdict, "ok");
     }
+
+    #[test]
+    fn closeout_verdict_rejects_changed_mode_without_changed_docs() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "changed",
+            task_id: None,
+            root: None,
+            profile: "active-canon",
+            changed_docs: Vec::new(),
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        assert!(!verdict.task_close_allowed);
+        assert_eq!(verdict.verdict, "blocking");
+        assert_eq!(verdict.blocker_codes, ["no_changed_docflow_docs"]);
+        assert_eq!(
+            verdict.next_actions,
+            vec![
+                "Change or finalize at least one markdown DocFlow artifact before closeout."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn closeout_verdict_preserves_task_metadata_and_actions() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout --task",
+            mode: "task",
+            task_id: Some("TASK-1"),
+            root: Some("C:/repo"),
+            profile: "active-canon",
+            changed_docs: Vec::new(),
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        assert_eq!(verdict.command, "docflow closeout --task");
+        assert_eq!(verdict.mode, "task");
+        assert_eq!(verdict.task_id.as_deref(), Some("TASK-1"));
+        assert_eq!(verdict.root, "C:/repo");
+        assert_eq!(verdict.profile, "active-canon");
+        assert_eq!(verdict.changed_doc_count, 0);
+        assert!(verdict.changed_docs.is_empty());
+        assert!(!verdict.task_close_allowed);
+        assert_eq!(verdict.verdict, "blocking");
+        assert_eq!(verdict.blocker_codes, ["missing_docflow_task_evidence"]);
+        assert_eq!(
+            verdict.next_actions,
+            vec![
+                "Record DocFlow changelog evidence with the active task id before closing the task."
+                    .to_string(),
+                "Inspect task-bound DocFlow history with `docflow task-summary --task-id TASK-1`."
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn closeout_verdict_preserves_clean_changed_doc_metadata_and_action() {
+        let changed_docs = vec![
+            "docs/process/example.md".to_string(),
+            "docs/product/example.md".to_string(),
+        ];
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout --json",
+            mode: "changed",
+            task_id: Some("TASK-2"),
+            root: Some("/repo"),
+            profile: "active-canon",
+            changed_docs: changed_docs.clone(),
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        assert_eq!(verdict.command, "docflow closeout --json");
+        assert_eq!(verdict.mode, "changed");
+        assert_eq!(verdict.task_id.as_deref(), Some("TASK-2"));
+        assert_eq!(verdict.root, "/repo");
+        assert_eq!(verdict.profile, "active-canon");
+        assert_eq!(verdict.changed_doc_count, changed_docs.len());
+        assert_eq!(verdict.changed_docs, changed_docs);
+        assert!(verdict.task_close_allowed);
+        assert_eq!(verdict.verdict, "ok");
+        assert!(verdict.blocker_codes.is_empty());
+        assert_eq!(
+            verdict.next_actions,
+            vec!["Continue task closeout with the current DocFlow evidence.".to_string()]
+        );
+    }
+
+    #[test]
+    fn closeout_verdict_reports_each_blocking_source() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "changed",
+            task_id: None,
+            root: Some("/repo"),
+            profile: "active-canon",
+            changed_docs: vec!["docs/process/example.md".to_string()],
+            fastcheck_rows: 1,
+            protocol_coverage_rows: 1,
+            readiness_rows: 0,
+            doctor_error_rows: 1,
+            doctor_warning_rows: 2,
+        });
+
+        assert!(!verdict.task_close_allowed);
+        assert_eq!(verdict.verdict, "blocking");
+        assert_eq!(
+            verdict.blocker_codes,
+            [
+                "docflow_check_blocking",
+                "docflow_protocol_coverage_blocking",
+                "docflow_doctor_error",
+            ]
+        );
+        assert_eq!(
+            verdict.next_actions,
+            vec![
+                "Run `docflow check` and clear blocking DocFlow validation or doctor rows before closing the task."
+                    .to_string()
+            ]
+        );
+    }
 }

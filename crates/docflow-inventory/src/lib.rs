@@ -142,6 +142,7 @@ mod tests {
     fn gitignore_does_not_override_inventory_scope_policy() {
         let root = temp_root();
         fs::create_dir_all(root.join("docs/process")).expect("process dir");
+        fs::create_dir_all(root.join(".git")).expect("git marker dir");
         fs::write(root.join(".gitignore"), "docs/process/ignored.md\n").expect("write gitignore");
         fs::write(root.join("docs/process/ignored.md"), "# still scanned\n")
             .expect("write ignored doc");
@@ -151,6 +152,67 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artifact_path.0, "docs/process/ignored.md");
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn ignore_policy_includes_hidden_and_parent_ignored_markdown() {
+        let parent = temp_root();
+        let root = parent.join("nested");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir");
+        fs::write(parent.join(".ignore"), "docs/process/parent-ignored.md\n")
+            .expect("write parent ignore");
+        fs::write(root.join(".ignore"), "docs/process/ignore-file.md\n")
+            .expect("write ignore file");
+        fs::write(root.join(".gitignore"), "docs/process/gitignore-file.md\n")
+            .expect("write gitignore file");
+        for name in [
+            ".hidden.md",
+            "parent-ignored.md",
+            "ignore-file.md",
+            "gitignore-file.md",
+        ] {
+            fs::write(root.join("docs/process").join(name), "# included\n")
+                .expect("write markdown fixture");
+        }
+
+        let rows = build_registry(&InventoryScope::new(&root)).expect("registry should build");
+        let paths: Vec<_> = rows
+            .iter()
+            .map(|row| row.artifact_path.0.as_str())
+            .collect();
+        assert!(paths.contains(&"docs/process/.hidden.md"));
+        assert!(paths.contains(&"docs/process/parent-ignored.md"));
+        assert!(paths.contains(&"docs/process/ignore-file.md"));
+        assert!(paths.contains(&"docs/process/gitignore-file.md"));
+
+        fs::remove_dir_all(parent).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn artifact_type_policy_covers_instruction_and_default_documents() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("vida/config/instructions")).expect("instruction dir");
+        fs::create_dir_all(root.join("notes")).expect("notes dir");
+        fs::write(
+            root.join("vida/config/instructions/contract.md"),
+            "# contract\n",
+        )
+        .expect("write instruction");
+        fs::write(root.join("notes/readme.md"), "# readme\n").expect("write document");
+
+        let rows = build_registry(&InventoryScope::new(&root)).expect("registry should build");
+        let instruction = rows
+            .iter()
+            .find(|row| row.artifact_path.0 == "vida/config/instructions/contract.md")
+            .expect("instruction row");
+        let document = rows
+            .iter()
+            .find(|row| row.artifact_path.0 == "notes/readme.md")
+            .expect("document row");
+        assert_eq!(instruction.artifact_type, "instruction_contract");
+        assert_eq!(document.artifact_type, "document");
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

@@ -196,6 +196,54 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_runtime_family() {
+        let error = load_from_json_str(
+            r#"{
+                "runtime_family": "   ",
+                "operator": {
+                    "output_format": "toon",
+                    "profile": "active-canon"
+                }
+            }"#,
+        )
+        .expect_err("config should fail");
+
+        assert_eq!(error, DocflowConfigError::EmptyRuntimeFamily);
+    }
+
+    #[test]
+    fn rejects_empty_profile() {
+        let error = load_from_json_str(
+            r#"{
+                "runtime_family": "docflow",
+                "operator": {
+                    "output_format": "toon",
+                    "profile": "\t"
+                }
+            }"#,
+        )
+        .expect_err("config should fail");
+
+        assert_eq!(error, DocflowConfigError::EmptyProfile);
+    }
+
+    #[test]
+    fn missing_policy_path_error_preserves_displayed_path() {
+        let path = std::path::Path::new(
+            "target/docflow-config-mutation-missing-policy-does-not-exist.yaml",
+        );
+        assert!(!path.exists(), "test path must remain absent");
+
+        let error = load_policy_profile(path, "active-canon")
+            .expect_err("missing policy path should fail");
+
+        assert_eq!(
+            error,
+            DocflowConfigError::MissingPolicyPath(path.display().to_string())
+        );
+    }
+
+    #[test]
     fn loads_profile_roots_and_scan_ignored_from_policy_subset() {
         let temp = std::env::temp_dir().join("docflow-config-policy-test.yaml");
         fs::write(
