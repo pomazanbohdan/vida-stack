@@ -6274,7 +6274,7 @@ fn dispatch_result_matches_receipt_target(
     result: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    [
+    let mut targets = [
         result.get("dispatch_target"),
         result.get("completed_target"),
         result
@@ -6283,8 +6283,8 @@ fn dispatch_result_matches_receipt_target(
     ]
     .into_iter()
     .filter_map(crate::json_string)
-    .map(|target| target.trim().to_string())
-    .any(|target| target == receipt.dispatch_target)
+    .peekable();
+    targets.peek().is_some() && targets.all(|target| target.trim() == receipt.dispatch_target)
 }
 
 fn normalized_runtime_path_matches(left: &str, right: &str) -> bool {
@@ -7549,57 +7549,228 @@ pub(crate) fn runtime_dispatch_packet_kind_for_role_selection(
         .unwrap_or_else(|| format!("team_flow_packet_template_kind_missing:{dispatch_target}")))
 }
 
-fn typed_team_flow_receipt(
+fn strict_team_flow_outcome(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pass" | "completed" | "approve" | "approved" => Some("pass"),
+        "rework" | "rework_required" | "blocked" | "blocker" => Some("rework"),
+        _ => None,
+    }
+}
+
+fn strict_team_flow_receipt_from_result(
+    result: &Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    node_id: &str,
+    config_hash: &str,
+    snapshot_ref: &str,
+) -> Option<TeamFlowReceipt> {
+    let mut outcome = None;
+    for field in [
+        "status",
+        "decision",
+        "verdict",
+        "completion_verdict",
+        "outcome",
+    ] {
+        if let Some(value) = result[field].as_str() {
+            let value = strict_team_flow_outcome(value)?;
+            if outcome.is_some_and(|current| current != value) {
+                return None;
+            }
+            outcome = Some(value);
+        }
+    }
+    let outcome = outcome?;
+    let expected_state = match outcome {
+        "pass" => "executed",
+        _ => "blocked",
+    };
+    if result["execution_state"].as_str() != Some(expected_state)
+        || receipt.dispatch_status != expected_state
+        || !matches!(
+            (result["artifact_kind"].as_str(), outcome),
+            (Some("host_tool_bridge_result"), _)
+                | (Some("runtime_lane_completion_result"), "pass")
+                | (Some("runtime_dispatch_result"), "rework")
+        )
+        || result["run_id"].as_str() != Some(receipt.run_id.as_str())
+        || result["activation_semantics"]["activation_kind"].as_str() != Some("execution_evidence")
+        || result["activation_semantics"]["view_only"].as_bool() != Some(false)
+        || result["activation_semantics"]["executes_packet"].as_bool() != Some(true)
+        || result["activation_semantics"]["records_completion_receipt"].as_bool()
+            != Some(outcome == "pass")
+        || result["execution_evidence"]["receipt_backed"].as_bool() != Some(true)
+        || !dispatch_result_matches_receipt_target(result, receipt)
+        || !dispatch_result_matches_receipt_source_packet(result, receipt)
+    {
+        return None;
+    }
+    let typed =
+        serde_json::from_value::<TeamFlowReceipt>(result["team_flow_receipt"].clone()).ok()?;
+    let outer_id = result["completion_receipt_id"].as_str()?;
+    if outer_id.trim().is_empty()
+        || result["execution_evidence"]["receipt_id"].as_str() != Some(outer_id)
+        || typed.receipt_id != outer_id
+        || typed.node_id != node_id
+        || strict_team_flow_outcome(&typed.status)? != outcome
+        || typed.config_hash != config_hash
+        || typed.snapshot_ref != snapshot_ref
+    {
+        return None;
+    }
+    Some(typed)
+}
+
+fn strict_state_root_json(state_root: &Path, path: &str) -> Option<Value> {
+    let root = std::fs::canonicalize(state_root).ok()?;
+    let candidate = std::fs::canonicalize(state_root.join(path)).ok()?;
+    if !candidate.starts_with(root) {
+        return None;
+    }
+    serde_json::from_str(&std::fs::read_to_string(candidate).ok()?).ok()
+}
+
+fn strict_team_flow_receipt_from_path(
+    state_root: &Path,
+    path: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    node_id: &str,
+    config_hash: &str,
+    snapshot_ref: &str,
+) -> Option<TeamFlowReceipt> {
+    strict_team_flow_receipt_from_result(
+        &strict_state_root_json(state_root, path)?,
+        receipt,
+        node_id,
+        config_hash,
+        snapshot_ref,
+    )
+}
+
+fn strict_team_flow_trace_receipt(
     state_root: &Path,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     node_id: &str,
     config_hash: &str,
     snapshot_ref: &str,
 ) -> Option<TeamFlowReceipt> {
-    let result = [
+    let trace_path = receipt.downstream_dispatch_trace_path.as_deref()?;
+    let trace = strict_state_root_json(state_root, trace_path)?;
+    if trace["artifact_kind"].as_str() != Some("runtime_downstream_dispatch_trace")
+        || trace["run_id"].as_str() != Some(receipt.run_id.as_str())
+    {
+        return None;
+    }
+    let steps = trace["steps"].as_array()?;
+    let superseded = steps
+        .iter()
+        .filter_map(|step| step["supersedes_receipt_id"].as_str().map(str::to_string))
+        .collect::<BTreeSet<_>>();
+    let mut latest = None;
+    for step in steps {
+        let Ok(step) =
+            serde_json::from_value::<crate::state_store::RunGraphDispatchReceipt>(step.clone())
+        else {
+            continue;
+        };
+        if step.run_id != receipt.run_id {
+            continue;
+        }
+        let Some(candidate) = step.dispatch_result_path.as_deref().and_then(|path| {
+            strict_team_flow_receipt_from_path(
+                state_root,
+                path,
+                &step,
+                &step.dispatch_target,
+                config_hash,
+                snapshot_ref,
+            )
+        }) else {
+            continue;
+        };
+        if candidate.node_id == node_id && !superseded.contains(&candidate.receipt_id) {
+            latest = Some(candidate);
+        }
+    }
+    latest
+}
+
+fn typed_team_flow_receipt(
+    state_root: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    node_id: &str,
+    config_hash: &str,
+    snapshot_ref: &str,
+    strict_receipt_required: bool,
+) -> Option<TeamFlowReceipt> {
+    if strict_receipt_required {
+        if receipt.downstream_dispatch_trace_path.is_some() {
+            return strict_team_flow_trace_receipt(
+                state_root,
+                receipt,
+                node_id,
+                config_hash,
+                snapshot_ref,
+            );
+        }
+        return [
+            receipt.downstream_dispatch_result_path.as_deref(),
+            receipt.dispatch_result_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            strict_team_flow_receipt_from_path(
+                state_root,
+                path,
+                receipt,
+                node_id,
+                config_hash,
+                snapshot_ref,
+            )
+        });
+    }
+    [
         receipt.downstream_dispatch_result_path.as_deref(),
         receipt.dispatch_result_path.as_deref(),
     ]
     .into_iter()
-    .filter_map(|path| result_json_from_receipt_path(state_root, path))
-    .find(|result| dispatch_result_matches_receipt_target(result, receipt));
-    let result = result?;
-    let status = [
-        "status",
-        "decision",
-        "verdict",
-        "completion_verdict",
-        "execution_state",
-    ]
-    .into_iter()
-    .filter_map(|field| json_string(result.get(field)))
-    .find(|value| normalize_receipt_outcome(value).is_some())?;
-    let mut evidence = Vec::new();
-    for field in [
-        "evidence",
-        "evidence_ids",
-        "required_evidence",
-        "proof_outputs",
-    ] {
-        if let Some(values) = result.get(field).and_then(Value::as_array) {
-            evidence.extend(values.iter().filter_map(Value::as_str).map(str::to_string));
+    .flatten()
+    .filter_map(|path| {
+        let result = result_json_from_receipt_path(state_root, Some(path))?;
+        if !dispatch_result_matches_receipt_target(&result, receipt) {
+            return None;
         }
-    }
-    if let Some(receipt_id) = result["execution_evidence"]["receipt_id"].as_str() {
-        evidence.push(receipt_id.to_string());
-    }
-    Some(TeamFlowReceipt {
-        receipt_id: result["receipt_id"]
-            .as_str()
-            .or_else(|| result["completion_receipt_id"].as_str())
-            .unwrap_or("runtime-dispatch-receipt")
-            .to_string(),
-        node_id: node_id.to_string(),
-        status,
-        evidence,
-        config_hash: config_hash.to_string(),
-        snapshot_ref: snapshot_ref.to_string(),
+        let status = [
+            "status",
+            "decision",
+            "verdict",
+            "completion_verdict",
+            "execution_state",
+        ]
+        .into_iter()
+        .filter_map(|field| json_string(result.get(field)))
+        .find(|value| normalize_receipt_outcome(value).is_some())?;
+        let mut evidence = Vec::new();
+        for field in ["evidence", "evidence_ids", "proof_outputs"] {
+            if let Some(values) = result.get(field).and_then(Value::as_array) {
+                evidence.extend(values.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+        }
+        Some(TeamFlowReceipt {
+            receipt_id: result["receipt_id"]
+                .as_str()
+                .or_else(|| result["completion_receipt_id"].as_str())
+                .unwrap_or("runtime-dispatch-receipt")
+                .to_string(),
+            node_id: node_id.to_string(),
+            status,
+            evidence,
+            config_hash: config_hash.to_string(),
+            snapshot_ref: snapshot_ref.to_string(),
+        })
     })
+    .next()
 }
 
 fn typed_team_flow_admission_for_explicit_target(
@@ -7626,6 +7797,7 @@ fn typed_team_flow_admission_for_explicit_target(
         &current.node_id,
         &authority.snapshot.config_hash,
         &authority.snapshot.snapshot_ref,
+        !current.evidence_requirements.is_empty(),
     ) else {
         return Some(Err("team_flow_transition_receipt_missing".to_string()));
     };
@@ -7668,6 +7840,7 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_role_selection(
         &current.node_id,
         &authority.snapshot.config_hash,
         &authority.snapshot.snapshot_ref,
+        !current.evidence_requirements.is_empty(),
     ) else {
         return Err("team_flow_transition_receipt_missing".to_string());
     };
@@ -13431,6 +13604,44 @@ host_environment:
             policy_bundle_ref: None,
             recorded_at: "2026-04-21T00:00:00Z".to_string(),
         }
+    }
+
+    fn strict_team_flow_result_fixture(
+        receipt: &RunGraphDispatchReceipt,
+        receipt_id: &str,
+        status: &str,
+        execution_state: &str,
+        node_id: &str,
+        config_hash: &str,
+        snapshot_ref: &str,
+    ) -> serde_json::Value {
+        let rework = execution_state == "blocked";
+        json!({
+            "artifact_kind": if rework { "runtime_dispatch_result" } else { "runtime_lane_completion_result" },
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "source_dispatch_packet_path": receipt.dispatch_packet_path,
+            "status": status,
+            "execution_state": execution_state,
+            "decision": if rework { "rework" } else { "approve" },
+            "verdict": if rework { "rework" } else { "pass" },
+            "completion_receipt_id": receipt_id,
+            "activation_semantics": {
+                "activation_kind": "execution_evidence",
+                "view_only": false,
+                "executes_packet": true,
+                "records_completion_receipt": !rework
+            },
+            "execution_evidence": {"receipt_id": receipt_id, "receipt_backed": true},
+            "team_flow_receipt": {
+                "receipt_id": receipt_id,
+                "node_id": node_id,
+                "status": if rework { "rework" } else { "pass" },
+                "evidence": ["changed_files"],
+                "config_hash": config_hash,
+                "snapshot_ref": snapshot_ref
+            }
+        })
     }
 
     #[test]
@@ -24994,7 +25205,21 @@ host_environment:
                 "surface": "internal_cli:qwen",
                 "status": "pass",
                 "execution_state": "executed",
-                "provider_result": "implemented"
+                "provider_result": "implemented",
+                "completion_receipt_id": "completion-preserved",
+                "artifact_refs": ["artifacts/provider-proof.txt"],
+                "team_flow_receipt": {
+                    "receipt_id": "completion-preserved",
+                    "node_id": "implementer",
+                    "status": "pass",
+                    "evidence": ["changed_files"],
+                    "config_hash": "config-hash",
+                    "snapshot_ref": "snapshot-ref"
+                },
+                "execution_evidence": {
+                    "receipt_id": "completion-preserved",
+                    "receipt_backed": true
+                }
             }),
         )
         .expect("dispatch result should write");
@@ -25012,9 +25237,19 @@ host_environment:
             "/tmp/implementer-packet.json"
         );
         assert_eq!(artifact["provider_result"], "implemented");
-        assert!(artifact["completion_receipt_id"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("dispatch-completion-")));
+        assert_eq!(artifact["completion_receipt_id"], "completion-preserved");
+        assert_eq!(
+            artifact["team_flow_receipt"]["receipt_id"],
+            "completion-preserved"
+        );
+        assert_eq!(
+            artifact["execution_evidence"]["receipt_id"],
+            "completion-preserved"
+        );
+        assert_eq!(
+            artifact["artifact_refs"],
+            serde_json::json!(["artifacts/provider-proof.txt", path])
+        );
         assert!(artifact["recorded_at"]
             .as_str()
             .is_some_and(|value| !value.trim().is_empty()));
@@ -25071,6 +25306,212 @@ host_environment:
         );
         assert_eq!(artifact["execution_evidence"]["backend_id"], "junior");
         assert_eq!(artifact["execution_evidence"]["result_path"], path);
+    }
+
+    #[test]
+    fn strict_team_flow_reader_skips_mismatched_receipt_and_uses_latest_valid_candidate() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let old_path = harness.path().join("old-result.json");
+        let valid_path = harness.path().join("valid-result.json");
+        let mut receipt = executed_agent_lane_receipt(
+            "implementer",
+            "internal_subagents",
+            "junior",
+            "worker",
+            None,
+        );
+        let old = strict_team_flow_result_fixture(
+            &receipt,
+            "completion-old",
+            "pass",
+            "executed",
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+        );
+        let valid = strict_team_flow_result_fixture(
+            &receipt,
+            "completion-valid",
+            "pass",
+            "executed",
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+        );
+        fs::write(&old_path, old.to_string()).expect("old candidate should write");
+        fs::write(&valid_path, valid.to_string()).expect("valid candidate should write");
+        let mut old_step = receipt.clone();
+        old_step.dispatch_result_path = Some(old_path.display().to_string());
+        let mut valid_step = receipt.clone();
+        valid_step.supersedes_receipt_id = Some("completion-old".to_string());
+        valid_step.dispatch_result_path = Some(valid_path.display().to_string());
+        let mut mismatched_step = valid_step.clone();
+        mismatched_step.run_id = "other-run".to_string();
+        let trace_path = harness.path().join("trace.json");
+        fs::write(
+            &trace_path,
+            json!({
+                "artifact_kind": "runtime_downstream_dispatch_trace",
+                "run_id": receipt.run_id,
+                "steps": [old_step, valid_step, mismatched_step]
+            })
+            .to_string(),
+        )
+        .expect("trace should write");
+        receipt.downstream_dispatch_trace_path = Some(trace_path.display().to_string());
+        receipt.dispatch_result_path = None;
+
+        let typed = typed_team_flow_receipt(
+            harness.path(),
+            &receipt,
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+            true,
+        )
+        .expect("reader should skip mismatched candidate and accept valid trace candidate");
+        assert_eq!(typed.receipt_id, "completion-valid");
+
+        let mut routed = receipt.clone();
+        routed.dispatch_status = "routed".to_string();
+        assert!(strict_team_flow_receipt_from_result(
+            &valid,
+            &routed,
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+        )
+        .is_none());
+
+        let mut malformed = valid.clone();
+        malformed["team_flow_receipt"]["receipt_id"] = json!("nested-mismatch");
+        fs::write(&valid_path, malformed.to_string()).expect("malformed candidate should write");
+        receipt.dispatch_result_path = Some(old_path.display().to_string());
+        assert!(typed_team_flow_receipt(
+            harness.path(),
+            &receipt,
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+            true,
+        )
+        .is_none());
+
+        let mut blocked_view = strict_team_flow_result_fixture(
+            &receipt,
+            "rework-receipt",
+            "blocked",
+            "blocked",
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+        );
+        blocked_view["activation_semantics"]["view_only"] = json!(true);
+        let mut blocked_receipt = receipt.clone();
+        blocked_receipt.dispatch_status = "blocked".to_string();
+        assert!(strict_team_flow_receipt_from_result(
+            &blocked_view,
+            &blocked_receipt,
+            "implementer",
+            "config-hash",
+            "snapshot-ref",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn strict_team_flow_binder_records_rework_without_completion_and_requires_real_id() {
+        let mut selection = repository_team_flow_test_selection();
+        let default_flow = selection.compiled_bundle["default_flow_set"]
+            .as_str()
+            .expect("repository default flow")
+            .to_string();
+        selection.execution_plan["team_flow_authority_selected_flow_id"] = json!(default_flow);
+        selection.execution_plan["development_flow"]["dispatch_contract"]["selected_flow_set"] =
+            json!(default_flow);
+        selection.execution_plan["selected_flow_contract"]["flow_id"] = json!(default_flow);
+        selection.execution_plan["team_flow_authority"]["selected_flow_id"] = json!(default_flow);
+        selection.matched_terms = vec![format!("dev_team_flow_id:{default_flow}")];
+        let authority = require_persisted_team_flow_authority_for_selection(&selection)
+            .expect("repository authority should compile");
+        let current = authority
+            .ordered_nodes()
+            .filter_map(|node| authority.resolve_target(None, &node.dispatch_target).ok())
+            .find(|node| !node.evidence_requirements.is_empty() && !node.rework_targets.is_empty())
+            .expect("repository flow should expose a strict rework node");
+        let mut receipt = executed_agent_lane_receipt(
+            &current.dispatch_target,
+            "internal_subagents",
+            "junior",
+            &current.runtime_role,
+            None,
+        );
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        let rework_result = |include_id: bool| {
+            let mut result = json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework",
+                "verdict": "rework",
+                "rework_target": current.rework_targets[0],
+                "proof_outputs": current.evidence_requirements,
+                "artifact_refs": ["artifacts/rework-proof.json"],
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {"receipt_backed": true}
+            });
+            if include_id {
+                result["execution_evidence"]["receipt_id"] = json!("rework-receipt-real");
+            }
+            result
+        };
+        let mut valid = rework_result(true);
+        bind_team_flow_receipt_to_execution_result(&selection, &receipt, &mut valid)
+            .expect("canonical rework should bind transition evidence");
+        assert_eq!(valid["execution_state"], "blocked");
+        assert_eq!(valid["status"], "blocked");
+        assert_eq!(valid["team_flow_receipt"]["status"], "rework");
+        assert_eq!(valid["completion_receipt_id"], "rework-receipt-real");
+        assert_eq!(
+            valid["activation_semantics"]["records_completion_receipt"],
+            false
+        );
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let path = write_runtime_dispatch_result(harness.path(), &receipt, &valid)
+            .expect("bound rework should persist");
+        let artifact: Value = serde_json::from_str(
+            &fs::read_to_string(path).expect("persisted rework should remain readable"),
+        )
+        .expect("persisted rework should decode");
+        assert_eq!(artifact["execution_state"], "blocked");
+        assert_eq!(
+            artifact["activation_semantics"]["records_completion_receipt"],
+            false
+        );
+        let typed = strict_team_flow_receipt_from_result(
+            &artifact,
+            &receipt,
+            &current.node_id,
+            &authority.snapshot.config_hash,
+            &authority.snapshot.snapshot_ref,
+        )
+        .expect("writer output should remain strict rework evidence");
+        authority
+            .admit_rework(&current.node_id, &typed, &current.rework_targets[0])
+            .expect("persisted strict rework should remain admissible");
+
+        let error = bind_team_flow_receipt_to_execution_result(
+            &selection,
+            &receipt,
+            &mut rework_result(false),
+        )
+        .expect_err("strict rework without a real receipt id must block");
+        assert_eq!(error, "team_flow_receipt_id_missing");
     }
 
     #[test]
@@ -30684,6 +31125,92 @@ pub(crate) fn write_runtime_dispatch_packet(
     Ok(packet_path.display().to_string())
 }
 
+fn bind_team_flow_receipt_to_execution_result(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &mut serde_json::Value,
+) -> Result<(), String> {
+    let execution_state = result["execution_state"].as_str();
+    let rework = dispatch_result_is_rework_or_blocker(result);
+    if !matches!(execution_state, Some("executed" | "blocked")) {
+        return Ok(());
+    }
+    if execution_state == Some("blocked") && !rework {
+        return Err("team_flow_result_outcome_inconsistent".to_string());
+    }
+
+    let authority = require_persisted_team_flow_authority_for_selection(role_selection)
+        .map_err(|blocker| blocker.code)?;
+    let current = authority
+        .resolve_target(None, &receipt.dispatch_target)
+        .map_err(|blocker| blocker.code)?;
+    if current.evidence_requirements.is_empty() {
+        return Ok(());
+    }
+    let actual_outputs = crate::config_value_utils::json_string_list(result.get("proof_outputs"));
+    let has_artifact_refs = result["artifact_refs"]
+        .as_array()
+        .is_some_and(|refs| !refs.is_empty());
+    if current
+        .evidence_requirements
+        .iter()
+        .any(|required| !actual_outputs.iter().any(|actual| actual == required))
+        || !has_artifact_refs
+    {
+        return Err("team_flow_required_evidence_missing".to_string());
+    }
+    let evidence_receipt_id =
+        dispatch_result_field_normalized(&result["execution_evidence"], "receipt_id");
+    let provider_receipt_id = dispatch_result_field_normalized(result, "completion_receipt_id");
+    if matches!((&evidence_receipt_id, &provider_receipt_id), (Some(left), Some(right)) if left != right)
+    {
+        return Err("team_flow_receipt_id_mismatch".to_string());
+    }
+    let completion_receipt_id = evidence_receipt_id
+        .or(provider_receipt_id)
+        .ok_or_else(|| "team_flow_receipt_id_missing".to_string())?;
+    let typed_receipt = TeamFlowReceipt {
+        receipt_id: completion_receipt_id.clone(),
+        node_id: current.node_id.clone(),
+        status: if rework { "rework" } else { "pass" }.to_string(),
+        evidence: actual_outputs,
+        config_hash: authority.snapshot.config_hash.clone(),
+        snapshot_ref: authority.snapshot.snapshot_ref.clone(),
+    };
+    if rework {
+        let target = dispatch_result_field_normalized(result, "rework_target")
+            .ok_or_else(|| "team_flow_rework_target_not_configured".to_string())?;
+        authority
+            .admit_rework(&current.node_id, &typed_receipt, &target)
+            .map_err(|blocker| blocker.code)?;
+    } else if current.terminal {
+        authority
+            .admit_terminal(&current.node_id, &typed_receipt)
+            .map_err(|blocker| blocker.code)?;
+    } else {
+        let target = dispatch_result_field_normalized(result, "allowed_next_node")
+            .or(current.next_node.clone())
+            .ok_or_else(|| "team_flow_invalid_requested_node".to_string())?;
+        authority
+            .admit_next(&current.node_id, &typed_receipt, &target)
+            .map_err(|blocker| blocker.code)?;
+    }
+    if !result.is_object()
+        || !result["execution_evidence"].is_object()
+        || (rework && !result["activation_semantics"].is_object())
+    {
+        return Err("team_flow_execution_result_invalid".to_string());
+    }
+    result["completion_receipt_id"] = serde_json::json!(completion_receipt_id);
+    result["team_flow_receipt"] =
+        serde_json::to_value(&typed_receipt).expect("team flow receipt serializes");
+    if rework {
+        result["activation_semantics"]["records_completion_receipt"] = serde_json::json!(false);
+    }
+    result["execution_evidence"]["receipt_id"] = serde_json::json!(typed_receipt.receipt_id);
+    Ok(())
+}
+
 pub(crate) async fn execute_runtime_dispatch_handoff(
     state_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -30839,7 +31366,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 .as_deref(),
             );
             if lane_dispatch.surface != "vida agent-init" {
-                return execute_external_agent_lane_dispatch(
+                let mut result = execute_external_agent_lane_dispatch(
                     state_root,
                     &project_root,
                     dispatch_packet_path,
@@ -30848,7 +31375,9 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                     receipt,
                     host_runtime,
                 )
-                .await;
+                .await?;
+                bind_team_flow_receipt_to_execution_result(role_selection, receipt, &mut result)?;
+                return Ok(result);
             }
             let lane_backend_class = lane_dispatch
                 .backend_dispatch
@@ -30875,7 +31404,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 }
                 return Ok(result);
             }
-            if let Some(result) = execute_internal_agent_lane_dispatch(
+            if let Some(mut result) = execute_internal_agent_lane_dispatch(
                 state_root,
                 &project_root,
                 dispatch_packet_path,
@@ -30886,6 +31415,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
             )
             .await?
             {
+                bind_team_flow_receipt_to_execution_result(role_selection, receipt, &mut result)?;
                 return Ok(result);
             }
             let blocker_code = internal_host_activation_view_only_blocker_code(
@@ -30943,6 +31473,17 @@ pub(crate) fn write_runtime_dispatch_result(
             "dispatch_result_path".to_string(),
             serde_json::json!(result_path_display),
         );
+        let artifact_refs = object
+            .entry("artifact_refs".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(refs) = artifact_refs.as_array_mut() {
+            if !refs
+                .iter()
+                .any(|path| path.as_str() == Some(&result_path_display))
+            {
+                refs.push(serde_json::json!(result_path_display));
+            }
+        }
         object.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
         object.insert(
             "recorded_at".to_string(),
@@ -30998,10 +31539,28 @@ pub(crate) fn write_runtime_dispatch_result(
                 .as_deref()
                 .is_some_and(|path| !path.trim().is_empty());
         if executed_agent_lane {
-            let completion_receipt_id = format!(
-                "dispatch-completion-{}",
-                time::OffsetDateTime::now_utc().unix_timestamp_nanos()
-            );
+            let completion_receipt_id = object["completion_receipt_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    object["execution_evidence"]["receipt_id"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                });
+            let completion_receipt_id = match completion_receipt_id {
+                Some(receipt_id) => receipt_id,
+                None if object.get("team_flow_receipt").is_some() => {
+                    return Err("team_flow_receipt_id_missing".to_string());
+                }
+                None => format!(
+                    "dispatch-completion-{}",
+                    time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+                ),
+            };
             object.insert(
                 "artifact_kind".to_string(),
                 serde_json::json!("runtime_lane_completion_result"),
@@ -31024,8 +31583,12 @@ pub(crate) fn write_runtime_dispatch_result(
                 serde_json::json!(receipt.dispatch_target),
             );
         }
-        let activation_evidence =
+        let mut activation_evidence =
             normalized_dispatch_result_activation_evidence(receipt, body, &result_path_display);
+        if body["team_flow_receipt"]["status"].as_str() == Some("rework") {
+            activation_evidence["activation_semantics"]["records_completion_receipt"] =
+                serde_json::json!(false);
+        }
         object.insert(
             "activation_vs_execution_evidence".to_string(),
             activation_evidence.clone(),

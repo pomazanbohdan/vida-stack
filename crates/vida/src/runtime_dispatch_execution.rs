@@ -21,10 +21,9 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
-    host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
-    read_host_bridge_request, validate_dispatch_receipt_binding, DispatchReceiptBindingInput,
-    HostBridgeAdapterOperations, HostBridgePrecursorFingerprintV1, HostBridgeReceiptIdentityV1,
-    HostBridgeRequest, HostBridgeRequestPath,
+    normalized_host_bridge_attempt_id, read_host_bridge_request, validate_dispatch_receipt_binding,
+    DispatchReceiptBindingInput, HostBridgeAdapterOperations, HostBridgePrecursorFingerprintV1,
+    HostBridgeReceiptIdentityV1, HostBridgeRequest, HostBridgeRequestPath,
 };
 
 const HOST_BRIDGE_PRECURSOR_CACHE_LIMIT: usize = 256;
@@ -79,6 +78,7 @@ struct DispatchTargetCapability {
     owned_scope_required: bool,
     backend_admissibility_key: String,
     rework_targets: Vec<String>,
+    required_proof_outputs: Vec<String>,
 }
 
 fn scope_policy_requires_owned_paths(value: &serde_json::Value) -> bool {
@@ -181,6 +181,17 @@ fn dispatch_target_capability(
                     })
                 })
             });
+    let required_proof_outputs = node
+        .proof_gates
+        .get("required_outputs")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+        .map(str::to_string)
+        .collect();
     Ok(DispatchTargetCapability {
         node_id: node.node_id,
         dispatch_target,
@@ -189,6 +200,7 @@ fn dispatch_target_capability(
         owned_scope_required,
         backend_admissibility_key,
         rework_targets: node.rework_targets,
+        required_proof_outputs,
     })
 }
 
@@ -1212,9 +1224,28 @@ fn emulated_test_shell_output(wrapped_command: &WrappedCommand) -> Option<Observ
         });
     }
     if script.contains("input=$(cat)") {
+        let result = if script.contains("TEAM_FLOW_STRUCTURED") {
+            let rework = script.contains("TEAM_FLOW_REWORK");
+            serde_json::json!({
+                "status": if rework { "blocked" } else { "pass" },
+                "execution_state": if rework { "blocked" } else { "executed" },
+                "outcome": if rework { "rework" } else { "pass" },
+                "decision": if rework { "blocked" } else { "approve" },
+                "verdict": if rework { "blocked" } else { "pass" },
+                "blocker_codes": if rework { serde_json::json!(["provider_rework_required"]) } else { serde_json::json!([]) },
+                "rework_target": if rework { serde_json::json!("developer") } else { serde_json::Value::Null },
+                "allowed_next_node": if rework { "developer" } else { "closure" },
+                "proof_outputs": ["changed_files", "verification_notes", "test_results", "owned_write_scope", "owned_paths"],
+                "artifact_refs": ["artifacts/provider-proof.json"],
+                "completion_receipt_id": "provider-receipt-real"
+            })
+            .to_string()
+        } else {
+            "STDIN_OK".to_string()
+        };
         let stdout = serde_json::json!({
             "type": "result",
-            "result": "STDIN_OK",
+            "result": result,
             "is_error": false
         })
         .to_string()
@@ -2004,6 +2035,61 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
         result_text,
         error_messages,
     }
+}
+
+fn structured_team_flow_result_contract(
+    result_text: Option<&str>,
+    required_proof_outputs: &[String],
+) -> (Option<serde_json::Value>, Vec<String>) {
+    let mut structured = result_text.and_then(|result| serde_json::from_str(result).ok());
+    if required_proof_outputs.is_empty() {
+        return (structured, Vec::new());
+    }
+    let mut blockers = structured.as_ref().map_or_else(
+        || vec!["host_bridge_result_missing_verdict_field".to_string()],
+        |result| {
+            taskflow_host_bridge::completion::
+                host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+                    result,
+                    &["proof_outputs".to_string(), "artifact_refs".to_string()],
+                    required_proof_outputs,
+                )
+        },
+    );
+    if let Some(result) = structured.as_mut() {
+        let outer = result["completion_receipt_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let nested = result["execution_evidence"]["receipt_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if outer.is_some() && nested.is_some() && outer != nested {
+            blockers.push("team_flow_receipt_id_mismatch".to_string());
+        } else if let Some(receipt_id) = outer.or(nested) {
+            result["completion_receipt_id"] = serde_json::json!(receipt_id);
+        } else {
+            blockers.push("team_flow_receipt_id_missing".to_string());
+        }
+        let rework = result["status"].as_str() == Some("blocked");
+        if !matches!(
+            (rework, result["outcome"].as_str()),
+            (_, None)
+                | (false, Some("pass"))
+                | (true, Some("rework" | "rework_required" | "blocked"))
+        ) {
+            blockers.push("host_bridge_result_decision_verdict_mismatch".to_string());
+        } else if blockers.is_empty() {
+            result["outcome"] = serde_json::json!(if rework { "rework" } else { "pass" });
+            result["decision"] =
+                serde_json::json!(if rework { "rework_required" } else { "approve" });
+            result["verdict"] = serde_json::json!(if rework { "rework_required" } else { "pass" });
+        }
+    }
+    (structured, blockers)
 }
 
 fn push_internal_codex_error_message(error_messages: &mut Vec<String>, message: &str) {
@@ -3111,6 +3197,7 @@ fn validate_existing_host_bridge_request_matches_expected(
         "request_path",
         "result_path",
         "receipt_path",
+        "required_proof_outputs",
         "required_result_fields",
     ] {
         if !host_bridge_request_value_matches(existing, expected, field) {
@@ -3475,6 +3562,10 @@ fn materialize_host_tool_bridge_request(
         packet_attempt_id.as_deref().or(Some(packet_id.as_str())),
     );
     let execution_boundary = configured_host_execution_boundary(Some(selected_cli_entry));
+    let mut required_result_fields = default_host_bridge_required_result_fields();
+    if !capability.required_proof_outputs.is_empty() {
+        required_result_fields.extend(["proof_outputs".to_string(), "artifact_refs".to_string()]);
+    }
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
@@ -3504,7 +3595,8 @@ fn materialize_host_tool_bridge_request(
         "implementation_isolation": implementation_isolation,
         "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
         "implementation_artifacts": [],
-        "required_result_fields": default_host_bridge_required_result_fields(),
+        "required_proof_outputs": capability.required_proof_outputs,
+        "required_result_fields": required_result_fields,
         "blocked_result_contract": host_bridge_blocked_result_contract(
             role_selection,
             &receipt.dispatch_target,
@@ -4041,8 +4133,12 @@ fn validate_completed_host_bridge_artifacts(
     {
         return Err("Host bridge result execution_state is not executed.".into());
     }
-    let verdict_blockers =
-        host_bridge_result_verdict_contract_blockers(result, &typed_request.required_result_fields);
+    let verdict_blockers = taskflow_host_bridge::completion::
+        host_bridge_result_verdict_contract_blockers_with_proof_outputs(
+            result,
+            &typed_request.required_result_fields,
+            &typed_request.required_proof_outputs,
+        );
     if !verdict_blockers.is_empty() {
         return Err(format!(
             "Host bridge result verdict contract failed: {}.",
@@ -4222,6 +4318,7 @@ fn ingest_completed_host_bridge_result(
         "host_tool_bridge_receipt",
         backend_id,
         Some(carrier_id),
+        None,
     );
     refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "recorded");
     Ok(Some(result))
@@ -4648,7 +4745,15 @@ fn mark_dispatch_result_execution_evidence(
     evidence_kind: &str,
     backend_id: &str,
     carrier_id: Option<&str>,
+    provider_result: Option<&serde_json::Value>,
 ) {
+    if let Some(result) = provider_result {
+        for field in "status execution_state outcome decision verdict rework_target allowed_next_node proof_outputs artifact_refs completion_receipt_id".split_whitespace() {
+            if let Some(value) = result.get(field) {
+                body.insert(field.to_string(), value.clone());
+            }
+        }
+    }
     let completion_receipt_id = body
         .get("completion_receipt_id")
         .and_then(serde_json::Value::as_str)
@@ -4661,30 +4766,17 @@ fn mark_dispatch_result_execution_evidence(
     let activation_semantics = activation_semantics
         .as_object_mut()
         .expect("activation_semantics should serialize to an object");
-    activation_semantics.insert(
-        "activation_kind".to_string(),
-        serde_json::json!("execution_evidence"),
-    );
-    activation_semantics.insert("view_only".to_string(), serde_json::json!(false));
-    activation_semantics.insert("executes_packet".to_string(), serde_json::json!(true));
-    activation_semantics.insert(
-        "records_completion_receipt".to_string(),
-        serde_json::json!(true),
-    );
-    activation_semantics.insert(
-        "transfers_root_session_write_authority".to_string(),
-        serde_json::json!(false),
-    );
-    activation_semantics.insert(
-        "root_session_write_guard_remains_authoritative".to_string(),
-        serde_json::json!(true),
-    );
-    activation_semantics.insert(
-        "next_lawful_action".to_string(),
-        serde_json::json!(
-            "treat this result as receipt-backed delegated-lane execution evidence and continue through runtime downstream progression"
-        ),
-    );
+    for (field, value) in [
+        ("activation_kind", serde_json::json!("execution_evidence")),
+        ("view_only", serde_json::json!(false)),
+        ("executes_packet", serde_json::json!(true)),
+        ("records_completion_receipt", serde_json::json!(true)),
+        ("transfers_root_session_write_authority", serde_json::json!(false)),
+        ("root_session_write_guard_remains_authoritative", serde_json::json!(true)),
+        ("next_lawful_action", serde_json::json!("treat this result as receipt-backed delegated-lane execution evidence and continue through runtime downstream progression")),
+    ] {
+        activation_semantics.insert(field.to_string(), value);
+    }
     let execution_evidence = body
         .entry("execution_evidence".to_string())
         .or_insert_with(|| serde_json::json!({}));
@@ -4694,62 +4786,35 @@ fn mark_dispatch_result_execution_evidence(
     execution_evidence
         .entry("status".to_string())
         .or_insert_with(|| serde_json::json!("recorded"));
-    execution_evidence.insert(
-        "evidence_kind".to_string(),
-        serde_json::json!(evidence_kind),
-    );
-    execution_evidence.insert("backend_id".to_string(), serde_json::json!(backend_id));
+    for (field, value) in [
+        ("evidence_kind", serde_json::json!(evidence_kind)),
+        ("backend_id", serde_json::json!(backend_id)),
+        ("receipt_backed", serde_json::json!(true)),
+        ("records_dispatch_result", serde_json::json!(true)),
+    ] {
+        execution_evidence.insert(field.to_string(), value);
+    }
     if let Some(carrier_id) = carrier_id.map(str::trim).filter(|value| !value.is_empty()) {
         execution_evidence.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
     } else {
         execution_evidence.remove("carrier_id");
     }
-    execution_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
     if let Some(receipt_id) = completion_receipt_id {
         execution_evidence.insert("receipt_id".to_string(), serde_json::json!(receipt_id));
     }
-    execution_evidence.insert(
-        "records_dispatch_result".to_string(),
-        serde_json::json!(true),
-    );
     if let Some(posture) = body
         .get_mut("effective_execution_posture")
         .and_then(serde_json::Value::as_object_mut)
     {
-        posture.insert(
-            "activation_evidence_state".to_string(),
-            serde_json::json!("execution_evidence"),
-        );
-        posture.insert(
-            "receipt_backed_execution_evidence".to_string(),
-            serde_json::json!(true),
-        );
-        posture.insert(
-            "selected_backend".to_string(),
-            serde_json::json!(backend_id),
-        );
-    }
-    if let Some(posture) = body
-        .get_mut("execution_truth")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        posture.insert(
-            "effective_selected_backend".to_string(),
-            serde_json::json!(backend_id),
-        );
-        if let Some(activation_evidence) = posture
-            .get_mut("activation_evidence")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            activation_evidence.insert(
-                "activation_kind".to_string(),
+        for (field, value) in [
+            (
+                "activation_evidence_state",
                 serde_json::json!("execution_evidence"),
-            );
-            activation_evidence.insert(
-                "execution_evidence_status".to_string(),
-                serde_json::json!("recorded"),
-            );
-            activation_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
+            ),
+            ("receipt_backed_execution_evidence", serde_json::json!(true)),
+            ("selected_backend", serde_json::json!(backend_id)),
+        ] {
+            posture.insert(field.to_string(), value);
         }
     }
 }
@@ -4802,6 +4867,9 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             receipt.dispatch_target
         ));
     }
+    let required_proof_outputs =
+        dispatch_target_capability(role_selection, &receipt.dispatch_target)?
+            .required_proof_outputs;
 
     let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
     let (selected_cli_system, selected_cli_entry) =
@@ -5201,10 +5269,17 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_internal_codex_exec_output(&stdout);
+    let (provider_result_json, strict_result_blockers) = structured_team_flow_result_contract(
+        parsed_output.result_text.as_deref(),
+        &required_proof_outputs,
+    );
+    let strict_evidence_missing = !required_proof_outputs.is_empty()
+        && (!strict_result_blockers.is_empty() || provider_result_json.is_none());
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
     let success =
-        internal_codex_output_confirms_execution(&parsed_output, &stderr, output.status.success());
+        internal_codex_output_confirms_execution(&parsed_output, &stderr, output.status.success())
+            && !strict_evidence_missing;
     let activation_only = timed_out
         || (output.status.success()
             && parsed_output.result_text.is_none()
@@ -5336,6 +5411,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             "internal_carrier_completion",
             backend_id,
             Some(carrier_id),
+            provider_result_json.as_ref(),
         );
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "recorded");
     } else if activation_only {
@@ -5395,9 +5471,20 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "internal host carrier for `{selected_cli_system}` exited without returning receipt-backed completion"
             )
         };
-        let blocker_code =
+        let blocker_code = if strict_evidence_missing {
+            "team_flow_required_evidence_missing"
+        } else {
             internal_host_provider_failure_blocker_code(&stderr, &parsed_output.error_messages)
-                .unwrap_or("configured_backend_dispatch_failed");
+                .unwrap_or("configured_backend_dispatch_failed")
+        };
+        let blocker_reason = if strict_evidence_missing {
+            format!(
+                "TeamFlow structured completion evidence is missing or invalid: {}",
+                strict_result_blockers.join(",")
+            )
+        } else {
+            blocker_reason
+        };
         let blocker_reason =
             internal_host_provider_failure_blocker_reason(blocker_code, blocker_reason);
         body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
@@ -5904,13 +5991,23 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_external_provider_output(&stdout);
+    let required_proof_outputs = &capability.required_proof_outputs;
+    let (provider_result_json, strict_result_blockers) = structured_team_flow_result_contract(
+        parsed_output
+            .as_ref()
+            .and_then(|output| output.result_text.as_deref()),
+        required_proof_outputs,
+    );
+    let strict_evidence_missing = !required_proof_outputs.is_empty()
+        && (!strict_result_blockers.is_empty() || provider_result_json.is_none());
     let output_mode = configured_external_dispatch_output_mode(&backend_entry);
     let success = output.status.success()
         && external_provider_output_confirms_execution_for_mode(
             &output_mode,
             &stdout,
             parsed_output.as_ref(),
-        );
+        )
+        && !strict_evidence_missing;
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
     body.insert(
@@ -5984,33 +6081,28 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
         let carrier_id = body
             .get("backend_dispatch")
-            .and_then(|value| value.get("carrier_id"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
+            .and_then(|value| value["carrier_id"].as_str())
             .or_else(|| {
                 role_selection
                     .execution_plan
                     .pointer("/runtime_assignment/selected_carrier_id")
                     .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-            });
-        if let Some(carrier_id) = carrier_id.as_deref() {
-            if let Some(dispatch) = body
-                .get_mut("backend_dispatch")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                dispatch.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
-            }
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if let Some((carrier_id, dispatch)) = carrier_id.as_deref().zip(
+            body.get_mut("backend_dispatch")
+                .and_then(serde_json::Value::as_object_mut),
+        ) {
+            dispatch.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
         }
         mark_dispatch_result_execution_evidence(
             body,
             "external_backend_completion",
             &backend_id,
             carrier_id.as_deref(),
+            provider_result_json.as_ref(),
         );
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "recorded");
     } else if timed_out
@@ -6070,7 +6162,11 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             });
         body.insert(
             "blocker_code".to_string(),
-            serde_json::json!("configured_backend_dispatch_failed"),
+            serde_json::json!(if strict_evidence_missing {
+                "team_flow_required_evidence_missing"
+            } else {
+                "configured_backend_dispatch_failed"
+            }),
         );
         body.insert(
             "blocker_reason".to_string(),
@@ -6113,8 +6209,8 @@ mod tests {
         parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
         register_host_bridge_precursor_fingerprint,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
-        CommandTimeoutWrapper, InternalHostDispatchRouteMode,
+        structured_team_flow_result_contract, wrap_command_with_optional_timeout,
+        wrap_command_with_optional_timeouts, CommandTimeoutWrapper, InternalHostDispatchRouteMode,
     };
     use crate::yaml_lookup;
     use crate::RuntimeConsumptionLaneSelection;
@@ -6201,6 +6297,7 @@ mod tests {
             owned_scope_required: false,
             backend_admissibility_key,
             rework_targets: Vec::new(),
+            required_proof_outputs: Vec::new(),
         }
     }
 
@@ -6476,6 +6573,104 @@ dispatch:
         assert_eq!(parsed.result_text.as_deref(), Some("final"));
         assert_eq!(parsed.error_messages, vec!["warning".to_string()]);
         assert_eq!(parsed.raw_json.as_array().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn strict_team_flow_structured_provider_preserves_receipt_identity() {
+        let required = vec![
+            "changed_files".to_string(),
+            "verification_notes".to_string(),
+        ];
+        let result = serde_json::json!({
+            "status": "pass", "execution_state": "executed",
+            "decision": "approve", "verdict": "pass", "blocker_codes": [],
+            "rework_target": null, "allowed_next_node": "coach",
+            "proof_outputs": ["changed_files", "verification_notes"],
+            "artifact_refs": ["artifacts/proof.txt"],
+            "completion_receipt_id": "provider-receipt"
+        });
+        let (structured, blockers) =
+            structured_team_flow_result_contract(Some(&result.to_string()), &required);
+        assert!(blockers.is_empty());
+        let structured = structured.expect("provider payload should remain structured");
+        let mut body = serde_json::Map::new();
+        mark_dispatch_result_execution_evidence(
+            &mut body,
+            "internal_carrier_completion",
+            "internal_subagents",
+            Some("worker"),
+            Some(&structured),
+        );
+        assert_eq!(body["completion_receipt_id"], "provider-receipt");
+        assert_eq!(body["execution_evidence"]["receipt_id"], "provider-receipt");
+
+        let mut rework = result.clone();
+        rework["status"] = serde_json::json!("blocked");
+        rework["execution_state"] = serde_json::json!("blocked");
+        rework["outcome"] = serde_json::json!("rework");
+        rework["decision"] = serde_json::json!("blocked");
+        rework["verdict"] = serde_json::json!("blocked");
+        rework["blocker_codes"] = serde_json::json!(["provider_rework_required"]);
+        rework["rework_target"] = serde_json::json!("developer");
+        let (structured, blockers) =
+            structured_team_flow_result_contract(Some(&rework.to_string()), &required);
+        assert!(blockers.is_empty());
+        let mut rework_body = serde_json::Map::new();
+        mark_dispatch_result_execution_evidence(
+            &mut rework_body,
+            "internal_carrier_completion",
+            "internal_subagents",
+            Some("worker"),
+            structured.as_ref(),
+        );
+        assert_eq!(rework_body["status"], "blocked");
+        assert_eq!(rework_body["execution_state"], "blocked");
+        assert_eq!(rework_body["decision"], "rework_required");
+        assert_eq!(rework_body["verdict"], "rework_required");
+
+        let mut conflicting = result.clone();
+        conflicting["outcome"] = serde_json::json!("rework");
+        let (_, blockers) =
+            structured_team_flow_result_contract(Some(&conflicting.to_string()), &required);
+        assert!(blockers
+            .iter()
+            .any(|value| value == "host_bridge_result_decision_verdict_mismatch"));
+
+        let mut mismatch = result.clone();
+        mismatch["execution_evidence"]["receipt_id"] = serde_json::json!("other-receipt");
+        let (_, blockers) =
+            structured_team_flow_result_contract(Some(&mismatch.to_string()), &required);
+        assert!(blockers
+            .iter()
+            .any(|value| value == "team_flow_receipt_id_mismatch"));
+
+        let mut missing = result;
+        missing
+            .as_object_mut()
+            .expect("fixture object")
+            .remove("completion_receipt_id");
+        let (_, blockers) =
+            structured_team_flow_result_contract(Some(&missing.to_string()), &required);
+        assert!(blockers
+            .iter()
+            .any(|value| value == "team_flow_receipt_id_missing"));
+    }
+
+    #[test]
+    fn strict_team_flow_plain_text_result_blocks_without_evidence() {
+        let (_, blockers) = structured_team_flow_result_contract(
+            Some("implementation complete"),
+            &["changed_files".to_string()],
+        );
+        assert_eq!(blockers, vec!["host_bridge_result_missing_verdict_field"]);
+    }
+
+    #[test]
+    fn legacy_plain_text_result_remains_admissible_without_requirements() {
+        let (structured, blockers) =
+            structured_team_flow_result_contract(Some("implementation complete"), &[]);
+        assert!(structured.is_none());
+        assert!(blockers.is_empty());
     }
 
     #[test]
@@ -11000,6 +11195,7 @@ dispatch:
             "internal_carrier_completion",
             "backend-token",
             Some("carrier-token"),
+            None,
         );
 
         assert_eq!(
@@ -13254,7 +13450,7 @@ agent_system:
     }
 
     #[test]
-    fn execute_external_agent_lane_dispatch_executes_stdin_prompt_success_result() {
+    fn strict_team_flow_external_dispatch_preserves_provider_receipt_identity() {
         let project_root = std::env::temp_dir().join(format!(
             "vida-external-dispatch-stdin-success-{}-{}",
             std::process::id(),
@@ -13285,6 +13481,7 @@ agent_system:
         static_args:
           - -lc
           - |
+            # TEAM_FLOW_STRUCTURED TEAM_FLOW_REWORK
             input=$(cat)
             printf '{"type":"result","is_error":false,"result":"%s"}' "$input"
         prompt_mode: stdin
@@ -13293,8 +13490,13 @@ agent_system:
         )
         .expect("write overlay");
 
-        let role_selection = external_test_role_selection("pi_cli");
-        let receipt = external_test_receipt("pi_cli");
+        let role_selection = internal_codex_fallback_role_selection_for_flow(
+            external_test_role_selection("pi_cli").execution_plan,
+            "default_delivery",
+            "developer",
+        );
+        let mut receipt = external_test_receipt("pi_cli");
+        receipt.dispatch_target = "developer".to_string();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -13316,9 +13518,21 @@ agent_system:
             })
             .expect("dispatch should execute");
 
-        assert_eq!(result["status"], "pass");
-        assert_eq!(result["execution_state"], "executed");
-        assert_eq!(result["provider_result"], "STDIN_OK");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["outcome"], "rework");
+        assert_eq!(result["decision"], "rework_required");
+        assert_eq!(result["verdict"], "rework_required");
+        assert_eq!(result["rework_target"], "developer");
+        assert_eq!(result["completion_receipt_id"], "provider-receipt-real");
+        assert_eq!(
+            result["execution_evidence"]["receipt_id"],
+            "provider-receipt-real"
+        );
+        assert!(result["proof_outputs"]
+            .as_array()
+            .is_some_and(|outputs| !outputs.is_empty()));
+        assert_eq!(result["artifact_refs"][0], "artifacts/provider-proof.json");
         assert_eq!(result["blocker_code"], serde_json::Value::Null);
         let activation_command = result["activation_command"]
             .as_str()
@@ -13702,6 +13916,7 @@ agent_system:
             owned_scope_required: false,
             backend_admissibility_key: "custom-task".to_string(),
             rework_targets: Vec::new(),
+            required_proof_outputs: Vec::new(),
         };
         let profile = serde_json::json!({
             "runtime_roles": ["custom-role"],
@@ -13747,6 +13962,7 @@ agent_system:
             owned_scope_required: true,
             backend_admissibility_key: "custom-task".to_string(),
             rework_targets: Vec::new(),
+            required_proof_outputs: Vec::new(),
         };
         let profile = serde_json::json!({
             "write_scope": "guard_required_packet_owned_paths"

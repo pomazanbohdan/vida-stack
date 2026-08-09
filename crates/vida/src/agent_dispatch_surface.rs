@@ -2315,6 +2315,8 @@ fn scaffold_host_bridge_result(
     let result = taskflow_host_bridge::receipt_binding::build_host_bridge_result_scaffold(
         taskflow_host_bridge::receipt_binding::HostBridgeResultScaffoldInput {
             request: typed_request,
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
             decision: command.decision.clone(),
             verdict: command.verdict.clone(),
             blocker_codes: host_bridge_command_blocker_codes(command),
@@ -10033,6 +10035,8 @@ mod tests {
         let result = taskflow_host_bridge::receipt_binding::build_host_bridge_result_scaffold(
             taskflow_host_bridge::receipt_binding::HostBridgeResultScaffoldInput {
                 request: typed_request,
+                proof_outputs: vec!["verification_evidence".to_string()],
+                artifact_refs: vec!["artifacts/verification.json".to_string()],
                 decision: None,
                 verdict: None,
                 blocker_codes: Vec::new(),
@@ -10054,6 +10058,14 @@ mod tests {
         assert_eq!(result["status"], super::release1_pass_status());
         assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["source_dispatch_packet_path"], "packet.json");
+        assert_eq!(
+            result["proof_outputs"],
+            serde_json::json!(["verification_evidence"])
+        );
+        assert_eq!(
+            result["artifact_refs"],
+            serde_json::json!(["artifacts/verification.json"])
+        );
         assert!(payload["blocker_codes"].as_array().unwrap().is_empty());
     }
 

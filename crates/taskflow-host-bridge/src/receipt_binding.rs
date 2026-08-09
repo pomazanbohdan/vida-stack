@@ -472,6 +472,8 @@ pub struct DispatchReceiptBindingDecision {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeResultScaffoldInput {
     pub request: HostBridgeRequest,
+    pub proof_outputs: Vec<String>,
+    pub artifact_refs: Vec<String>,
     pub decision: Option<String>,
     pub verdict: Option<String>,
     pub blocker_codes: Vec<String>,
@@ -684,6 +686,8 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
         "blocker_codes": input.blocker_codes,
         "rework_target": input.rework_target,
         "allowed_next_node": allowed_next_node,
+        "proof_outputs": input.proof_outputs,
+        "artifact_refs": input.artifact_refs,
         "summary": summary,
         "carrier_id": input.request.carrier_id,
         "adapter_kind": input.request.adapter_kind,
@@ -941,6 +945,8 @@ mod tests {
         let request = minimal_request();
         let mut receipt = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
             request: request.clone(),
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
             decision: None,
             verdict: None,
             blocker_codes: Vec::new(),
@@ -975,6 +981,11 @@ mod tests {
 
         let result = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
             request,
+            proof_outputs: vec![
+                "changed_files".to_string(),
+                "verification_notes".to_string(),
+            ],
+            artifact_refs: vec!["artifacts/focused-proof.txt".to_string()],
             decision: None,
             verdict: None,
             blocker_codes: Vec::new(),
@@ -1000,6 +1011,14 @@ mod tests {
         assert_eq!(result["attempt_id"], "attempt-1");
         assert_eq!(result["packet_id"], "packet-1");
         assert_eq!(result["selected_backend"], "internal_subagents");
+        assert_eq!(
+            result["proof_outputs"],
+            serde_json::json!(["changed_files", "verification_notes"])
+        );
+        assert_eq!(
+            result["artifact_refs"],
+            serde_json::json!(["artifacts/focused-proof.txt"])
+        );
         assert_eq!(result["identity_binding"]["request_id"], "req-1");
         assert_eq!(result["identity_binding"]["run_id"], "run-1");
         assert_eq!(result["identity_binding"]["attempt_id"], "attempt-1");
