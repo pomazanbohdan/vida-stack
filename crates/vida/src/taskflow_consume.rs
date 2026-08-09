@@ -567,12 +567,18 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if matches!(
-        args.get(1).map(String::as_str),
-        Some("final" | "continue" | "advance")
-    ) && !crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(
-        &super::taskflow_task_bridge::proxy_state_dir(),
-    ) {
+    let consume_subcommand = args.get(1).map(String::as_str);
+    let proxy_state_root = super::taskflow_task_bridge::proxy_state_dir();
+    let dispatch_enabled =
+        crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(&proxy_state_root);
+    let allow_external_state_final_blocked_payload = consume_subcommand == Some("final")
+        && super::taskflow_task_bridge::infer_project_root_from_state_root(&proxy_state_root)
+            .is_none()
+        && crate::resolve_runtime_project_root().is_ok();
+    if matches!(consume_subcommand, Some("final" | "continue" | "advance"))
+        && !dispatch_enabled
+        && !allow_external_state_final_blocked_payload
+    {
         crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
             "vida taskflow consume",
             crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,

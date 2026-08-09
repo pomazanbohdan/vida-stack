@@ -299,6 +299,99 @@ fn unique_state_dir() -> String {
     )
 }
 
+fn unique_project_state_dir() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let project_root = std::env::temp_dir().join(format!(
+        "vida-run-graph-project-{}-{nanos}-{counter}",
+        std::process::id()
+    ));
+    for relative in [
+        ".vida/config",
+        ".vida/db",
+        ".vida/project",
+        ".vida/project/agent-extensions",
+        ".vida/data/state",
+    ] {
+        fs::create_dir_all(project_root.join(relative))
+            .expect("run-graph project state root should exist");
+    }
+    fs::write(project_root.join("AGENTS.md"), "run-graph test project\n")
+        .expect("run-graph project agents file should exist");
+    fs::copy(
+        PathBuf::from(repo_root()).join("AGENTS.sidecar.md"),
+        project_root.join("AGENTS.sidecar.md"),
+    )
+    .expect("run-graph project sidecar should exist");
+    for relative in [
+        "vida/config/instructions/bundles/framework-source",
+        "vida/config/instructions/bundles/framework-memory-source",
+    ] {
+        copy_directory_tree(
+            &PathBuf::from(repo_root()).join(relative),
+            &project_root.join(relative),
+        );
+    }
+    let config = fs::read_to_string(PathBuf::from(repo_root()).join("vida.config.yaml"))
+        .expect("run-graph project config should load")
+        .replacen("    enabled: false", "    enabled: true", 1);
+    assert!(
+        config.contains("taskflow:\n  dispatch:\n    enabled: true"),
+        "run-graph fixture must enable taskflow dispatch"
+    );
+    fs::write(project_root.join("vida.config.yaml"), config)
+        .expect("run-graph project config should exist");
+    for relative in [
+        "docs/process/agent-extensions/roles.yaml",
+        "docs/process/agent-extensions/skills.yaml",
+        "docs/process/agent-extensions/profiles.yaml",
+        "docs/process/agent-extensions/flows.yaml",
+        "docs/process/agent-extensions/packs.yaml",
+        "docs/process/agent-extensions/commands.yaml",
+        "docs/process/agent-extensions/dispatch-aliases.yaml",
+        "docs/product/spec/hook-templates.yaml",
+    ] {
+        let source = PathBuf::from(repo_root()).join(relative);
+        let target = project_root.join(relative);
+        fs::create_dir_all(target.parent().expect("run-graph fixture parent"))
+            .expect("run-graph fixture parent should exist");
+        fs::copy(source, target).expect("run-graph fixture registry should copy");
+    }
+    for relative in [
+        "roles.yaml",
+        "skills.yaml",
+        "profiles.yaml",
+        "flows.yaml",
+        "packs.yaml",
+        "commands.yaml",
+        "dispatch-aliases.yaml",
+    ] {
+        fs::copy(
+            PathBuf::from(repo_root()).join("docs/process/agent-extensions").join(relative),
+            project_root
+                .join(".vida/project/agent-extensions")
+                .join(relative),
+        )
+        .expect("run-graph runtime registry projection should copy");
+    }
+    project_root
+        .join(".vida/data/state")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn run_graph_project_root(state_dir: &str) -> String {
+    Path::new(state_dir)
+        .ancestors()
+        .nth(3)
+        .expect("run-graph state dir should be nested under project root")
+        .to_string_lossy()
+        .to_string()
+}
+
 fn create_epic_parent_for_state(state_dir: &str, parent_id: &str, title: &str) {
     create_epic_parent_for_state_with_session(state_dir, parent_id, title, None);
 }
@@ -718,23 +811,53 @@ fn bootstrap_project_runtime(project_id: &str, project_name: &str) -> (String, S
         String::from_utf8_lossy(&boot.stderr)
     );
     sync_protocol_binding(&state_dir);
+    install_test_policy_bundle_pin(&state_dir);
 
     (project_root, state_dir)
+}
+
+fn install_test_policy_bundle_pin(state_dir: &str) {
+    let store = serde_json::json!({
+        "schema_version": 1,
+        "bundles": [{
+            "bundle_id": "rhai.runtime.authority@1",
+            "policy_id": "rhai.runtime.authority",
+            "version": 1,
+            "engine_abi": "rhai-policy-engine-v1",
+            "source": "ctx.value",
+            "content_digest": "ea68c6540429d758b63af5562843fedd1b60c0680a624429d6da05bbec3c095a",
+            "lifecycle": "active"
+        }],
+        "test_receipts": [{
+            "bundle_id": "rhai.runtime.authority@1",
+            "test_id": "policy-pin-fixture",
+            "content_digest": "ea68c6540429d758b63af5562843fedd1b60c0680a624429d6da05bbec3c095a",
+            "passed": true
+        }],
+        "evaluation_receipts": [],
+        "shadow_diffs": [],
+        "active_pointer": "rhai.runtime.authority@1",
+        "last_known_good": null,
+        "modes": [{
+            "bundle_id": "rhai.runtime.authority@1",
+            "mode": "active"
+        }],
+        "run_pins": [],
+        "shadow_receipts": []
+    });
+    write_file(
+        &format!("{state_dir}/policy-store.json"),
+        &serde_json::to_string(&store).expect("test policy store should serialize"),
+    );
 }
 
 fn set_dispatch_for_project_runtime(project_root: &str, enabled: bool) {
     let path = format!("{project_root}/vida.config.yaml");
     let config = fs::read_to_string(&path).expect("project runtime config should be readable");
     let (from, to) = if enabled {
-        (
-            "taskflow:\n  dispatch:\n    enabled: false",
-            "taskflow:\n  dispatch:\n    enabled: true",
-        )
+        ("    enabled: false", "    enabled: true")
     } else {
-        (
-            "taskflow:\n  dispatch:\n    enabled: true",
-            "taskflow:\n  dispatch:\n    enabled: false",
-        )
+        ("    enabled: true", "    enabled: false")
     };
     let updated = config.replacen(from, to, 1);
     assert_ne!(updated, config, "test runtime config must expose dispatch flag");
@@ -1955,19 +2078,21 @@ fn taskflow_run_graph_seed_with_timeout(
     json: bool,
 ) -> std::process::Output {
     let session_id = run_graph_test_session_id(run_id);
+    let project_root = run_graph_project_root(state_dir);
     bounded_vida_output(
         &["-k", "5s", "20s"],
-        "run-graph seed bootstrap should run from repo root",
+        "run-graph seed bootstrap should run from project root",
         |command| {
             command
                 .arg("boot")
-                .current_dir(repo_root())
+                .current_dir(&project_root)
                 .env_remove("VIDA_ROOT")
                 .env_remove("VIDA_HOME")
                 .env("VIDA_STATE_DIR", state_dir)
-                .env("VIDA_SESSION_ID", &session_id);
+            .env("VIDA_SESSION_ID", &session_id);
         },
     );
+    install_test_policy_bundle_pin(state_dir);
     ensure_run_graph_backing_smoke_task(
         state_dir,
         run_id,
@@ -1992,7 +2117,7 @@ fn taskflow_run_graph_seed_with_timeout(
         command.arg("--json");
     }
     command
-        .current_dir(repo_root())
+        .current_dir(&project_root)
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", state_dir)
@@ -13117,10 +13242,11 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
 
 #[test]
 fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_system() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13193,10 +13319,11 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
 
 #[test]
 fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_system() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13263,10 +13390,11 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
 
 #[test]
 fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_route() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13286,7 +13414,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
         "implementation"
     );
     assert_eq!(seed_parsed["payload"]["status"]["active_node"], "planning");
-    assert_eq!(seed_parsed["payload"]["status"]["next_node"], "developer");
+    assert_eq!(seed_parsed["payload"]["status"]["next_node"], "coder");
     assert_eq!(
         seed_parsed["payload"]["status"]["route_task_class"],
         "implementation"
@@ -13297,11 +13425,11 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
-        "developer_lane"
+        "coder"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lifecycle_stage"],
-        "developer_dispatch_ready"
+        "coder_dispatch_ready"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["policy_gate"],
@@ -13309,7 +13437,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["handoff_state"],
-        "awaiting_developer"
+        "awaiting_coder"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["checkpoint_kind"],
@@ -13317,7 +13445,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["resume_target"],
-        "dispatch.developer"
+        "dispatch.coder"
     );
     assert_eq!(
         seed_parsed["payload"]["role_selection"]["selected_role"],
@@ -13341,7 +13469,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
     assert_eq!(
         run_graph_parsed["run_graph_status"]["next_node"],
-        "developer"
+        "coder"
     );
     assert_eq!(
         run_graph_parsed["run_graph_status"]["policy_gate"],
@@ -13351,16 +13479,17 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
 
 #[test]
 fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("boot should run");
-    assert!(boot.status.success());
+    assert_output_success(&boot, "run-graph boot");
 
     let seed =
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
@@ -13375,20 +13504,20 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
     assert_eq!(advance_parsed["payload"]["status"]["run_id"], "vida-dev");
     assert_eq!(
         advance_parsed["payload"]["status"]["active_node"],
-        "developer"
+        "coder"
     );
     assert_eq!(advance_parsed["payload"]["status"]["next_node"], "coach");
     assert_eq!(
         advance_parsed["payload"]["status"]["lane_id"],
-        "developer_lane"
+        "coder"
     );
     assert_eq!(
         advance_parsed["payload"]["status"]["lifecycle_stage"],
-        "developer_active"
+        "coder_active"
     );
     assert_eq!(
         advance_parsed["payload"]["status"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
     assert_eq!(
         advance_parsed["payload"]["status"]["handoff_state"],
@@ -13403,10 +13532,11 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
 #[test]
 fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_implementation_route()
 {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13444,7 +13574,7 @@ fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_imp
         serde_json::from_str(&advance_stdout).expect("run-graph advance json should parse");
     assert_eq!(
         advance_parsed["payload"]["status"]["active_node"],
-        "developer"
+        "coder"
     );
     assert_eq!(advance_parsed["payload"]["status"]["next_node"], "coach");
     assert_eq!(
@@ -13459,10 +13589,11 @@ fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_imp
 
 #[test]
 fn taskflow_run_graph_advance_builds_spec_pack_handoff_for_seeded_scope_discussion() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13534,10 +13665,11 @@ fn taskflow_run_graph_advance_builds_spec_pack_handoff_for_seeded_scope_discussi
 
 #[test]
 fn taskflow_run_graph_advance_builds_work_pool_pack_handoff_for_seeded_pbi_discussion() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13607,10 +13739,11 @@ fn taskflow_run_graph_advance_builds_work_pool_pack_handoff_for_seeded_pbi_discu
 
 #[test]
 fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discussion() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13622,7 +13755,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
     assert!(seed.status.success());
 
-    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-scope", false);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-scope", true);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -13678,10 +13811,11 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
 
 #[test]
 fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discussion() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13697,7 +13831,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
     );
     assert!(seed.status.success());
 
-    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-pbi", false);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-pbi", true);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -13744,10 +13878,11 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
 
 #[test]
 fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementation() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13759,7 +13894,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -13775,12 +13910,12 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
     assert_eq!(
         run_graph_parsed["run_graph_status"]["active_node"],
-        "developer"
+        "coder"
     );
     assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "coach");
     assert_eq!(
         run_graph_parsed["run_graph_status"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
 
     let recovery = run_with_retry(|| {
@@ -13802,16 +13937,17 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
     );
     assert_eq!(
         recovery_parsed["recovery"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
 }
 
 #[test]
 fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_implementation() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13861,7 +13997,7 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["handoff_state"],
@@ -13875,10 +14011,11 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
 
 #[test]
 fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementation() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -13890,10 +14027,10 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(first_advance.status.success());
 
-    let second_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let second_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(second_advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -13914,7 +14051,7 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
     );
     assert_eq!(
         run_graph_parsed["run_graph_status"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
 
     let recovery = run_with_retry(|| {
@@ -13939,7 +14076,7 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
     );
     assert_eq!(
         recovery_parsed["recovery"]["policy_gate"],
-        "review_findings"
+        "verification_summary"
     );
     assert_eq!(
         recovery_parsed["recovery"]["delegation_gate"]["delegated_cycle_open"],
@@ -13957,10 +14094,11 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
 
 #[test]
 fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14037,10 +14175,11 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
 
 #[test]
 fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensemble() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14053,7 +14192,7 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
     assert!(seed.status.success());
 
     for step in 0..3 {
-        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -14125,10 +14264,11 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
 
 #[test]
 fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14178,10 +14318,11 @@ fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
 
 #[test]
 fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_review() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14248,10 +14389,11 @@ fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_r
 
 #[test]
 fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_approval() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14264,7 +14406,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
     assert!(seed.status.success());
 
     for step in 0..3 {
-        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -14293,7 +14435,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         "run-graph mark clean review before fifth advance",
     );
 
-    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(fourth_advance.status.success());
 
     let mark_approved = vida()
@@ -14315,7 +14457,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         .expect("approval update should run");
     assert_output_success(&mark_approved, "run-graph mark explicit approval");
 
-    let fifth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    let fifth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(fifth_advance.status.success());
 
     let run_graph = taskflow_run_graph_status_with_timeout(&state_dir, "vida-dev", true);
@@ -14399,10 +14541,11 @@ fn taskflow_query_routes_approval_questions_to_run_graph_update() {
 
 #[test]
 fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -14459,10 +14602,11 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
 
 #[test]
 fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
-    let state_dir = unique_state_dir();
+    let state_dir = unique_project_state_dir();
 
     let boot = vida()
         .arg("boot")
+        .current_dir(run_graph_project_root(&state_dir))
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)

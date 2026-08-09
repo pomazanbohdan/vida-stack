@@ -1573,6 +1573,22 @@ pub(crate) fn resolve_dispatch_alias_id(
     {
         return Some(preferred_alias_id.to_string());
     }
+    let carrier_tier_candidates = carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|alias| {
+            alias["carrier_tier"].as_str() == Some(preferred_alias_id)
+                && alias["unresolved"] != serde_json::Value::Bool(true)
+                && alias["enabled"] != serde_json::Value::Bool(false)
+                && dispatch_alias_runtime_role_is_resolvable(alias)
+                && role_supports_task_class(alias, task_class)
+        })
+        .filter_map(|alias| alias["role_id"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    if let [alias_id] = carrier_tier_candidates.as_slice() {
+        return Some(alias_id.clone());
+    }
     let candidates = carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
         .as_array()
         .into_iter()
@@ -3052,6 +3068,73 @@ mod tests {
                 "implementation"
             ),
             Some("alias-b".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_alias_id_accepts_unique_preferred_carrier_tier() {
+        let bundle = serde_json::json!({
+            "carrier_runtime": {
+                "dispatch_aliases": [{
+                    "role_id": "alias-a",
+                    "carrier_tier": "junior",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"]
+                }]
+            }
+        });
+
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle, "junior", "implementation"),
+            Some("alias-a".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_alias_id_rejects_ambiguous_preferred_carrier_tier() {
+        let alias = |role_id: &str| {
+            serde_json::json!({
+                "role_id": role_id,
+                "carrier_tier": "junior",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"]
+            })
+        };
+        let bundle = serde_json::json!({
+            "carrier_runtime": {
+                "dispatch_aliases": [alias("alias-a"), alias("alias-b")]
+            }
+        });
+
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle, "junior", "implementation"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_alias_id_ignores_disabled_or_unresolved_tier_alias() {
+        let bundle = serde_json::json!({
+            "carrier_runtime": {
+                "dispatch_aliases": [{
+                    "role_id": "alias-disabled",
+                    "carrier_tier": "junior",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "enabled": false
+                }, {
+                    "role_id": "alias-unresolved",
+                    "carrier_tier": "junior",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "unresolved": true
+                }]
+            }
+        });
+
+        assert_eq!(
+            resolve_dispatch_alias_id(&bundle, "junior", "implementation"),
+            None
         );
     }
 
