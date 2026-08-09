@@ -34,13 +34,16 @@ function Invoke-Plan {
         [string]$RegistryPath = $ContractRegistryPath,
         [switch]$FullRescan,
         [string]$MutestCargoPath = "",
-        [string]$MutestNativeLibPath = ""
+        [string]$MutestNativeLibPath = "",
+        [string]$Package = "vida",
+        [string]$FilesCsv = ""
     )
-    $arguments = @("-NoProfile", "-File", $ScriptPath, "-PlanOnly", "-IncludeWorkingTree", "-Json", "-Packages", "vida")
+    $arguments = @("-NoProfile", "-File", $ScriptPath, "-PlanOnly", "-IncludeWorkingTree", "-Json", "-Packages", $Package)
     if (-not [string]::IsNullOrWhiteSpace($RegistryPath)) { $arguments += @("-RegistryPath", $RegistryPath) }
     if ($FullRescan) { $arguments += "-FullRescan" }
     if (-not [string]::IsNullOrWhiteSpace($MutestCargoPath)) { $arguments += @("-MutestCargoPath", $MutestCargoPath) }
     if (-not [string]::IsNullOrWhiteSpace($MutestNativeLibPath)) { $arguments += @("-MutestNativeLibPath", $MutestNativeLibPath) }
+    if (-not [string]::IsNullOrWhiteSpace($FilesCsv)) { $arguments += @("-Files", $FilesCsv) }
     $raw = & pwsh @arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "PlanOnly failed: $($raw -join ' ')" }
     return ($raw -join "`n" | ConvertFrom-Json)
@@ -173,6 +176,13 @@ Add-Case "automatic_launcher_environment_and_target_contract" {
     )) {
         Assert-True ($source.Contains($needle)) "missing automatic execution contract: $needle"
     }
+}
+
+Add-Case "csv_selector_contract" {
+    $plan = Invoke-Plan -Package "docflow-markdown" -FilesCsv "crates/docflow-markdown/src/lib.rs"
+    Assert-True ($plan.file_scan.candidate_files -eq 1) "CSV file selector did not produce one candidate"
+    Assert-True ($plan.commands[0].args -contains "--lib") "CSV file selector did not select --lib"
+    Assert-True ($plan.commands[0].args -contains "file:crates/docflow-markdown/src/lib.rs") "CSV file selector did not preserve the path"
 }
 
 Add-Case "defect_protocol_and_test_update_contract" {

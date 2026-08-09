@@ -82,6 +82,8 @@ Will implement / choose:
 - Emit one command-manifest entry per queued file with its exact
   `--filter-mutations file:<repo-relative-path>` selector; the canonical registry
   remains one deduplicated row per production file.
+- Accept comma-separated file/package selectors at the CLI boundary so batch waves
+  remain shell-safe across PowerShell child-process launches.
 - Parse the native mutest-rs `mutations.json`/`evaluation.json` schema before the
   generic recursive fallback so generated/evaluated/killed/survived/timeout and
   compile-error totals are not silently reported as zero.

@@ -43,6 +43,8 @@ $ErrorActionPreference = "Stop"
 $script:GitPath = $null
 $script:CargoPath = $null
 $script:RustupPath = $null
+$Files = @($Files | ForEach-Object { ([string]$_) -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$Packages = @($Packages | ForEach-Object { ([string]$_) -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
 function Write-Usage {
     @"
@@ -68,6 +70,7 @@ On Windows the script auto-discovers cargo-mutest.exe and the MSVC windows.lib
 directory. Use -MutestCargoPath or -MutestNativeLibPath only to override discovery.
 Workers use isolated writable TMP/TEMP directories and select --lib/--bin for
 standard production paths automatically.
+`-Files` and `-Packages` accept comma-separated values for shell-safe batch waves.
 "@
 }
 
@@ -469,6 +472,10 @@ function Convert-ToCanonicalFileRow {
     if (-not $record.Contains("wave_status")) { $record["wave_status"] = "idle" }
     if (-not $record.Contains("wave_updated_at")) { $record["wave_updated_at"] = $null }
     if (-not $record.Contains("wave_count")) { $record["wave_count"] = [int](Get-OptionalProperty $Row "scan_count" 0) }
+    if (-not $record.Contains("blocker_code")) { $record["blocker_code"] = $null }
+    if (-not $record.Contains("blocker_family")) { $record["blocker_family"] = $null }
+    if (-not $record.Contains("blocker_reason")) { $record["blocker_reason"] = $null }
+    if (-not $record.Contains("next_action")) { $record["next_action"] = $null }
     return [pscustomobject]$record
 }
 
@@ -588,6 +595,7 @@ function Get-FileRegistryPlan {
             hash = $hash; content_hash_sha256 = $hash; status = "queued"; queue_reason = $reason
             mutation_score = $null; mutation_score_ratio = $null; killed = 0; survived = 0; timeout = 0; no_coverage = 0
             compile_error = 0; defects = @(); recommendations = @(); needs_tests = $false; needs_rerun = $true; needs_rescan = $false
+            blocker_code = $null; blocker_family = $null; blocker_reason = $null; next_action = $null
             last_scan_hash = Get-OptionalProperty $old "last_scan_hash"; last_scan_run_id = Get-OptionalProperty $old "last_scan_run_id"
             snapshot_index_tree = $SnapshotTree; config_hash = $ConfigHash; resume_source = "queued"; scan_count = if ((Get-OptionalProperty $old "scan_count" 0)) { [int](Get-OptionalProperty $old "scan_count" 0) } else { 0 }
             last_wave_id = Get-OptionalProperty $old "last_wave_id"; wave_status = "queued"; wave_updated_at = [DateTime]::UtcNow.ToString("o"); wave_count = [int](Get-OptionalProperty $old "wave_count" 0)
@@ -845,7 +853,12 @@ function Complete-MutestWorker {
     $exitCode = -1
     try { if ($Worker.process.HasExited) { $exitCode = $Worker.process.ExitCode } } catch { }
     $stats = Get-MutestStats -MetadataPath $Worker.metadata_dir
-    $status = if ($Worker.timed_out) { "timeout" } elseif ($exitCode -eq 0 -or [int]$stats.evaluated -gt 0) { "completed" } else { "blocked" }
+    $stderrText = if (Test-Path -LiteralPath $Worker.stderr) { Get-Content -LiteralPath $Worker.stderr -Raw } else { "" }
+    $stdoutText = if (Test-Path -LiteralPath $Worker.stdout) { Get-Content -LiteralPath $Worker.stdout -Raw } else { "" }
+    $noEvidence = [int](Get-OptionalProperty $stats "metadata_files" 0) -eq 0 -and [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
+    $toolFailure = ($stderrText + "`n" + $stdoutText) -match '(?i)(compiler unexpectedly|internal compiler error|cannot find target|could not compile|error: aborting|panic)'
+    $status = if ($Worker.timed_out) { "timeout" } elseif ($noEvidence -and $toolFailure) { "blocked" } elseif ($exitCode -eq 0 -or [int]$stats.evaluated -gt 0) { "completed" } else { "blocked" }
+    $blocker = if ($status -eq "blocked") { Get-ExecutionBlocker -Text ($stderrText + "`n" + $stdoutText) } else { $null }
     $report = [ordered]@{
         package = $Worker.package; path = $Worker.path; wave_id = $Worker.wave_id; category = Get-PackageCategory $Worker.package; status = $status; exit_code = $exitCode; timed_out = [bool]$Worker.timed_out
         started_at = $Worker.started_at.ToString("o"); finished_at = [DateTime]::UtcNow.ToString("o")
@@ -853,6 +866,10 @@ function Complete-MutestWorker {
         target_dir = $Worker.target_dir; metadata_dir = $Worker.metadata_dir; temp_dir = $Worker.temp_dir
         stdout = $Worker.stdout; stderr = $Worker.stderr; command = $Worker.command; stats = $stats
         batch_size = $Worker.batch_size
+        blocker_code = if ($null -eq $blocker) { $null } else { $blocker.code }
+        blocker_family = if ($null -eq $blocker) { $null } else { $blocker.family }
+        blocker_reason = if ($null -eq $blocker) { $null } else { $blocker.reason }
+        next_action = if ($null -eq $blocker) { $null } else { $blocker.next_action }
         survivors = if ($stats.survived -gt 0) { @("$($Worker.path):$($stats.survived) survived mutant(s); inspect metadata under $($Worker.metadata_dir)") } else { @() }
     }
     Write-AtomicJson -Path (Join-Path $Worker.evidence_dir "package-report.json") -Value $report

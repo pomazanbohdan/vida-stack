@@ -24,7 +24,7 @@ cargo +nightly-2026-07-18 mutest run --package <pkg> --all-targets --locked
   --filter-mutations file:crates/<pkg>/src/<file>.rs
 ```
 
-The script records one command manifest entry per queued production file and a SHA-256 command hash. `-PlanOnly` persists a `manifest.json`, a `parallel-report.json` with `status=planned`, and a human-readable `parallel-report.md` under the run evidence root; it does not mutate the canonical registry, create workers, checkpoints, or event streams. `-Json` is accepted as an explicit machine-readable-output switch; JSON is the stable output format.
+The script records one command manifest entry per queued production file and a SHA-256 command hash. `-PlanOnly` persists a `manifest.json`, a `parallel-report.json` with `status=planned`, and a human-readable `parallel-report.md` under the run evidence root; it does not mutate the canonical registry, create workers, checkpoints, or event streams. `-Json` is accepted as an explicit machine-readable-output switch; JSON is the stable output format. `-Files` and `-Packages` accept comma-separated values, so child PowerShell waves do not require array syntax or positional-argument workarounds.
 
 On Windows, the script auto-discovers Git, Cargo, rustup, and `cargo-mutest.exe`.
 Git is resolved from PATH or standard Git installation paths; Cargo and rustup are
