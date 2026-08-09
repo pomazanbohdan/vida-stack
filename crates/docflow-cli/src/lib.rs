@@ -5783,7 +5783,8 @@ mod tests {
         Cli, activation_issue_for, activation_rows, check_rows, classify_bootstrap_routing_surface,
         fastcheck_rows, is_protocol_authoring_gate_subject, normalize_path_for_root,
         normalize_source_path_coordinate, protocol_compression_hash_content,
-        protocol_coverage_issue_for, protocol_coverage_rows, readiness_rows,
+        protocol_authoring_validation_issues, protocol_coverage_issue_for, protocol_coverage_rows,
+        readiness_rows,
         resolve_validation_scope, run, run_with_exit, sha256_hex, validation_coordinates,
     };
     use clap::Parser;
@@ -5829,7 +5830,7 @@ mod tests {
         .expect("sidecar");
         fs::write(
             root.join("docs/product/spec/current-spec-map.md"),
-            "docs/product/spec/synthetic-protocol.md\n",
+            "[docs/product/spec/synthetic-protocol.md](synthetic-protocol.md)\n",
         )
         .expect("spec map");
         root

@@ -1009,7 +1009,7 @@ fn proofcheck_unsupported_format_fails_closed_with_diagnostics() {
         .output()
         .expect("docflow proofcheck unsupported format should run");
 
-    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    assert!(!output.status.success(), "{}", context.diagnostics(&output));
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("proofcheck json should parse");
     assert_eq!(parsed["command"], "proofcheck");

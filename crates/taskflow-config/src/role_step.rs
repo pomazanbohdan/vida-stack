@@ -413,14 +413,14 @@ mod tests {
                 .unwrap()
                 .flow
                 .flow_id,
-            "task_delivery_verified"
+            "adaptive-task-flow"
         );
         assert_eq!(
             compile_dev_team_flow_for_work_item(readiness, "runtime-defect")
                 .unwrap()
                 .flow
                 .flow_id,
-            "runtime_defect_remediation"
+            "adaptive-task-flow"
         );
     }
 

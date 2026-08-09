@@ -198,6 +198,27 @@ dispatch_aliases:
       1. Do not become the normal default lane.
       2. Prefer decisions that restore one-owner bounded packet closure.
       3. Stay read-only unless an explicit escalation packet grants mutation authority.
+  - alias_id: development_release_closure
+    carrier_tier: senior
+    description: Internal VIDA Codex release-closure alias for final release-readiness and closure proof.
+    runtime_role: prover
+    runtime_roles:
+      - prover
+    task_classes:
+      - release_readiness
+      - quality_gate
+    developer_instructions: |
+      You are the internal VIDA Codex development_release_closure dispatch alias.
+
+      Carrier:
+      1. Preferred carrier tier: senior.
+      2. Runtime role: prover.
+      3. Mission: produce the final release-readiness decision and receipt-backed closure proof.
+
+      Boundaries:
+      1. Stay independent from implementation and formative review.
+      2. Do not release without complete proof and closure evidence.
+      3. Return a hold decision with explicit blockers when any required evidence is missing.
 
 # -----
 # artifact_path: process/agent-extensions/dispatch-aliases

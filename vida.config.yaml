@@ -1165,7 +1165,7 @@ dev_team:
             required_outputs: [implementation_plan, architecture_decisions, explicit_blockers]
           next_node: release_closure
         - role_id: release_closure
-          dispatch_alias: development_verifier
+          dispatch_alias: development_release_closure
           task_class: release_readiness
           inclusion_rule: always
           required: true

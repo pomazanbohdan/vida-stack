@@ -1450,16 +1450,14 @@ fn approval_policy_catalog(
     field: &'static str,
     node: &str,
 ) -> Result<BTreeSet<String>, TeamFlowSnapshotError> {
-    let values = config
-        .get("authority_catalog")
-        .and_then(Value::as_object)
-        .or_else(|| {
-            config
-                .get("dev_team")
-                .and_then(Value::as_object)
-                .and_then(|dev_team| dev_team.get("authority_catalog"))
-                .and_then(Value::as_object)
-        })
+    let values = match config.get("authority_catalog").and_then(Value::as_object) {
+        Some(catalog) => Some(catalog),
+        None => config
+            .get("dev_team")
+            .and_then(Value::as_object)
+            .and_then(|dev_team| dev_team.get("authority_catalog"))
+            .and_then(Value::as_object),
+    }
         .and_then(|catalog| catalog.get(field))
         .and_then(Value::as_array)
         .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
@@ -3337,10 +3335,12 @@ mod tests {
             .expect("snapshot should roundtrip");
             assert_eq!(roundtrip, snapshot, "{label}");
 
+            let mut current_receipt = receipt(&snapshot, "node-a", "pass");
+            current_receipt.evidence = vec!["proof-node-a".to_string()];
             let verdict = admit_transition(
                 &snapshot,
                 "node-a",
-                Some(&receipt(&snapshot, "node-a", "pass")),
+                Some(&current_receipt),
                 "node-c",
             );
             assert!(verdict.allowed, "{label}: {verdict:?}");
