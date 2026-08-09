@@ -26,14 +26,15 @@ cargo +nightly-2026-07-18 mutest run --package <pkg> --all-targets --locked
 
 The script records one command manifest entry per queued production file and a SHA-256 command hash. `-PlanOnly` persists a `manifest.json`, a `parallel-report.json` with `status=planned`, and a human-readable `parallel-report.md` under the run evidence root; it does not mutate the canonical registry, create workers, checkpoints, or event streams. `-Json` is accepted as an explicit machine-readable-output switch; JSON is the stable output format. `-Files` and `-Packages` accept comma-separated values, so child PowerShell waves do not require array syntax or positional-argument workarounds.
 
-On Windows, the script auto-discovers Git, Cargo, rustup, and `cargo-mutest.exe`.
+On Windows, the script auto-discovers Git, Cargo, and rustup.
 Git is resolved from PATH or standard Git installation paths; Cargo and rustup are
-resolved from PATH or the user Cargo bin directory. `cargo-mutest.exe` is resolved from the project
-`.vida` path, the sibling `mutest-rs\target\release`/`debug` paths, or the user
-Cargo bin directory. `-MutestCargoPath <cargo-mutest.exe>` remains an explicit
-override. The launcher runs `rustup run <nightly> <cargo-mutest.exe> ...` and
-records the selected path and source (`auto`/`explicit`/`cargo-subcommand`) in
-the manifest/config hash. `-MutestNativeLibPath <directory>` remains an optional
+resolved from PATH or the user Cargo bin directory. By default, mutest is invoked as
+a Cargo subcommand; the script does not auto-load a direct executable from the
+repository or a sibling build directory. `-MutestCargoPath <cargo-mutest.exe>` is
+an explicit operator override. For that override, the launcher runs
+`rustup run <nightly> <cargo-mutest.exe> ...` and records the selected path and
+source (`explicit`/`cargo-subcommand`) in the manifest/config hash.
+`-MutestNativeLibPath <directory>` remains an optional
 override; otherwise the script locates the MSVC `windows.lib` directory. Every
 worker receives an isolated writable `TMP`/`TEMP` directory, so MSVC linker
 temporary files never fall back to `C:\WINDOWS`. For `src/lib.rs` and `src/bin/*`

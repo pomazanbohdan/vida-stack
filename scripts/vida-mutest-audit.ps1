@@ -73,8 +73,9 @@ Files at or below the threshold are recorded as needs_tests; a file is green onl
 mutation_score_percent > threshold_percent (default: > 90%). To run a controlled test-update hook,
 pass -AutoUpdateTests -TestUpdateCommand with {file} and {package} placeholders.
 
-On Windows the script auto-discovers cargo-mutest.exe and the MSVC windows.lib
-directory. Use -MutestCargoPath or -MutestNativeLibPath only to override discovery.
+On Windows the script auto-discovers the MSVC windows.lib directory. By default,
+mutest is resolved as a Cargo subcommand; use -MutestCargoPath only to select a
+direct executable explicitly, or -MutestNativeLibPath to override library discovery.
 Workers use isolated writable TMP/TEMP directories and select --lib/--bin for
 standard production paths automatically.
 `-Files` and `-Packages` accept comma-separated values for shell-safe batch waves.
@@ -193,19 +194,6 @@ function Resolve-MutestCargoPath {
             throw "MutestCargoPath does not exist: $resolved"
         }
         return [pscustomobject]@{ path = $resolved; source = "explicit" }
-    }
-    $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-    $candidates = @(
-        (Join-Path $RepoRoot ".vida\tmp\mutest-rs-pathfix-bin\cargo-mutest.exe"),
-        (Join-Path (Split-Path -Parent $RepoRoot) "mutest-rs\target\release\cargo-mutest.exe"),
-        (Join-Path (Split-Path -Parent $RepoRoot) "mutest-rs\target\debug\cargo-mutest.exe")
-    )
-    if (-not [string]::IsNullOrWhiteSpace($userProfile)) { $candidates += Join-Path $userProfile ".cargo\bin\cargo-mutest.exe" }
-    $candidates = @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return [pscustomobject]@{ path = [System.IO.Path]::GetFullPath($candidate); source = "auto" }
-        }
     }
     return [pscustomobject]@{ path = $null; source = "cargo-subcommand" }
 }
