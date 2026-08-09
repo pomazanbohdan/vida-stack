@@ -146,6 +146,8 @@ Add-Case "per_file_loc_and_hash_refresh_contract" {
     foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
         Assert-True ($source.Contains($needle)) "missing LOC/index-refresh contract: $needle"
     }
+    Assert-True ($source.Contains("[System.IO.StreamReader]::new")) "LOC metrics do not stream source files"
+    Assert-True (-not $source.Contains("[System.IO.File]::ReadAllLines")) "LOC metrics read entire source files into memory"
     $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-loc-contract-" + [guid]::NewGuid().ToString("N") + ".json")
     $first = Invoke-IndexRefresh -RegistryPath $registry
     Assert-True ($first.status -eq "index_refreshed") "index refresh did not return index_refreshed"

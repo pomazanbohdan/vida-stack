@@ -402,9 +402,17 @@ function Get-FileLineMetrics {
     if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
         return [ordered]@{ loc = 0; loc_total = 0 }
     }
-    $lines = @([System.IO.File]::ReadAllLines($absolute))
-    $nonEmpty = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    return [ordered]@{ loc = [int]$nonEmpty.Count; loc_total = [int]$lines.Count }
+    $loc = 0
+    $locTotal = 0
+    $reader = [System.IO.StreamReader]::new($absolute)
+    try {
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $locTotal++
+            if (-not [string]::IsNullOrWhiteSpace($line)) { $loc++ }
+        }
+    }
+    finally { $reader.Dispose() }
+    return [ordered]@{ loc = [int]$loc; loc_total = [int]$locTotal }
 }
 
 function Get-PackageForFile {
