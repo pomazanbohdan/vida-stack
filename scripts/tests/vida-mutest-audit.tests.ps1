@@ -141,6 +141,28 @@ Add-Case "controlled_file_diff_registry_contract" {
     Assert-True ($third.file_scan.queued_files -eq $third.file_scan.candidate_files) "FullRescan did not queue every candidate file"
 }
 
+Add-Case "committed_registry_uses_string_compact_references" {
+    $registryPath = Join-Path (Get-Location) ".vida/evidence/mutest-audit/file-registry.json"
+    $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+
+    foreach ($name in @("needs_tests", "needs_rerun", "needs_rescan")) {
+        foreach ($reference in @($registry.$name)) {
+            Assert-True ($reference -is [string]) "committed registry $name contains a non-string reference"
+        }
+    }
+
+    foreach ($row in @($registry.files)) {
+        foreach ($defect in @($row.defects)) {
+            foreach ($name in @("evidence", "evidence_refs")) {
+                if ($null -eq $defect.PSObject.Properties[$name]) { continue }
+                foreach ($reference in @($defect.$name)) {
+                    Assert-True ($reference -is [string]) "committed defect $name contains a non-string reference for $($row.path)"
+                }
+            }
+        }
+    }
+}
+
 Add-Case "per_file_loc_and_hash_refresh_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
