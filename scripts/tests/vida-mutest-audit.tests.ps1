@@ -148,6 +148,26 @@ Add-Case "test_update_hook_binds_placeholder_values_as_arguments" {
     Assert-True ($source.Contains('$command, [string]$FileRecord.path, [string]$FileRecord.package')) "placeholder values are not passed as separate process arguments"
     Assert-True (-not $source.Contains(".Replace('{file}', [string]`$FileRecord.path)")) "file placeholder is still interpolated as raw PowerShell source"
     Assert-True (-not $source.Contains(".Replace('{package}', [string]`$FileRecord.package)")) "package placeholder is still interpolated as raw PowerShell source"
+Add-Case "committed_registry_uses_string_compact_references" {
+    $registryPath = Join-Path (Get-Location) ".vida/evidence/mutest-audit/file-registry.json"
+    $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+
+    foreach ($name in @("needs_tests", "needs_rerun", "needs_rescan")) {
+        foreach ($reference in @($registry.$name)) {
+            Assert-True ($reference -is [string]) "committed registry $name contains a non-string reference"
+        }
+    }
+
+    foreach ($row in @($registry.files)) {
+        foreach ($defect in @($row.defects)) {
+            foreach ($name in @("evidence", "evidence_refs")) {
+                if ($null -eq $defect.PSObject.Properties[$name]) { continue }
+                foreach ($reference in @($defect.$name)) {
+                    Assert-True ($reference -is [string]) "committed defect $name contains a non-string reference for $($row.path)"
+                }
+            }
+        }
+    }
 }
 
 Add-Case "per_file_loc_and_hash_refresh_contract" {
