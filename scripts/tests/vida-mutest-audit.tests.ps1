@@ -192,6 +192,43 @@ Add-Case "single_index_wave_orchestrator_contract" {
     }
 }
 
+Add-Case "thin_index_compacts_duplicate_defects" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    foreach ($needle in @("Get-ThinDefects", "latest_wave_unique", "evidence_refs_max", 'history_path = "defects.jsonl"')) {
+        Assert-True ($source.Contains($needle)) "missing thin-index contract: $needle"
+    }
+    $registry = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-thin-index-" + [guid]::NewGuid().ToString("N") + ".json")
+    $path = "crates/docflow-markdown/src/lib.rs"
+    $defect = [ordered]@{
+        defect_id = "old-id"; type = "mutation_compiler_error"; blocker_code = "mutest_driver_target_metadata"; blocker_family = "mutest_tool"
+        blocker_reason = "target metadata mismatch"; path = $path; package = "docflow-markdown"; wave_id = "wave-mutest-20260809-000001-aaaa"
+        evidence = @("a", "b", "c", "d", "e"); recommendation = "rerun"
+    }
+    $duplicate = [ordered]@{}
+    foreach ($key in $defect.Keys) { $duplicate[$key] = $defect[$key] }
+    $duplicate.defect_id = "duplicate-id"
+    $seed = [ordered]@{
+        schema_version = 3; index_role = "mutation_wave_orchestrator"; registry_revision = 1; run_id = "seed-run"; last_wave_id = $defect.wave_id
+        waves = @([ordered]@{ wave_id = $defect.wave_id; status = "blocked" }); files = @([ordered]@{
+            path = $path; package = "docflow-markdown"; hash = ("0" * 64); content_hash_sha256 = ("0" * 64); status = "blocked"
+            updated_at = "2026-08-09T00:00:00Z"; last_wave_id = $defect.wave_id; defects = @($defect, $duplicate)
+            needs_tests = $false; needs_rerun = $true; needs_rescan = $false
+        })
+    }
+    $seed | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $registry -Encoding UTF8
+    $result = Invoke-IndexRefresh -RegistryPath $registry -Package "docflow-markdown" -FilesCsv $path
+    Assert-True ($result.status -eq "index_refreshed") "thin-index refresh failed"
+    $compact = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
+    $row = @($compact.files | Where-Object { $_.path -eq $path })[0]
+    Assert-True (@($row.defects).Count -eq 1) "duplicate defect summaries were not compacted"
+    Assert-True (@($row.defects[0].evidence).Count -le 4) "evidence references exceeded thin-index limit"
+    Assert-True ($compact.index_compaction.mode -eq "latest_wave_unique") "index compaction policy missing"
+    $raw = Get-Content -LiteralPath $registry -Raw
+    Assert-True (-not $raw.Contains('"SyncRoot"')) "dictionary adapter properties leaked into the index"
+    Assert-True (-not $raw.Contains('"Values"')) "dictionary Values adapter leaked into the index"
+    Assert-True ((Get-Item -LiteralPath $registry).Length -lt 20000) "thin index exceeded compact fixture size"
+}
+
 Add-Case "plan_only_preserves_canonical_index" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     Assert-True ($source.Contains('if ($PlanOnly)')) "PlanOnly branch is missing"

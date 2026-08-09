@@ -65,7 +65,9 @@ The default run is a Git-snapshot diff scan. A compatible completed file record 
 resumed by SHA-256 content hash; -FullRescan explicitly invalidates all file records.
 Use -RefreshIndex to update the canonical file index with per-file LOC/hash metrics
 without starting mutation workers; this preserves existing wave results and flags
-content drift for the next mutation wave.
+content drift for the next mutation wave. The index is intentionally thin: each row
+retains only the latest-wave unique defect summaries; full defect history remains in
+defects.jsonl and worker evidence artifacts.
 Files at or below the threshold are recorded as needs_tests; a file is green only when
 mutation_score_percent > threshold_percent (default: > 90%). To run a controlled test-update hook,
 pass -AutoUpdateTests -TestUpdateCommand with {file} and {package} placeholders.
@@ -476,16 +478,72 @@ function Get-OptionalProperty {
     return $property.Value
 }
 
+function Convert-ToThinDefect {
+    param([object]$Defect)
+    if ($null -eq $Defect) { return $null }
+    $record = [ordered]@{}
+    foreach ($name in @(
+        "defect_id", "type", "blocker_code", "blocker_family", "blocker_reason", "path", "package", "wave_id",
+        "score_percent", "killed", "survived", "no_coverage", "recommendation"
+    )) {
+        $value = Get-OptionalProperty -Object $Defect -Name $name
+        if ($null -ne $value) { $record[$name] = $value }
+    }
+    $evidence = @(Get-OptionalProperty -Object $Defect -Name "evidence" @() | ForEach-Object {
+        if (-not [string]::IsNullOrWhiteSpace([string]$_)) { [string]$_ }
+    } | Select-Object -Last 4)
+    if ($evidence.Count -gt 0) { $record.evidence = $evidence }
+    if (-not $record.Contains("path") -or -not $record.Contains("type")) { return $null }
+    return [pscustomobject]$record
+}
+
+function Get-ThinDefects {
+    param([object[]]$Defects, [string]$LatestWaveId = "")
+    $source = @($Defects | Where-Object { $null -ne $_ })
+    if ($source.Count -eq 0) { return @() }
+    if (-not [string]::IsNullOrWhiteSpace($LatestWaveId)) {
+        $latest = @($source | Where-Object { [string](Get-OptionalProperty $_ "wave_id" "") -eq $LatestWaveId })
+        if ($latest.Count -gt 0) { $source = $latest }
+    }
+    $unique = @{}
+    foreach ($defect in $source) {
+        $compact = Convert-ToThinDefect -Defect $defect
+        if ($null -eq $compact) { continue }
+        $key = @(
+            [string](Get-OptionalProperty $compact "path" ""),
+            [string](Get-OptionalProperty $compact "type" ""),
+            [string](Get-OptionalProperty $compact "blocker_code" ""),
+            [string](Get-OptionalProperty $compact "wave_id" "")
+        ) -join "|"
+        if (-not $unique.ContainsKey($key)) { $unique[$key] = $compact }
+    }
+    return @($unique.Values | Sort-Object @{ Expression = { [string](Get-OptionalProperty $_ "path" "") } }, @{ Expression = { [string](Get-OptionalProperty $_ "type" "") } })
+}
+
 function Convert-ToOrderedRecord {
     param([object]$Object)
     $record = [ordered]@{}
-    if ($null -eq $Object) { return $record }
+    $adapterProperties = @("Count", "IsReadOnly", "Keys", "Values", "SyncRoot", "IsFixedSize", "IsSynchronized")
+    if ($null -eq $Object) { $Object = @{} }
     if ($Object -is [System.Collections.IDictionary]) {
-        foreach ($key in $Object.Keys) { $record[[string]$key] = $Object[$key] }
-        return $record
+        foreach ($key in $Object.Keys) {
+            if ($adapterProperties -contains [string]$key) { continue }
+            $record[[string]$key] = $Object[$key]
+        }
+    } else {
+        foreach ($property in $Object.PSObject.Properties) {
+            if ($adapterProperties -contains $property.Name) { continue }
+            $record[$property.Name] = $property.Value
+        }
     }
-    foreach ($property in $Object.PSObject.Properties) { $record[$property.Name] = $property.Value }
-    return $record
+    foreach ($name in @(
+        "schema_version", "index_role", "index_compaction", "registry_revision", "updated_at", "repo_root", "run_id", "last_wave_id",
+        "snapshot_mode", "snapshot_index_tree", "config_hash", "threshold_percent", "full_rescan", "diff_scan", "waves", "files",
+        "needs_tests", "needs_rerun", "needs_rescan", "loc_policy", "index_refresh", "last_scan_run_id", "defect_protocol_path", "summary"
+    )) {
+        if (-not $record.Contains($name)) { $record[$name] = $null }
+    }
+    return [pscustomobject]$record
 }
 
 function Get-WaveSortValue {
@@ -517,6 +575,7 @@ function Convert-ToCanonicalFileRow {
     if (-not $record.Contains("loc")) { $record["loc"] = $null }
     if (-not $record.Contains("loc_total")) { $record["loc_total"] = $null }
     if (-not $record.Contains("loc_hash")) { $record["loc_hash"] = $null }
+    $record.defects = @(Get-ThinDefects -Defects (Get-OptionalProperty $record "defects" @()) -LatestWaveId ([string]$record.last_wave_id))
     return [pscustomobject]$record
 }
 
@@ -545,6 +604,7 @@ function New-MutationRegistry {
         updated_at = $null; repo_root = $RepoRoot; run_id = $null; last_wave_id = $null
         snapshot_mode = $null; snapshot_index_tree = $null; config_hash = $null; threshold_percent = $Threshold
         full_rescan = $false; diff_scan = [ordered]@{ candidates = 0; queued = 0; resumed = 0; deleted = 0; queue_policy = "new_or_hash_changed_or_pending_flags" }
+        index_compaction = [ordered]@{ mode = "latest_wave_unique"; evidence_refs_max = 4; history_path = "defects.jsonl" }
         waves = @(); files = @(); needs_tests = @(); needs_rerun = @(); needs_rescan = @()
     }
 }
@@ -619,7 +679,11 @@ function Read-FileRegistry {
     try {
         $value = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
         $registry = New-MutationRegistry
-        foreach ($property in $value.PSObject.Properties) { $registry[$property.Name] = $property.Value }
+        $adapterProperties = @("Count", "IsReadOnly", "Keys", "Values", "SyncRoot", "IsFixedSize", "IsSynchronized")
+        foreach ($property in $value.PSObject.Properties) {
+            if ($adapterProperties -contains $property.Name) { continue }
+            $registry[$property.Name] = $property.Value
+        }
         $registry.schema_version = 3
         $registry.index_role = "mutation_wave_orchestrator"
         $registry.registry_revision = [int](Get-OptionalProperty $value "registry_revision" 0)
@@ -664,9 +728,11 @@ function Get-InferredRegistryWaves {
 
 function Write-CanonicalRegistry {
     param([object]$Registry, [string]$Path)
+    if ($Registry -is [System.Collections.IDictionary]) { $Registry = Convert-ToOrderedRecord -Object $Registry }
     $Registry.files = @(Get-UniqueFileRows -Rows @($Registry.files))
     $Registry.schema_version = 3
     $Registry.index_role = "mutation_wave_orchestrator"
+    $Registry.index_compaction = [ordered]@{ mode = "latest_wave_unique"; evidence_refs_max = 4; history_path = "defects.jsonl" }
     $Registry.registry_revision = [int](Get-OptionalProperty $Registry "registry_revision" 0) + 1
     $Registry.updated_at = [DateTime]::UtcNow.ToString("o")
     $Registry.needs_tests = @($Registry.files | Where-Object { $_.needs_tests } | ForEach-Object { $_.path })
@@ -836,12 +902,38 @@ function Get-IgnoredTests {
     return $ignored.ToArray()
 }
 
+function Convert-ToJsonSafeValue {
+    param([object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $record = [ordered]@{}
+        $adapterProperties = @("Count", "IsReadOnly", "Keys", "Values", "SyncRoot", "IsFixedSize", "IsSynchronized")
+        foreach ($key in $Value.Keys) {
+            if ($adapterProperties -contains [string]$key) { continue }
+            $record[[string]$key] = Convert-ToJsonSafeValue -Value $Value[$key]
+        }
+        return [pscustomobject]$record
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        return @($Value | ForEach-Object { Convert-ToJsonSafeValue -Value $_ })
+    }
+    if ($Value -is [pscustomobject]) {
+        $record = [ordered]@{}
+        foreach ($property in $Value.PSObject.Properties) {
+            if ($property.Name -in @("Count", "IsReadOnly", "Keys", "Values", "SyncRoot", "IsFixedSize", "IsSynchronized")) { continue }
+            $record[$property.Name] = Convert-ToJsonSafeValue -Value $property.Value
+        }
+        return [pscustomobject]$record
+    }
+    return $Value
+}
+
 function Write-AtomicJson {
     param([string]$Path, [object]$Value)
     $parent = Split-Path -Parent $Path
     [void](New-Item -ItemType Directory -Force -Path $parent)
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    $Value | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $temp -Encoding UTF8
+    (Convert-ToJsonSafeValue -Value $Value) | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $temp -Encoding UTF8
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
 
@@ -1411,12 +1503,12 @@ foreach ($fileRecord in @($FilePlan.files | Where-Object { $_.resume_source -ne 
         $fileRecord.blocker_reason = if ($fileReport.timed_out) { "worker deadline exceeded" } else { $blocker.reason }
         $fileRecord.next_action = if ($fileReport.timed_out) { "inspect process-tree evidence and rerun the file" } else { $blocker.next_action }
         $defectRecord = [ordered]@{ defect_id = [guid]::NewGuid().ToString("N"); type = if ($fileReport.timed_out) { "mutation_timeout" } elseif ($compilerError) { "mutation_compiler_error" } else { "mutation_no_evidence" }; blocker_code = $fileRecord.blocker_code; blocker_family = $fileRecord.blocker_family; blocker_reason = $fileRecord.blocker_reason; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; evidence = @($fileReport.stderr, $fileReport.stdout); recommendation = $fileRecord.next_action }
-        $fileRecord.defects = @($fileRecord.defects) + $defectRecord; [void]$Defects.Add($defectRecord)
+        $fileRecord.defects = @(Get-ThinDefects -Defects (@($fileRecord.defects) + @($defectRecord)) -LatestWaveId $WaveId); [void]$Defects.Add($defectRecord)
     } elseif ($lowCoverage) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true; $fileRecord.needs_rerun = $false; $fileRecord.needs_rescan = $false
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
         $defectRecord = [ordered]@{ defect_id = [guid]::NewGuid().ToString("N"); type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
-        $fileRecord.defects = @($fileRecord.defects) + $defectRecord; [void]$Defects.Add($defectRecord)
+        $fileRecord.defects = @(Get-ThinDefects -Defects (@($fileRecord.defects) + @($defectRecord)) -LatestWaveId $WaveId); [void]$Defects.Add($defectRecord)
         $update = Invoke-TestUpdateHook -FileRecord $fileRecord -RunEvidenceRoot $RunEvidenceRoot -EventPath $EventPath
         $fileRecord.test_update_status = $update.status
         if ($update.status -eq "completed") {
