@@ -788,8 +788,10 @@ function Invoke-TestUpdateHook {
     $safe = Convert-ToSafeName ([string]$FileRecord.path)
     $evidence = Join-Path $RunEvidenceRoot "test-updates\$safe"
     [void](New-Item -ItemType Directory -Force -Path $evidence)
-    $command = $TestUpdateCommand.Replace('{file}', [string]$FileRecord.path).Replace('{package}', [string]$FileRecord.package)
-    $result = Invoke-Captured -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
+    # Keep repository-controlled values out of PowerShell source. Values supplied after
+    # -Command are exposed through $args and cannot introduce additional statements.
+    $command = $TestUpdateCommand.Replace('{file}', '$args[0]').Replace('{package}', '$args[1]')
+    $result = Invoke-Captured -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command, [string]$FileRecord.path, [string]$FileRecord.package)
     $result | Select-Object ExitCode, Stdout, Stderr | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidence "result.json") -Encoding UTF8
     $status = if ($result.ExitCode -eq 0) { "completed" } else { "blocked" }
     $payload = [ordered]@{ path = $FileRecord.path; package = $FileRecord.package; status = $status; command = $command; exit_code = $result.ExitCode; evidence = $evidence }

@@ -141,6 +141,15 @@ Add-Case "controlled_file_diff_registry_contract" {
     Assert-True ($third.file_scan.queued_files -eq $third.file_scan.candidate_files) "FullRescan did not queue every candidate file"
 }
 
+Add-Case "test_update_hook_binds_placeholder_values_as_arguments" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains(".Replace('{file}', '`$args[0]')")) "file placeholder is not bound through a positional argument"
+    Assert-True ($source.Contains(".Replace('{package}', '`$args[1]')")) "package placeholder is not bound through a positional argument"
+    Assert-True ($source.Contains('$command, [string]$FileRecord.path, [string]$FileRecord.package')) "placeholder values are not passed as separate process arguments"
+    Assert-True (-not $source.Contains(".Replace('{file}', [string]`$FileRecord.path)")) "file placeholder is still interpolated as raw PowerShell source"
+    Assert-True (-not $source.Contains(".Replace('{package}', [string]`$FileRecord.package)")) "package placeholder is still interpolated as raw PowerShell source"
+}
+
 Add-Case "per_file_loc_and_hash_refresh_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
