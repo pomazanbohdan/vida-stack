@@ -36,3 +36,4 @@ projects/vida-mobile/
 .worktrees/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+/rustc-ice-*.txt
