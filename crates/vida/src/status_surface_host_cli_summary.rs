@@ -139,4 +139,22 @@ carriers:
         assert_eq!(carriers["senior"]["feedback_count"], 0);
         assert!(carriers["senior"]["last_feedback_at"].is_null());
     }
+
+    #[test]
+    fn host_cli_summary_uses_catalog_mode_when_materialization_is_blank() {
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+materialization_mode: "   "
+carriers:
+  worker:
+    tier: 1
+"#,
+        )
+        .expect("carrier fixture parses");
+
+        let summary = host_cli_system_entry_summary(Some(&entry), "codex");
+
+        assert_eq!(summary["materialization_mode"], "codex_toml_catalog_render");
+        assert_eq!(summary["carriers"]["worker"]["tier"], 1);
+    }
 }

@@ -115,4 +115,20 @@ mod tests {
             ".alpha"
         );
     }
+
+    #[test]
+    fn placeholder_selected_system_falls_back_to_enabled_entry() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            "host_environment:\n  cli_system: __HOST_CLI_SYSTEM__\n  systems:\n    zeta:\n      enabled: false\n    alpha:\n      enabled: true\n      runtime_root: .vida/alpha\n",
+        )
+        .expect("host cli overlay should parse");
+
+        let (system, entry) = selected_host_cli_system_entry(&overlay);
+
+        assert_eq!(system, "alpha");
+        assert_eq!(
+            runtime_surface_for_selected_system(&system, entry.as_ref()),
+            ".vida/alpha"
+        );
+    }
 }

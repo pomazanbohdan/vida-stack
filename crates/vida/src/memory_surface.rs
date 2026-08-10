@@ -110,4 +110,26 @@ mod tests {
         assert_eq!(exit_code, std::process::ExitCode::from(1));
         assert!(!state_dir.exists());
     }
+
+    #[tokio::test]
+    async fn memory_surface_fails_closed_when_state_root_is_not_a_directory() {
+        let state_path = std::env::temp_dir().join(format!(
+            "vida-memory-surface-file-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        std::fs::write(&state_path, b"not a state root").expect("create invalid state root");
+
+        let exit_code = run_memory(MemoryArgs {
+            state_dir: Some(state_path.clone()),
+            render: RenderMode::Plain,
+        })
+        .await;
+
+        assert_eq!(exit_code, std::process::ExitCode::from(1));
+        std::fs::remove_file(state_path).expect("remove invalid state root");
+    }
 }

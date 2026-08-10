@@ -106,6 +106,16 @@ mod tests {
     }
 
     #[test]
+    fn contains_keywords_applies_boundaries_to_short_keywords() {
+        let keywords = ["go".to_string(), "a".to_string()];
+
+        assert_eq!(
+            contains_keywords("go, goto; area; a", &keywords),
+            vec!["go", "a"]
+        );
+    }
+
+    #[test]
     fn feature_delivery_terms_require_both_design_and_implementation_signals() {
         assert!(feature_delivery_design_terms("write the full code").is_empty());
         assert_eq!(

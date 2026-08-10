@@ -115,6 +115,21 @@ mod tests {
     }
 
     #[test]
+    fn write_line_escapes_embedded_newlines_without_extra_records() {
+        let value = json!({"message":"first\nsecond"});
+        let mut output = Vec::new();
+
+        write_line(&mut output, value.clone());
+
+        assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 1);
+        let rendered = std::str::from_utf8(&output).unwrap().trim_end();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
     fn fake_pi_entrypoint_preserves_zero_argument_binary_contract() {
         let entrypoint: fn() = main;
 

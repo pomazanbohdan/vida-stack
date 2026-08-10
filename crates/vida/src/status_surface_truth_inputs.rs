@@ -140,4 +140,17 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(state_root);
     }
+
+    #[test]
+    fn summary_only_accepts_forward_slash_final_snapshot_input() {
+        let state_root = temp_state_root("forward-slash-final");
+        let latest = "runtime-consumption/final-002.json";
+
+        let inputs = build_status_truth_inputs(&state_root, Some(latest), true);
+
+        assert_eq!(inputs.latest_final_snapshot_path.as_deref(), Some(latest));
+        assert!(inputs.latest_recorded_final_snapshot_path.is_none());
+
+        let _ = std::fs::remove_dir_all(state_root);
+    }
 }

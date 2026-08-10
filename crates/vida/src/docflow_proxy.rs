@@ -145,4 +145,12 @@ mod tests {
             ExitCode::from(2)
         );
     }
+
+    #[test]
+    fn docflow_proxy_renders_subcommand_help_successfully() {
+        assert_eq!(
+            run_docflow_proxy(proxy_args(&["overview", "--help"])),
+            ExitCode::SUCCESS
+        );
+    }
 }
