@@ -476,6 +476,22 @@ mod tests {
                 .map(|conflict| conflict.blocker_code.as_str()),
             Some(WORKER_CLAIM_CONFLICT_BLOCKER)
         );
+        assert_eq!(
+            conflict.conflict,
+            Some(WorkerClaimConflict {
+                run_id: "run-1".to_string(),
+                active_idempotency_key: "idem-1".to_string(),
+                attempted_idempotency_key: "idem-2".to_string(),
+                blocker_code: WORKER_CLAIM_CONFLICT_BLOCKER.to_string(),
+            })
+        );
+        assert_eq!(
+            conflict.trace,
+            vec![AutomationTraceEntry {
+                kind: "claim_conflict".to_string(),
+                detail: WORKER_CLAIM_CONFLICT_BLOCKER.to_string(),
+            }]
+        );
         assert!(runtime.state.completed_packets.is_empty());
     }
 
@@ -523,6 +539,17 @@ mod tests {
                 .trace
                 .iter()
                 .any(|entry| entry.kind == "policy_engine" && entry.detail == "cedar")
+        );
+        assert_eq!(
+            command.policy_ref,
+            "cedar://vida/taskflow/automation-workers/materialize-next-packet"
+        );
+        assert_eq!(
+            completed.trace,
+            vec![AutomationTraceEntry {
+                kind: "materialized_next_packet".to_string(),
+                detail: "durable packet materialization command accepted".to_string(),
+            }]
         );
 
         let replay = runtime.process_analyst_completion(request);
@@ -583,6 +610,13 @@ mod tests {
                 approval_kind: "taskflow_next_role_materialization".to_string(),
                 resume_action: "approve_then_materialize_next_packet".to_string(),
             })
+        );
+        assert_eq!(
+            approval.trace,
+            vec![AutomationTraceEntry {
+                kind: "approval_required".to_string(),
+                detail: "typed approval state blocks automatic materialization".to_string(),
+            }]
         );
         assert_eq!(
             approval
@@ -724,6 +758,14 @@ mod tests {
         let verdict = authorize_next_packet_materialization(&valid);
         assert!(verdict.allowed);
         assert_eq!(verdict.policy_engine, "cedar");
+        assert_eq!(
+            verdict.policy_ref,
+            "cedar://vida/taskflow/automation-workers/materialize-next-packet"
+        );
+        assert_eq!(
+            verdict.reason,
+            "analyst completion may materialize the developer packet"
+        );
 
         for (from_role, next_role, cedar_action) in [
             (
@@ -744,7 +786,14 @@ mod tests {
             };
             let verdict = authorize_next_packet_materialization(&request);
             assert!(!verdict.allowed, "unexpectedly allowed {request:?}");
-            assert!(verdict.reason.contains("does not satisfy"));
+            assert_eq!(
+                verdict.reason,
+                "request does not satisfy the Cedar transition policy projection"
+            );
+            assert_eq!(
+                verdict.policy_ref,
+                "cedar://vida/taskflow/automation-workers/materialize-next-packet"
+            );
         }
     }
 

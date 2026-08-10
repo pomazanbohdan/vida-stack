@@ -1564,6 +1564,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn redb_writeback_reports_each_ack_contract_mismatch_and_default_failure_reason() {
+        let dir = tempdir().expect("tempdir");
+        let journal_path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&journal_path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append effect");
+        let claimed = journal.claim_outbox_batch("effectum-worker-1", 1);
+        let outbox_id = claimed[0].outbox_id.clone();
+        let record = journal
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
+        let worker = EffectumOutboxWorker::new("vida.completion.record");
+        let base = worker.acknowledgement_command(
+            &OutboxJobSnapshot::from(&record),
+            EffectAckOutcome::Succeeded,
+        );
+        drop(journal);
+
+        let mut authority = base.clone();
+        authority.payload["authority"] = serde_json::json!("attacker");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &authority),
+            Err(RuntimeLocalJobError::WorkerAckAuthorityMismatch { authority })
+                if authority == "attacker"
+        ));
+
+        let mut runner = base.clone();
+        runner.payload["runner"] = serde_json::json!("attacker");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &runner),
+            Err(RuntimeLocalJobError::WorkerAckRunnerMismatch { runner })
+                if runner == "attacker"
+        ));
+
+        let mut operation = base.clone();
+        operation.payload["operation"] = serde_json::json!("attacker.operation");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &operation),
+            Err(RuntimeLocalJobError::WorkerAckOperationMismatch {
+                payload_operation,
+                command_operation
+            }) if payload_operation == "attacker.operation"
+                && command_operation == "vida.completion.record"
+        ));
+
+        let mut command_id = base.clone();
+        command_id.payload["command_id"] = serde_json::json!("job-ack:forged");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &command_id),
+            Err(RuntimeLocalJobError::WorkerAckCommandIdMismatch { outbox_id: ref id })
+                if id == &outbox_id.0
+        ));
+
+        let mut idempotency = base.clone();
+        idempotency.payload["idempotency_key"] = serde_json::json!("job-ack:forged");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &idempotency),
+            Err(RuntimeLocalJobError::WorkerAckIdempotencyKeyMismatch { outbox_id: ref id })
+                if id == &outbox_id.0
+        ));
+
+        let mut claim = base.clone();
+        claim.payload["claimed_by"] = serde_json::json!("attacker-worker");
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &claim),
+            Err(RuntimeLocalJobError::WorkerAckClaimMismatch {
+                ref claimed_by,
+                ref persisted_claim
+            }) if claimed_by == "attacker-worker" && persisted_claim == "effectum-worker-1"
+        ));
+
+        let mut unsupported = base.clone();
+        unsupported.payload["outcome"] = serde_json::json!({"status": "unknown"});
+        assert!(matches!(
+            apply_worker_command_to_redb(&journal_path, &unsupported),
+            Err(RuntimeLocalJobError::UnsupportedWorkerCommandOutcome { ref outcome })
+                if outcome == "unknown"
+        ));
+
+        let mut failed = base;
+        failed.payload["outcome"] = serde_json::json!({"status": "failed"});
+        apply_worker_command_to_redb(&journal_path, &failed)
+            .expect("failed ack without reason should use bounded default reason");
+        let reopened = RedbOperationalJournal::open(&journal_path).expect("reopen journal");
+        let persisted = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("read failed outbox")
+            .expect("failed outbox record");
+        assert_eq!(
+            persisted.state,
+            JournalOutboxState::Failed {
+                reason: "Effectum worker reported failure".to_string()
+            }
+        );
+        assert_eq!(
+            persisted.failure_reason.as_deref(),
+            Some("Effectum worker reported failure")
+        );
+    }
+
     #[tokio::test]
     async fn enqueue_terminal_job_reports_typed_variant() {
         let dir = tempdir().unwrap();

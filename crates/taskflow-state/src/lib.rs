@@ -929,7 +929,7 @@ mod tests {
         InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
         JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
         RunWorkflowJournalRepository, TaskStore, TaskflowStateError, run_workflow_snapshot_record,
-        verify_run_workflow_repository_conformance,
+        validate_run_workflow_snapshot_record, verify_run_workflow_repository_conformance,
         verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use taskflow_contracts::{
@@ -1295,6 +1295,38 @@ mod tests {
     }
 
     #[test]
+    fn operational_journal_claim_batch_skips_completed_rows_and_honors_limit() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(append_request(
+                0,
+                Vec::new(),
+                vec![effect("effect-1"), effect("effect-2")],
+            ))
+            .expect("append should pass");
+
+        let first = journal
+            .claim_outbox_batch("worker-1", 1)
+            .pop()
+            .expect("first pending effect should be claimed");
+        assert_eq!(first.outbox_id, VidaEventRef("outbox-1".to_string()));
+        journal
+            .mark_outbox_succeeded(&first.outbox_id)
+            .expect("first effect should complete");
+
+        let second = journal
+            .claim_outbox_batch("worker-2", 1)
+            .pop()
+            .expect("second pending effect should remain claimable");
+        assert_eq!(second.outbox_id, VidaEventRef("outbox-2".to_string()));
+        assert!(matches!(
+            second.state,
+            JournalOutboxState::Claimed { ref consumer_id } if consumer_id == "worker-2"
+        ));
+        assert!(journal.claim_outbox_batch("worker-3", 1).is_empty());
+    }
+
+    #[test]
     fn run_workflow_repository_appends_and_replays_from_journal() {
         let mut journal = InMemoryOperationalJournal::default();
 
@@ -1357,6 +1389,128 @@ mod tests {
             .expect_err("future snapshot schema must fail closed");
 
         assert!(matches!(error, TaskflowStateError::PayloadDecode(_)));
+    }
+
+    #[test]
+    fn run_workflow_snapshot_rejects_identity_version_and_hash_mismatches() {
+        let aggregate = RunWorkflowAggregate::from_snapshot(
+            "run-snapshot-contract",
+            "task-snapshot-contract",
+            RunWorkflowState::Active {
+                step: TaskRoleStep::developer(),
+            },
+            3,
+        );
+        let baseline = run_workflow_snapshot_record(&aggregate);
+        assert_eq!(
+            validate_run_workflow_snapshot_record(
+                &baseline,
+                "run-snapshot-contract",
+                "task-snapshot-contract"
+            )
+            .expect("baseline snapshot should validate")
+            .version,
+            3
+        );
+
+        let mut aggregate_id = baseline.clone();
+        aggregate_id.aggregate_id = VidaAggregateRef("run-attacker".to_string());
+        let mut stream_id = baseline.clone();
+        stream_id.stream_id = VidaStreamRef("run-workflow:other".to_string());
+        let mut payload_run = baseline.clone();
+        payload_run.payload["run_id"] = serde_json::json!("run-attacker");
+        let mut payload_task = baseline.clone();
+        payload_task.payload["task_id"] = serde_json::json!("task-attacker");
+        let mut payload_version = baseline.clone();
+        payload_version.payload["version"] = serde_json::json!(99);
+        let mut stream_version = baseline.clone();
+        stream_version.stream_version = VidaStreamVersion(99);
+        let mut replay_hash = baseline;
+        replay_hash.replay_hash = "forged-replay-hash".to_string();
+
+        for (label, snapshot) in [
+            ("aggregate identity", aggregate_id),
+            ("stream identity", stream_id),
+            ("payload run identity", payload_run),
+            ("payload task identity", payload_task),
+            ("payload version", payload_version),
+            ("stream version", stream_version),
+            ("replay hash", replay_hash),
+        ] {
+            let error = validate_run_workflow_snapshot_record(
+                &snapshot,
+                "run-snapshot-contract",
+                "task-snapshot-contract",
+            )
+            .expect_err("forged snapshot must fail closed");
+            assert!(
+                matches!(error, TaskflowStateError::PayloadDecode(_)),
+                "{label} should produce payload decode, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_workflow_repository_append_preserves_event_and_effect_metadata() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let mut aggregate = RunWorkflowAggregate::new("run-envelope", "task-envelope");
+        let before = aggregate.clone();
+        let event = aggregate.handle(RunWorkflowCommand::Start {
+            first_step: TaskRoleStep::planning(),
+        });
+        let receipt = RunWorkflowJournalRepository::new(&mut journal)
+            .append(&before, event)
+            .expect("run workflow append should pass");
+
+        assert_eq!(
+            receipt.stream_id,
+            VidaStreamRef("run-workflow:run-envelope".to_string())
+        );
+        assert_eq!(receipt.stream_version, VidaStreamVersion(1));
+        assert_eq!(receipt.event_count, 1);
+        assert_eq!(receipt.effect_intent_count, 2);
+
+        let persisted =
+            journal.load_stream(&VidaStreamRef("run-workflow:run-envelope".to_string()));
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0].schema_id,
+            VidaSchemaId("taskflow.run_workflow.event".to_string())
+        );
+        assert_eq!(persisted[0].event_version, VidaSchemaVersion(1));
+        assert_eq!(persisted[0].stream_version, VidaStreamVersion(1));
+        assert_eq!(
+            persisted[0].aggregate_id,
+            VidaAggregateRef("run-envelope".to_string())
+        );
+        assert_eq!(
+            persisted[0].command_id,
+            Some(VidaCommandRef("run-workflow:run-envelope:1".to_string()))
+        );
+        assert_eq!(persisted[0].causation_id, None);
+        assert_eq!(persisted[0].trace["task_id"], "task-envelope");
+        assert!(
+            !persisted[0].trace["snapshot_hash"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+
+        let effects = journal.claim_outbox_batch("worker-envelope", 10);
+        assert_eq!(effects.len(), 2);
+        assert_eq!(
+            effects[0].effect.command_id.0,
+            "run-workflow:run-envelope:1"
+        );
+        assert_eq!(effects[0].effect.stream_id.0, "run-workflow:run-envelope");
+        assert_eq!(effects[0].effect.payload["stream_version"], 1);
+        assert!(
+            effects[0]
+                .effect
+                .operation
+                .0
+                .starts_with("taskflow.run_workflow.effect.")
+        );
     }
 
     #[test]
