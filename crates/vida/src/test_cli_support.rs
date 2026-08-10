@@ -123,3 +123,49 @@ pub(crate) fn canonical_team_flow_test_project_root(root: &Path) {
     )
     .expect("write canonical project config");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{EnvVarGuard, cli, guard_current_dir};
+    use std::path::PathBuf;
+
+    #[test]
+    fn cli_prepends_binary_name_and_parses_empty_or_status_commands() {
+        assert!(cli(&[]).command.is_none());
+        assert!(matches!(
+            cli(&["status"]).command,
+            Some(crate::Command::Status(_))
+        ));
+    }
+
+    #[test]
+    fn env_var_guard_restores_original_value_after_override() {
+        const KEY: &str = "VIDA_TEST_CLI_SUPPORT_RESTORE";
+        let _ = std::env::var_os(KEY).map(|_| std::env::remove_var(KEY));
+
+        {
+            let _guard = EnvVarGuard::set(KEY, "inside");
+            assert_eq!(std::env::var(KEY).as_deref(), Ok("inside"));
+        }
+
+        assert!(std::env::var_os(KEY).is_none());
+    }
+
+    #[test]
+    fn current_dir_guard_restores_directory_after_scoped_change() {
+        let original = std::env::current_dir().expect("current dir should resolve");
+        let target = std::env::temp_dir().join(format!(
+            "vida-test-cli-support-current-dir-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&target).expect("temporary directory should exist");
+
+        {
+            let _guard = guard_current_dir(&target);
+            assert_eq!(std::env::current_dir().unwrap(), target);
+        }
+
+        assert_eq!(std::env::current_dir().unwrap(), original);
+        let _ = std::fs::remove_dir_all(PathBuf::from(target));
+    }
+}

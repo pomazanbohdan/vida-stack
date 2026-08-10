@@ -124,3 +124,78 @@ pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path)
         .map_err(|error| format!("Failed to create {}: {error}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_dir, looks_like_project_root, resolve_env_repo_root};
+    use crate::test_cli_support::EnvVarGuard;
+    use std::path::PathBuf;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "vida-project-root-paths-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    fn write_project_markers(root: &PathBuf) {
+        std::fs::create_dir_all(root.join(".vida/config")).unwrap();
+        std::fs::create_dir_all(root.join(".vida/db")).unwrap();
+        std::fs::create_dir_all(root.join(".vida/project")).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "# test project\n").unwrap();
+        std::fs::write(root.join("vida.config.yaml"), "project: test\n").unwrap();
+    }
+
+    #[test]
+    fn project_root_shape_requires_all_runtime_markers() {
+        let root = temp_root("markers");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(!looks_like_project_root(&root));
+
+        write_project_markers(&root);
+
+        assert!(looks_like_project_root(&root));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn env_root_resolution_accepts_valid_fixture_and_rejects_invalid_paths() {
+        let valid = temp_root("valid");
+        write_project_markers(&valid);
+        {
+            let _guard = EnvVarGuard::set("VIDA_ROOT", valid.to_str().unwrap());
+            assert_eq!(resolve_env_repo_root().unwrap(), Some(valid.clone()));
+        }
+
+        let invalid = temp_root("invalid");
+        std::fs::create_dir_all(&invalid).unwrap();
+        {
+            let _guard = EnvVarGuard::set("VIDA_ROOT", invalid.to_str().unwrap());
+            let error = resolve_env_repo_root().unwrap_err();
+            assert!(error.contains("not a VIDA runtime or source root"));
+        }
+
+        let missing = temp_root("missing");
+        {
+            let _guard = EnvVarGuard::set("VIDA_ROOT", missing.to_str().unwrap());
+            let error = resolve_env_repo_root().unwrap_err();
+            assert!(error.contains("VIDA_ROOT points to a missing path"));
+        }
+
+        let _ = std::fs::remove_dir_all(valid);
+        let _ = std::fs::remove_dir_all(invalid);
+    }
+
+    #[test]
+    fn ensure_dir_materializes_nested_runtime_path() {
+        let root = temp_root("ensure-dir");
+        let nested = root.join(".vida").join("db").join("nested");
+
+        ensure_dir(&nested).unwrap();
+
+        assert!(nested.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

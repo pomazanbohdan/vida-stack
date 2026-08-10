@@ -107,3 +107,53 @@ fn print_help() {
     println!("vida-coder provider-check --json");
     println!("vida-coder --service dispatch --json");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthRefSource, auth_source, option_value, service_dispatch_blocked};
+
+    #[test]
+    fn option_value_selects_flag_value_without_confusing_similar_flags() {
+        let args = vec![
+            "--model-profile".to_string(),
+            "guarded".to_string(),
+            "--model".to_string(),
+            "provider/model".to_string(),
+            "--model-ref".to_string(),
+            "fallback".to_string(),
+        ];
+
+        assert_eq!(option_value(&args, "--model"), Some("provider/model"));
+        assert_eq!(option_value(&args, "--model-profile"), Some("guarded"));
+        assert_eq!(option_value(&args, "--auth-ref"), None);
+    }
+
+    #[test]
+    fn auth_source_classifies_secret_runtime_and_environment_refs() {
+        assert!(matches!(
+            auth_source("secret:coder"),
+            AuthRefSource::SecretRef
+        ));
+        assert!(matches!(
+            auth_source("runtime:profile"),
+            AuthRefSource::RuntimeProfile
+        ));
+        assert!(matches!(
+            auth_source("env:VIDA_CODER_PROVIDER_AUTH"),
+            AuthRefSource::EnvRef
+        ));
+        assert!(matches!(auth_source("plain-ref"), AuthRefSource::EnvRef));
+    }
+
+    #[test]
+    fn service_dispatch_remains_explicitly_blocked() {
+        assert_eq!(
+            service_dispatch_blocked(&[]),
+            std::process::ExitCode::from(1)
+        );
+        assert_eq!(
+            service_dispatch_blocked(&["--json".to_string()]),
+            std::process::ExitCode::from(1)
+        );
+    }
+}

@@ -108,4 +108,70 @@ mod tests {
             "crates/vida"
         ));
     }
+
+    #[test]
+    fn repo_relative_path_normalization_covers_separator_and_boundary_cases() {
+        assert_eq!(
+            normalize_repo_relative_path("crates\\vida\\src"),
+            Ok("crates/vida/src".to_string())
+        );
+        assert_eq!(
+            normalize_repo_relative_path("crates/vida/"),
+            Err(RepoPathError::EmptySegment)
+        );
+        assert_eq!(
+            normalize_repo_relative_path("\\\\server\\share"),
+            Err(RepoPathError::Absolute)
+        );
+        assert_eq!(
+            normalize_repo_relative_path("././crates/vida"),
+            Err(RepoPathError::DotSegment)
+        );
+    }
+
+    #[test]
+    fn repo_relative_path_rejects_windows_absolute_variants() {
+        for path in [
+            "C:\\repo\\file.rs",
+            "C:/repo/file.rs",
+            "C:repo\\file.rs",
+            "1:repo\\file.rs",
+            "\\repo\\file.rs",
+            "/repo/file.rs",
+            "\\\\server\\share\\file.rs",
+            "//server/share/file.rs",
+            "\\\\?\\C:\\repo\\file.rs",
+            "\\\\.\\pipe\\vida",
+        ] {
+            assert_eq!(
+                normalize_repo_relative_path(path),
+                Err(RepoPathError::Absolute),
+                "path should be rejected as absolute: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_path_errors_expose_stable_operator_messages() {
+        assert_eq!(RepoPathError::Empty.message(), "path is empty");
+        assert_eq!(
+            RepoPathError::Absolute.message(),
+            "path must be repo-relative"
+        );
+        assert_eq!(
+            RepoPathError::DotSegment.message(),
+            "path must not contain . or .. segments"
+        );
+        assert_eq!(
+            RepoPathError::EmptySegment.message(),
+            "path must not contain empty segments"
+        );
+    }
+
+    #[test]
+    fn repo_relative_ownership_rejects_sibling_prefixes_and_accepts_nested_children() {
+        assert!(repo_relative_path_is_owned("src/lib.rs", "src"));
+        assert!(!repo_relative_path_is_owned("src2/lib.rs", "src"));
+        assert!(!repo_relative_path_is_owned("src", "src/"));
+    }
 }

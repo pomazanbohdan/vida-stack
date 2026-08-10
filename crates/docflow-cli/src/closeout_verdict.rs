@@ -116,4 +116,44 @@ mod tests {
             "docflow_protocol_coverage_blocking"
         );
     }
+
+    #[test]
+    fn closeout_renderer_and_error_surface_preserve_noncompact_and_blocking_fields() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "changed",
+            task_id: Some("task-42"),
+            root: None,
+            profile: "",
+            changed_docs: vec!["docs/a.md".to_string(), "docs/b.md".to_string()],
+            fastcheck_rows: 1,
+            protocol_coverage_rows: 1,
+            readiness_rows: 1,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        let plain = render_docflow_closeout_verdict("closeout", &verdict, "toon", false);
+        assert!(plain.contains("    - docs/a.md"));
+        assert!(plain.contains("    - docs/b.md"));
+
+        let jsonl = render_docflow_closeout_verdict("closeout", &verdict, "jsonl", false);
+        let jsonl_payload: serde_json::Value =
+            serde_json::from_str(jsonl.trim()).expect("closeout jsonl should parse");
+        assert_eq!(jsonl_payload["task_id"], "task-42");
+        assert_eq!(jsonl_payload["changed_docs"].as_array().unwrap().len(), 2);
+
+        let error_json = render_docflow_closeout_error(
+            "closeout",
+            "json",
+            Some("task-42"),
+            "missing root".to_string(),
+        );
+        let error_payload: serde_json::Value =
+            serde_json::from_str(&error_json).expect("closeout error json should parse");
+        assert_eq!(error_payload["verdict"], "blocking");
+        assert_eq!(error_payload["task_close_allowed"], false);
+        assert_eq!(error_payload["blocker_codes"][0], "docflow_closeout_failed");
+        assert_eq!(error_payload["task_id"], "task-42");
+    }
 }

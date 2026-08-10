@@ -85,10 +85,7 @@ mod tests {
         }]);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].code, "missing_artifact_type");
-        assert_eq!(
-            issues[0].message,
-            "registry row is missing artifact_type"
-        );
+        assert_eq!(issues[0].message, "registry row is missing artifact_type");
     }
 
     #[test]
@@ -99,9 +96,36 @@ mod tests {
         }]);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].code, "missing_artifact_type");
-        assert_eq!(
-            issues[0].message,
-            "registry row is missing artifact_type"
+        assert_eq!(issues[0].message, "registry row is missing artifact_type");
+    }
+
+    #[test]
+    fn markdown_footer_validation_reports_invalid_footer_syntax() {
+        let issues = validate_markdown_footer(
+            ArtifactPath("docs/process/test.md".into()),
+            "# title\n\n-----\n",
         );
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, "invalid_footer");
+        assert!(issues[0].message.contains("footer block must not be empty"));
+        assert!(matches!(issues[0].verdict, ReadinessVerdict::Blocking));
+    }
+
+    #[test]
+    fn registry_validation_only_reports_rows_with_blank_artifact_types() {
+        let issues = validate_registry_rows(&[
+            RegistryRow {
+                artifact_path: ArtifactPath("docs/process/ok.md".into()),
+                artifact_type: "markdown".into(),
+            },
+            RegistryRow {
+                artifact_path: ArtifactPath("docs/process/missing.md".into()),
+                artifact_type: "  ".into(),
+            },
+        ]);
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].artifact_path.0, "docs/process/missing.md");
     }
 }

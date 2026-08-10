@@ -111,4 +111,19 @@ mod tests {
         let record = TaskRecord::new(TaskId::new("vida-rf1"), "program", IssueType::Epic);
         assert!(matches!(record.status, TaskStatus::Open));
     }
+
+    #[test]
+    fn task_record_constructor_preserves_public_identity_and_round_trips_json() {
+        let record = TaskRecord::new(TaskId::new("vida-rf2"), "Ship contract", IssueType::Epic);
+        assert_eq!(record.id.as_str(), "vida-rf2");
+        assert_eq!(record.title, "Ship contract");
+        assert!(matches!(record.issue_type, IssueType::Epic));
+
+        let encoded = serde_json::to_value(&record).expect("task record serializes");
+        let decoded: TaskRecord = serde_json::from_value(encoded).expect("task record decodes");
+        assert_eq!(decoded.id.as_str(), "vida-rf2");
+        assert_eq!(decoded.title, "Ship contract");
+        assert!(matches!(decoded.status, TaskStatus::Open));
+        assert!(matches!(decoded.issue_type, IssueType::Epic));
+    }
 }

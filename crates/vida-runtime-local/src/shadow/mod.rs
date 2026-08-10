@@ -123,4 +123,73 @@ mod tests {
         assert_eq!(report.authoritative_write_count, 0);
         assert_eq!(report.external_effect_count, 0);
     }
+
+    #[test]
+    fn shadow_report_json_exposes_comparison_and_approved_difference_contracts() {
+        let payload = shadow_report_json();
+
+        assert_eq!(payload["parity_gate"], "pass");
+        assert_eq!(payload["unexplained_difference_count"], 0);
+        assert_eq!(payload["comparisons"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            payload["intended_difference_ledger"][0]["difference_id"],
+            "new_result_adds_engine_boundary"
+        );
+        assert_eq!(payload["intended_difference_ledger"][0]["approved"], true);
+        assert_eq!(payload["authoritative_write_count"], 0);
+        assert_eq!(payload["external_effect_count"], 0);
+    }
+
+    #[test]
+    fn shadow_comparisons_preserve_command_operation_and_result_parity_fields() {
+        let report = run_shadow_verification_report();
+        let same_results = report
+            .comparisons
+            .iter()
+            .filter(|comparison| comparison.difference_id.is_none())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            same_results
+                .iter()
+                .map(|comparison| comparison.command_id)
+                .collect::<Vec<_>>(),
+            vec![
+                "cmd-task-001",
+                "cmd-claim-001",
+                "cmd-run-001",
+                "cmd-role-001"
+            ]
+        );
+        assert_eq!(
+            same_results
+                .iter()
+                .map(|comparison| comparison.operation_family)
+                .collect::<Vec<_>>(),
+            vec!["task_lifecycle", "claims", "run_advance", "role_step"]
+        );
+        assert!(
+            same_results
+                .iter()
+                .all(|comparison| comparison.legacy_result == comparison.new_result)
+        );
+
+        let boundary = report
+            .comparisons
+            .iter()
+            .find(|comparison| comparison.command_id == "cmd-host-bridge-001")
+            .expect("host bridge boundary comparison should exist");
+        let ledger_entry = report
+            .intended_difference_ledger
+            .iter()
+            .find(|entry| entry.command_id == boundary.command_id)
+            .expect("host bridge difference should have an approved ledger entry");
+
+        assert_eq!(boundary.operation_family, "host_bridge_completion");
+        assert_eq!(boundary.difference_id, Some(ledger_entry.difference_id));
+        assert_eq!(boundary.legacy_result["status"], "pass");
+        assert_eq!(boundary.new_result["engine_boundary"], "runtime_engine");
+        assert!(ledger_entry.approved);
+        assert_eq!(report.unexplained_difference_count, 0);
+    }
 }

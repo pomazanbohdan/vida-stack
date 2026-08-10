@@ -110,4 +110,45 @@ mod tests {
         .expect_err("dispatch enabled must be a boolean");
         assert!(matches!(error, TaskflowConfigError::Decode(_)));
     }
+
+    #[test]
+    fn rejects_blank_bundle_fields() {
+        let cases = [
+            (
+                "state_adapter",
+                r#"{"runtime_family":"taskflow","bundle":{"state_adapter":" ","format_profile":"canonical"}}"#,
+                TaskflowConfigError::EmptyStateAdapter,
+            ),
+            (
+                "format_profile",
+                r#"{"runtime_family":"taskflow","bundle":{"state_adapter":"surreal","format_profile":"\t"}}"#,
+                TaskflowConfigError::EmptyFormatProfile,
+            ),
+        ];
+
+        for (field, input, expected) in cases {
+            assert_eq!(
+                load_from_json_str(input).expect_err("blank field must fail"),
+                expected,
+                "field {field} should fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_explicit_dispatch_enabled_value() {
+        let config = load_from_json_str(
+            r#"{
+                "runtime_family": "taskflow",
+                "bundle": {
+                    "state_adapter": "surreal",
+                    "format_profile": "canonical"
+                },
+                "dispatch": {"enabled": true}
+            }"#,
+        )
+        .expect("valid dispatch config should load");
+
+        assert!(config.dispatch.enabled);
+    }
 }
