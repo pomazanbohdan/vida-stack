@@ -154,6 +154,25 @@ mod tests {
     }
 
     #[test]
+    fn read_json_value_file_preserves_oversize_path_context() {
+        let (root, file) = fixture_file("oversize-context", r#"{"value":"abc"}"#);
+        let expected_path = file.path().to_path_buf();
+
+        let error = read_json_value_file(&file, 4).unwrap_err();
+
+        match error {
+            PathPolicyError::TooLarge {
+                path, max_bytes, ..
+            } => {
+                assert_eq!(path, expected_path);
+                assert_eq!(max_bytes, 4);
+            }
+            other => panic!("expected size error, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn read_json_value_file_accepts_exact_size_limit() {
         let body = r#"{"value":"abc"}"#;
         let (root, file) = fixture_file("exact-limit", body);
