@@ -351,6 +351,11 @@ mod tests {
         .expect("owned path should pass");
         assert_eq!(audit.status, "pass");
         assert_eq!(audit.tool_name, "guarded_patch");
+        assert_eq!(
+            audit.touched_paths,
+            vec!["crates/vida-coder/src/lib.rs".to_string()]
+        );
+        assert!(audit.blocker_codes.is_empty());
     }
 
     #[test]
@@ -437,6 +442,16 @@ mod tests {
             ),
             Err(RuntimeToolError::PathOutsideScope(
                 "crates/other/src/lib.rs".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn known_but_unallowlisted_tools_preserve_the_requested_name() {
+        assert_eq!(
+            validate_tool_request(&policy(), "vida_task_status", &[]),
+            Err(RuntimeToolError::ToolNotAllowed(
+                "vida_task_status".to_string()
             ))
         );
     }
@@ -552,6 +567,23 @@ mod tests {
         assert_eq!(poisoned.exposed_tool, None);
         assert_eq!(poisoned.status, "blocked");
         assert_eq!(poisoned.blocker_codes, vec!["mcp_descriptor_poisoned"]);
+
+        let unallowlisted_evidence = mcp_policy_decision(
+            &McpToolDescriptor {
+                server_id: "evidence".to_string(),
+                name: "record_evidence".to_string(),
+                description: "Record evidence".to_string(),
+            },
+            &policy(),
+        );
+        assert_eq!(unallowlisted_evidence.descriptor_name, "record_evidence");
+        assert_eq!(unallowlisted_evidence.class, McpToolClass::Evidence);
+        assert_eq!(unallowlisted_evidence.exposed_tool, None);
+        assert_eq!(unallowlisted_evidence.status, "blocked");
+        assert_eq!(
+            unallowlisted_evidence.blocker_codes,
+            vec!["mcp_tool_not_allowlisted"]
+        );
     }
 
     #[test]
@@ -591,6 +623,15 @@ mod tests {
             let decision = mcp_policy_decision(&descriptor, &policy());
             assert_eq!(decision.status, "blocked");
             assert_eq!(decision.exposed_tool, None);
+            assert_eq!(
+                decision.class,
+                match descriptor.server_id.as_str() {
+                    "shell" => McpToolClass::Shell,
+                    "net" => McpToolClass::Network,
+                    _ => McpToolClass::Unknown,
+                }
+            );
+            assert_eq!(decision.blocker_codes, vec!["mcp_tool_class_forbidden"]);
         }
     }
 

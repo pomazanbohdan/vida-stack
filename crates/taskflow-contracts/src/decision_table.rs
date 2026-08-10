@@ -376,7 +376,7 @@ mod tests {
     use super::{
         DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
         DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
-        DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+        DecisionTableOperator, DecisionTableOutput, DecisionTableRule, DecisionTableValue,
         TRANSITION_CONTRACT_SCHEMA_VERSION, TransitionContractBlocker,
         TransitionContractBlockerCode, TransitionContractDecision, TransitionContractOutcome,
         TransitionContractStatus, TransitionContractStatusCode,
@@ -410,7 +410,31 @@ mod tests {
 
         assert_eq!(request.schema_version, DECISION_TABLE_SCHEMA_VERSION);
         assert_eq!(request.table_id, "taskflow.route");
+        assert_eq!(request.task_id, Some(TaskId::new("task-1")));
+        assert_eq!(request.inputs.len(), 1);
+        assert_eq!(request.inputs[0].field, "task.status");
+        assert_eq!(
+            request.inputs[0].value,
+            DecisionTableValue::String("open".to_string())
+        );
         assert_eq!(request.rules[0].rule_id, "rule.ready");
+        assert_eq!(request.rules[0].priority, 10);
+        assert_eq!(request.rules[0].conditions.len(), 1);
+        assert_eq!(request.rules[0].conditions[0].field, "task.status");
+        assert_eq!(
+            request.rules[0].conditions[0].operator,
+            DecisionTableOperator::Equals
+        );
+        assert_eq!(
+            request.rules[0].conditions[0].expected,
+            DecisionTableValue::String("open".to_string())
+        );
+        assert_eq!(request.rules[0].outputs.len(), 1);
+        assert_eq!(request.rules[0].outputs[0].field, "route");
+        assert_eq!(
+            request.rules[0].outputs[0].value,
+            DecisionTableValue::String("dispatch".to_string())
+        );
         assert!(request.rules[0].stop_on_match);
     }
 
@@ -447,8 +471,16 @@ mod tests {
         );
 
         assert_eq!(response.schema_version, DECISION_TABLE_SCHEMA_VERSION);
+        assert_eq!(response.table_id, "taskflow.route");
+        assert_eq!(response.task_id, Some(TaskId::new("task-1")));
         assert_eq!(response.status, DecisionTableEvaluationStatus::Matched);
         assert_eq!(response.matched_rule_ids, vec!["rule.ready"]);
+        assert_eq!(response.outputs.len(), 1);
+        assert_eq!(response.outputs[0].field, "route");
+        assert_eq!(
+            response.outputs[0].value,
+            DecisionTableValue::String("dispatch".to_string())
+        );
         assert!(response.blocker_codes.is_empty());
     }
 
@@ -460,6 +492,8 @@ mod tests {
             vec!["missing_required_input".to_string()],
         );
 
+        assert_eq!(response.table_id, "taskflow.route");
+        assert_eq!(response.task_id, Some(TaskId::new("task-1")));
         assert_eq!(response.status, DecisionTableEvaluationStatus::Blocked);
         assert!(response.matched_rule_ids.is_empty());
         assert!(response.outputs.is_empty());
@@ -503,6 +537,8 @@ mod tests {
             )],
         );
 
+        assert_eq!(decision.table_id, "task.lifecycle");
+        assert_eq!(decision.task_id, Some(TaskId::new("task-1")));
         assert_eq!(decision.outcome, TransitionContractOutcome::Rejected);
         assert_eq!(decision.status.as_str(), "rejected");
         assert_eq!(decision.blocker_codes[0].as_str(), "invalid_transition");
@@ -520,10 +556,40 @@ mod tests {
             )],
         );
 
+        assert_eq!(decision.table_id, "task.lifecycle");
+        assert_eq!(decision.task_id, Some(TaskId::new("task-1")));
         assert!(decision.is_fail_closed_blocked());
         assert_eq!(decision.outcome.as_str(), "blocked");
         assert_eq!(decision.status.as_str(), "blocked");
         assert_eq!(decision.blocker_codes[0].as_str(), "missing_required_input");
+    }
+
+    #[test]
+    fn transition_contract_fail_closed_check_requires_outcome_status_and_blocker() {
+        let mut decision = TransitionContractDecision::blocked(
+            "task.lifecycle",
+            Some(TaskId::new("task-1")),
+            vec![TransitionContractBlocker::known(
+                TransitionContractBlockerCode::MissingRequiredInput,
+            )],
+        );
+
+        assert!(decision.is_fail_closed_blocked());
+
+        decision.blocker_codes.clear();
+        assert!(!decision.is_fail_closed_blocked());
+
+        decision
+            .blocker_codes
+            .push(TransitionContractBlocker::known(
+                TransitionContractBlockerCode::MissingRequiredInput,
+            ));
+        decision.status = TransitionContractStatus::known(TransitionContractStatusCode::Rejected);
+        assert!(!decision.is_fail_closed_blocked());
+
+        decision.status = TransitionContractStatus::known(TransitionContractStatusCode::Blocked);
+        decision.outcome = TransitionContractOutcome::Rejected;
+        assert!(!decision.is_fail_closed_blocked());
     }
 
     #[test]

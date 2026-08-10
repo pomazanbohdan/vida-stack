@@ -451,6 +451,43 @@ mod tests {
     }
 
     #[test]
+    fn provider_readiness_reports_independent_blockers_and_all_secret_markers() {
+        let mut invalid = config_from_knowledge_pack(&pack(), auth_ref());
+        invalid.provider = "other-provider".to_string();
+        invalid.model_ref = " \t".to_string();
+        invalid.model_profile_id.clear();
+        invalid.auth_ref.profile_ref = "ToKeN=redacted".to_string();
+
+        let readiness = provider_readiness(&invalid);
+        assert_eq!(readiness.status, ReadinessStatus::Blocked);
+        assert_eq!(
+            readiness.blocker_codes,
+            vec![
+                "provider_id_not_vida_coder",
+                "selected_model_ref_missing",
+                "selected_model_profile_id_missing",
+                "provider_auth_ref_contains_secret_material",
+            ]
+        );
+
+        for marker in [
+            "sk-live",
+            "api_key=redacted",
+            "apikey=redacted",
+            "token=redacted",
+            "secret=redacted",
+        ] {
+            let mut config = config_from_knowledge_pack(&pack(), auth_ref());
+            config.auth_ref.profile_ref = marker.to_string();
+            assert_eq!(
+                validate_provider_config(&config),
+                Err(CoderContractError::SecretMaterialInAuthRef),
+                "marker must remain blocked: {marker}"
+            );
+        }
+    }
+
+    #[test]
     fn receipt_builder_records_scope_checked_touched_paths() {
         let pack = pack();
         let config = config_from_knowledge_pack(&pack, auth_ref());
@@ -480,6 +517,52 @@ mod tests {
         assert_eq!(receipt.provider, PROVIDER_ID);
         assert_eq!(receipt.touched_paths.len(), 2);
         assert_eq!(receipt.verification[0].status, "pass");
+    }
+
+    #[test]
+    fn config_and_receipt_preserve_reasoning_auth_blockers_and_deduplicated_paths() {
+        let pack = pack();
+        let auth = auth_ref();
+        let config = config_from_knowledge_pack(&pack, auth.clone());
+        assert_eq!(config.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(config.auth_ref, auth);
+
+        let receipt = build_receipt(
+            &pack,
+            &config,
+            vec![ToolAuditRecord {
+                tool_name: "guarded_patch".to_string(),
+                status: "blocked".to_string(),
+                touched_paths: vec![
+                    "Cargo.toml".to_string(),
+                    "crates/vida-coder/src/lib.rs".to_string(),
+                    "Cargo.toml".to_string(),
+                ],
+            }],
+            vec![VerificationEvidence {
+                command: "cargo test -p vida-coder".to_string(),
+                status: "blocked".to_string(),
+            }],
+            vec!["verification_blocked".to_string()],
+            json!({"provider_receipt_id": "provider-run-blocked"}),
+            "blocked by provider verification",
+        )
+        .expect("receipt should preserve blocked contract");
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.touched_paths,
+            vec![
+                "Cargo.toml".to_string(),
+                "crates/vida-coder/src/lib.rs".to_string()
+            ]
+        );
+        assert_eq!(receipt.blockers, vec!["verification_blocked"]);
+        assert_eq!(
+            receipt.raw_provider["provider_receipt_id"],
+            "provider-run-blocked"
+        );
+        assert_eq!(receipt.handoff_summary, "blocked by provider verification");
     }
 
     #[test]

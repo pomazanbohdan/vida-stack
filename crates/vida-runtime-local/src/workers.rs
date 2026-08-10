@@ -498,12 +498,26 @@ mod tests {
                 .map(|packet| packet.next_role.as_str()),
             Some("developer")
         );
+        assert_eq!(
+            completed.packet,
+            Some(NextRolePacket {
+                run_id: "run-42".to_string(),
+                packet_id: "packet:run-42:developer:idem-42".to_string(),
+                from_role: "analyst".to_string(),
+                next_role: "developer".to_string(),
+                idempotency_key: "idem-42".to_string(),
+            })
+        );
         let command = completed.command.as_ref().expect("command envelope");
         assert_eq!(command.operation, "taskflow.materialize_next_packet");
         assert_eq!(command.run_id, "run-42");
         assert_eq!(command.idempotency_key, "idem-42");
         assert_eq!(command.payload["from_role"], "analyst");
         assert_eq!(command.payload["next_role"], "developer");
+        assert_eq!(
+            command.payload["packet_id"],
+            "packet:run-42:developer:idem-42"
+        );
         assert!(
             command
                 .trace
@@ -513,12 +527,20 @@ mod tests {
 
         let replay = runtime.process_analyst_completion(request);
         assert_eq!(replay.status, AutomationWorkerStatus::IdempotentReplay);
+        assert_eq!(replay.packet, completed.packet);
         assert_eq!(
             replay
                 .command
                 .as_ref()
                 .map(|command| command.operation.as_str()),
             Some("taskflow.replay_next_packet")
+        );
+        assert_eq!(
+            replay.trace,
+            vec![AutomationTraceEntry {
+                kind: "idempotent_replay".to_string(),
+                detail: "completed packet returned by idempotency key".to_string(),
+            }]
         );
         assert_eq!(runtime.state.completed_packets.len(), 1);
 
@@ -552,6 +574,26 @@ mod tests {
                 .as_ref()
                 .map(|approval| approval.resume_action.as_str()),
             Some("approve_then_materialize_next_packet")
+        );
+        assert_eq!(
+            approval.approval,
+            Some(TypedApprovalState {
+                run_id: "run-approval".to_string(),
+                required_role: "operator".to_string(),
+                approval_kind: "taskflow_next_role_materialization".to_string(),
+                resume_action: "approve_then_materialize_next_packet".to_string(),
+            })
+        );
+        assert_eq!(
+            approval
+                .command
+                .as_ref()
+                .map(|command| command.payload.clone()),
+            Some(serde_json::json!({
+                "required_role": "operator",
+                "approval_kind": "taskflow_next_role_materialization",
+                "resume_action": "approve_then_materialize_next_packet"
+            }))
         );
         assert!(!runtime.state.active_claims.contains_key("run-approval"));
     }
@@ -603,6 +645,39 @@ mod tests {
             AutomationWorkerStatus::MaterializedNextPacket
         );
         assert_eq!(restarted.state.completed_packets.len(), 1);
+    }
+
+    #[test]
+    fn worker_state_snapshot_preserves_injected_failure_budget() {
+        let config = WorkerAutomationConfig {
+            max_attempts: 3,
+            base_retry_seconds: 7,
+        };
+        let mut runtime = AutomationWorkerRuntime::new(config.clone());
+        runtime.inject_transient_failures("run-snapshot", 2);
+        let snapshot = runtime.state_snapshot();
+        assert_eq!(
+            snapshot.transient_failures_remaining.get("run-snapshot"),
+            Some(&2)
+        );
+
+        let request =
+            AnalystCompletionRequest::next_developer_packet("run-snapshot", "idem-snapshot");
+        let mut resumed = AutomationWorkerRuntime::from_state(config, snapshot);
+        assert_eq!(
+            resumed.process_analyst_completion(request.clone()).status,
+            AutomationWorkerStatus::Retrying
+        );
+        assert_eq!(
+            resumed.process_analyst_completion(request.clone()).status,
+            AutomationWorkerStatus::Retrying
+        );
+        let completed = resumed.process_analyst_completion(request);
+        assert_eq!(
+            completed.status,
+            AutomationWorkerStatus::MaterializedNextPacket
+        );
+        assert_eq!(resumed.state.attempts_by_run.get("run-snapshot"), Some(&2));
     }
 
     #[test]

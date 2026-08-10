@@ -1262,7 +1262,7 @@ mod tests {
         VidaStreamVersion, VidaTimestamp,
     };
     use taskflow_state::{JournalAppendRequest, OperationalJournal};
-    use taskflow_state_redb::RedbOperationalJournal;
+    use taskflow_state_redb::{RedbOperationalJournal, RedbOutboxEffectRecord};
     use tempfile::tempdir;
 
     #[test]
@@ -1310,6 +1310,69 @@ mod tests {
             DurableJobId::from_effect_id(&effect_id).0,
             "vida-effect-effect-send-email"
         );
+    }
+
+    #[test]
+    fn outbox_snapshot_and_failed_ack_preserve_optional_fields() {
+        let record = RedbOutboxEffectRecord {
+            outbox_id: VidaEventRef("outbox-optional".to_string()),
+            effect: effect("effect/optional"),
+            state: JournalOutboxState::Failed {
+                reason: "transport failure".to_string(),
+            },
+            source_stream_id: VidaStreamRef("stream-1".to_string()),
+            source_event_cursor: Some(VidaEventCursor("global-7".to_string())),
+            command_id: VidaCommandRef("command-7".to_string()),
+            effect_hash: "sha256:effect".to_string(),
+            attempt_count: 3,
+            claimed_by: Some("effectum-worker-1".to_string()),
+            failure_reason: Some("transport failure".to_string()),
+            retry_after: None,
+            schema_version: "vida.redb.outbox.v1".to_string(),
+            lifecycle_state: "failed".to_string(),
+        };
+        let snapshot = OutboxJobSnapshot::from(&record);
+        assert_eq!(
+            snapshot.outbox_id,
+            VidaEventRef("outbox-optional".to_string())
+        );
+        assert_eq!(
+            snapshot.effect_id,
+            VidaEffectRef("effect/optional".to_string())
+        );
+        assert_eq!(snapshot.attempt_count, 3);
+        assert_eq!(
+            snapshot.source_event_cursor,
+            Some(VidaEventCursor("global-7".to_string()))
+        );
+        assert_eq!(
+            snapshot.failure_reason.as_deref(),
+            Some("transport failure")
+        );
+
+        let no_cursor = OutboxJobSnapshot {
+            outbox_id: VidaEventRef("outbox-no-cursor".to_string()),
+            effect_id: VidaEffectRef("effect-no-cursor".to_string()),
+            state: JournalOutboxState::Failed {
+                reason: "worker error".to_string(),
+            },
+            attempt_count: 1,
+            source_event_cursor: None,
+            failure_reason: Some("worker error".to_string()),
+        };
+        let command = EffectumOutboxWorker::new("vida.completion.record").acknowledgement_command(
+            &no_cursor,
+            EffectAckOutcome::Failed {
+                reason: "worker error".to_string(),
+            },
+        );
+        assert_eq!(
+            command.stream_id,
+            VidaStreamRef("job-trace:outbox-no-cursor".to_string())
+        );
+        assert_eq!(command.payload["claimed_by"], serde_json::Value::Null);
+        assert_eq!(command.payload["outcome"]["status"], "failed");
+        assert_eq!(command.payload["outcome"]["reason"], "worker error");
     }
 
     #[tokio::test]
@@ -1695,6 +1758,71 @@ mod tests {
         assert_eq!(payload["job_type"], HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
     }
 
+    #[test]
+    fn host_bridge_request_status_aliases_and_failure_precedence_are_explicit() {
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            base_backoff_seconds: 10,
+        };
+        for status in ["completed", "pass", "done"] {
+            let snapshot = HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({
+                "request_id": format!("req-{status}"),
+                "status": status,
+                "attempt_count": 0,
+            }))
+            .expect("terminal request snapshot");
+            let plan = plan_host_bridge_request_job(&snapshot, &policy);
+            assert_eq!(plan.lifecycle, DurableJobLifecycle::Succeeded);
+            assert_eq!(plan.next_action, "none");
+            assert!(plan.claimed_by.is_none());
+        }
+
+        for status in ["running", "executing"] {
+            let snapshot = HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({
+                "request_id": format!("req-{status}"),
+                "run_id": "run-1",
+                "status": status,
+            }))
+            .expect("running request snapshot");
+            let plan = plan_host_bridge_request_job(&snapshot, &policy);
+            assert_eq!(plan.lifecycle, DurableJobLifecycle::Running);
+            assert_eq!(plan.claimed_by.as_deref(), Some("run-1"));
+        }
+
+        let failed_snapshot = HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({
+            "request_id": "req-retry-precedence",
+            "status": "failed",
+            "attempt_count": 1,
+            "failure_reason": "primary failure",
+            "blocker_reason": "fallback failure",
+            "result_path": "artifacts/result.json",
+        }))
+        .expect("failed request snapshot");
+        assert_eq!(
+            failed_snapshot.failure_reason.as_deref(),
+            Some("primary failure")
+        );
+        assert_eq!(
+            failed_snapshot.result_path.as_deref(),
+            Some("artifacts/result.json")
+        );
+        let retryable = plan_host_bridge_request_job(&failed_snapshot, &policy);
+        assert_eq!(retryable.lifecycle, DurableJobLifecycle::Retryable);
+        assert_eq!(retryable.retry_after_seconds, Some(10));
+
+        let unknown = HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({
+            "request_id": "req-unknown",
+            "status": "unexpected",
+        }))
+        .expect("unknown status snapshot");
+        let pending = plan_host_bridge_request_job(&unknown, &policy);
+        assert_eq!(pending.lifecycle, DurableJobLifecycle::Pending);
+        assert_eq!(
+            pending.next_action,
+            "enqueue_host_bridge_adapter_request_idempotently"
+        );
+    }
+
     #[tokio::test]
     async fn host_bridge_request_enqueue_is_idempotent_by_request_id() {
         let dir = tempdir().unwrap();
@@ -1993,6 +2121,7 @@ mod tests {
         .expect("retryable job");
         assert_eq!(retryable.lifecycle, DurableJobLifecycle::Retryable);
         assert_eq!(retryable.retry_after_seconds, Some(30));
+        assert_eq!(retryable.next_action, "schedule_retry_from_redb_outbox");
 
         let dead_letter = plan_outbox_job_from_redb(
             &path,
@@ -2017,6 +2146,18 @@ mod tests {
             .expect("read persisted outbox")
             .expect("succeeded job");
         assert_eq!(succeeded.lifecycle, DurableJobLifecycle::Succeeded);
+        assert_eq!(succeeded.next_action, "none");
+
+        let latest = plan_outbox_job_from_redb(&path, "latest", &RetryPolicy::default())
+            .expect("read latest persisted outbox")
+            .expect("latest persisted job");
+        assert_eq!(latest.effect_id, VidaEffectRef("effect-2".to_string()));
+        assert_eq!(latest.lifecycle, DurableJobLifecycle::Succeeded);
+
+        let by_outbox = plan_outbox_job_from_redb(&path, "outbox-2", &RetryPolicy::default())
+            .expect("read outbox id")
+            .expect("outbox id should resolve");
+        assert_eq!(by_outbox.effect_id, VidaEffectRef("effect-2".to_string()));
 
         assert!(
             plan_outbox_job_from_redb(&path, "missing", &RetryPolicy::default())

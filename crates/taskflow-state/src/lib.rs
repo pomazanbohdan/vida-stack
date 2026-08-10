@@ -1072,6 +1072,57 @@ mod tests {
     }
 
     #[test]
+    fn operational_journal_reads_cursor_windows_and_records_conflict_reason() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        let mut second = append_request(1, vec![event(2)], Vec::new());
+        second.command_id = VidaCommandRef("command-2".to_string());
+        second.idempotency_key = VidaIdempotencyKey("idem-2".to_string());
+        journal.append(second).expect("second append should pass");
+
+        let first_page = journal.read_global_after(None, 1);
+        assert_eq!(first_page.len(), 1);
+        assert_eq!(
+            first_page[0].global_cursor,
+            VidaEventCursor("global-1".to_string())
+        );
+        let after_first =
+            journal.read_global_after(Some(&VidaEventCursor("global-1".to_string())), 1);
+        assert_eq!(after_first.len(), 1);
+        assert_eq!(
+            after_first[0].event.event_id,
+            VidaEventRef("event-2".to_string())
+        );
+        assert!(
+            journal
+                .read_global_after(Some(&VidaEventCursor("global-2".to_string())), 1)
+                .is_empty()
+        );
+
+        let key = VidaIdempotencyKey("manual-conflict".to_string());
+        journal
+            .record_idempotency_started(key.clone(), VidaCommandRef("manual-command".to_string()))
+            .expect("manual idempotency start should pass");
+        journal
+            .record_idempotency_conflicted(&key, "payload mismatch".to_string())
+            .expect("manual idempotency conflict should pass");
+        let record = journal.idempotency_record(&key).expect("conflict record");
+        assert_eq!(record.state, JournalIdempotencyState::Conflicted);
+        assert_eq!(record.conflict_reason.as_deref(), Some("payload mismatch"));
+
+        let outbox = journal
+            .claim_outbox_batch("worker-1", 1)
+            .pop()
+            .expect("effect should be claimable");
+        journal
+            .mark_outbox_failed(&outbox.outbox_id, "dispatch failed".to_string())
+            .expect("failure should persist");
+        assert!(journal.claim_outbox_batch("worker-2", 1).is_empty());
+    }
+
+    #[test]
     fn operational_journal_rejects_event_stream_mismatch() {
         let mut journal = InMemoryOperationalJournal::default();
 
@@ -1210,6 +1261,17 @@ mod tests {
             journal.projection_checkpoint(&VidaProjectionRef("projection-1".to_string())),
             Some(&checkpoint),
             "out-of-order older checkpoints must not overwrite newer projection state"
+        );
+        let same_cursor_older_version = VidaProjectionCheckpoint {
+            event_cursor: VidaEventCursor("global-1".to_string()),
+            stream_version: VidaStreamVersion(0),
+            ..checkpoint.clone()
+        };
+        journal.record_projection_checkpoint(same_cursor_older_version);
+        assert_eq!(
+            journal.projection_checkpoint(&VidaProjectionRef("projection-1".to_string())),
+            Some(&checkpoint),
+            "same cursor with an older stream version must not overwrite newer projection state"
         );
 
         let failure = JournalProjectionFailure {
