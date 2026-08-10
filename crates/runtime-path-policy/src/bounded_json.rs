@@ -82,7 +82,9 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::safe_path::{ArtifactPathKind, existing_regular_file_under_root};
+    use crate::safe_path::{
+        ArtifactPathKind, ExistingRegularFile, existing_regular_file_under_root,
+    };
     use crate::state_root::StateRoot;
 
     #[derive(Debug, Deserialize, PartialEq)]
@@ -90,9 +92,42 @@ mod tests {
         value: String,
     }
 
+    fn fixture_file(name: &str, body: &str) -> (std::path::PathBuf, ExistingRegularFile) {
+        let root = std::env::temp_dir().join(format!(
+            "runtime-path-policy-json-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("payload.json");
+        std::fs::write(&path, body).unwrap();
+        let state_root = StateRoot::open(&root).unwrap();
+        let file =
+            existing_regular_file_under_root(&state_root, &path, ArtifactPathKind::GenericJson)
+                .unwrap();
+        (root, file)
+    }
+
     #[test]
     fn task_attempt_artifact_limit_is_64_kib() {
         assert_eq!(TASK_ATTEMPT_ARTIFACT_LIMIT, 64 * 1024);
+        assert_eq!(
+            TASK_ATTEMPT_ARTIFACT_LIMIT,
+            TASK_ATTEMPT_ARTIFACT_MAX_BYTES_ALIAS
+        );
+    }
+
+    #[test]
+    fn exported_json_limits_match_their_public_aliases() {
+        assert_eq!(
+            DEFAULT_JSON_ARTIFACT_LIMIT,
+            DEFAULT_JSON_ARTIFACT_MAX_BYTES_ALIAS
+        );
+        assert_eq!(
+            HOST_BRIDGE_REQUEST_LIMIT,
+            HOST_BRIDGE_REQUEST_MAX_BYTES_ALIAS
+        );
+        assert_eq!(HOST_BRIDGE_RESULT_LIMIT, HOST_BRIDGE_RESULT_MAX_BYTES_ALIAS);
         assert_eq!(
             TASK_ATTEMPT_ARTIFACT_LIMIT,
             TASK_ATTEMPT_ARTIFACT_MAX_BYTES_ALIAS
@@ -140,5 +175,25 @@ mod tests {
                 value: "abc".to_string()
             }
         );
+    }
+
+    #[test]
+    fn read_json_value_file_reports_malformed_json() {
+        let (root, file) = fixture_file("malformed", "{\"value\":");
+
+        let error = read_json_value_file(&file, DEFAULT_JSON_ARTIFACT_MAX_BYTES).unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Json { .. }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_json_file_reports_typed_json_mismatch() {
+        let (root, file) = fixture_file("typed-mismatch", r#"{"value":42}"#);
+
+        let error = read_json_file::<Payload>(&file, DEFAULT_JSON_ARTIFACT_MAX_BYTES).unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Json { .. }));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

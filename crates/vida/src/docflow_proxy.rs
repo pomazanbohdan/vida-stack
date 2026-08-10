@@ -5,7 +5,7 @@ use docflow_cli::Cli as DocflowCli;
 
 use crate::taskflow_spec_bootstrap::run_docflow_cli_command_with_exit;
 
-use super::{resolve_repo_root, ProxyArgs};
+use super::{ProxyArgs, resolve_repo_root};
 
 fn proxy_requested_help(args: &[String]) -> bool {
     matches!(
@@ -130,6 +130,18 @@ mod tests {
     fn docflow_proxy_rejects_unknown_docflow_commands() {
         assert_eq!(
             run_docflow_proxy(proxy_args(&["unknown-docflow-command"])),
+            ExitCode::from(2)
+        );
+    }
+
+    #[test]
+    fn docflow_proxy_rejects_invalid_typed_command_options() {
+        assert_eq!(
+            run_docflow_proxy(proxy_args(&[
+                "overview",
+                "--registry-count",
+                "not-a-number",
+            ])),
             ExitCode::from(2)
         );
     }

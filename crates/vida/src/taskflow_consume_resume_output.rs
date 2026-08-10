@@ -88,6 +88,17 @@ mod tests {
     }
 
     #[test]
+    fn action_entries_ignore_empty_non_string_and_non_array_values() {
+        let actions = serde_json::json!(["", null, 42, "vida task show task-1 --json", "   "]);
+
+        assert_eq!(
+            action_entries(&actions),
+            vec!["vida task show task-1".to_string()]
+        );
+        assert!(action_entries(&serde_json::json!({"action": "vida task show task-1"})).is_empty());
+    }
+
+    #[test]
     fn output_payload_projects_default_operator_fields_once() {
         let payload = serde_json::json!({
             "status": "blocked",
@@ -126,5 +137,19 @@ mod tests {
         );
         assert_eq!(output["artifact_refs"]["run_id"], "run-1");
         assert!(output.get("ignored_broad_field").is_none());
+    }
+
+    #[test]
+    fn output_payload_defaults_missing_blockers_and_actions_without_null_fields() {
+        let output = output_payload(&serde_json::json!({"status": "ready"}));
+
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "status": "ready",
+                "blocker_codes": [],
+                "next_actions": []
+            })
+        );
     }
 }

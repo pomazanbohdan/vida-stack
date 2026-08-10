@@ -214,7 +214,9 @@ fn health_receipt_hash(health: &RedbJournalHealth) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vida_contracts::{VidaArtifactRef, VidaEventCursor, VidaProjectionRef, VidaStreamRef};
+    use vida_contracts::{
+        CompletionFailureCode, VidaArtifactRef, VidaEventCursor, VidaProjectionRef, VidaStreamRef,
+    };
 
     fn empty_health() -> RedbJournalHealth {
         RedbJournalHealth {
@@ -349,6 +351,9 @@ mod tests {
         .unwrap()
         .expect("drift should produce a guarded repair receipt");
 
+        assert_eq!(receipt.plan_id, "projection-repair:failure-hash-1");
+        assert!(receipt.applied);
+        assert_eq!(receipt.idempotency_key, "idem-1");
         assert_eq!(
             receipt.event_backing_cursors,
             vec![VidaEventCursor("global-7".to_string())]
@@ -461,6 +466,41 @@ mod tests {
             CompletionOutcome::passed(vec![VidaArtifactRef("completion-proof".to_string())], None);
         assert!(
             apply_projection_repair_plan(&plan, "idem-1", &health, &health, Some(&passed)).is_ok()
+        );
+    }
+
+    #[test]
+    fn canonical_passed_evidence_gate_rejects_failed_outcomes_even_with_evidence() {
+        let failed = CompletionOutcome::Failed {
+            code: CompletionFailureCode::ExecutionFailed,
+            retryable: false,
+            evidence_refs: vec![VidaArtifactRef("failure-proof".to_string())],
+        };
+
+        assert!(!canonical_passed_evidence_gate(Some(&failed)));
+    }
+
+    #[test]
+    fn repair_class_requires_its_declared_canonical_evidence_gate() {
+        let health = RedbJournalHealth {
+            projection_failure_count: 1,
+            ..empty_health()
+        };
+        let plan = ProjectionRepairPlan {
+            plan_id: "projection-repair:legacy".to_string(),
+            drift_class: ProjectionDriftClass::PassResultLegacyContradiction,
+            state_mutation_allowed: false,
+            required_existing_event_cursors: vec![VidaEventCursor("global-7".to_string())],
+            actions: vec![REPAIR_LEGACY_PASS_RESULT_PROJECTION_CONTRADICTION.to_string()],
+            auto_repair_allowed: false,
+            canonical_passed_evidence_required: false,
+        };
+        let passed =
+            CompletionOutcome::passed(vec![VidaArtifactRef("completion-proof".to_string())], None);
+
+        assert_eq!(
+            apply_projection_repair_plan(&plan, "idem-1", &health, &health, Some(&passed)),
+            Err(ProjectionRepairError::RequiresAuthorizedRepairClass)
         );
     }
 

@@ -424,6 +424,34 @@ mod tests {
     }
 
     #[test]
+    fn unknown_blocker_error_preserves_value_and_display() {
+        let error = BlockerCode::try_from("future_runtime_blocker")
+            .expect_err("unregistered blocker code should stay observable");
+
+        assert_eq!(error.value, "future_runtime_blocker");
+        assert_eq!(
+            error.to_string(),
+            "unknown blocker code `future_runtime_blocker`"
+        );
+    }
+
+    #[test]
+    fn canonical_value_and_parametric_builders_preserve_exact_inputs() {
+        assert_eq!(
+            canonical_blocker_code_value_from_str("host_tool_capability_missing"),
+            Some("host_tool_capability_missing".to_string())
+        );
+        assert_eq!(
+            selected_lane_runtime_assignment_truth_missing("task-a", "missing"),
+            "selected_lane_runtime_assignment_truth_missing:task=task-a:missing"
+        );
+        assert_eq!(
+            selected_lane_assignment_guard_blocked("task-b", "blocked"),
+            "selected_lane_assignment_guard_blocked:task=task-b:blocked"
+        );
+    }
+
+    #[test]
     fn blocker_code_rejects_case_and_whitespace_drift() {
         assert!(canonical_blocker_code_str("HOST_TOOL_CAPABILITY_MISSING").is_none());
         assert!(canonical_blocker_code_str(" host_tool_capability_missing ").is_none());

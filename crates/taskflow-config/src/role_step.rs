@@ -445,6 +445,121 @@ mod tests {
     }
 
     #[test]
+    fn blank_work_item_uses_configured_default_flow() {
+        let mut readiness = readiness_fixture();
+        readiness["default_flow_id"] = serde_json::json!("defect");
+
+        assert_eq!(
+            compile_dev_team_flow_for_work_item(&readiness, "   ")
+                .expect("blank work item should use the configured default")
+                .flow
+                .flow_id,
+            "defect"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_flows_and_empty_steps_with_actionable_paths() {
+        let mut empty_flows = readiness_fixture();
+        empty_flows["flows"] = serde_json::json!([]);
+        let error = compile_all_dev_team_flows(&empty_flows).expect_err("empty flows must fail");
+        assert!(error.to_string().contains("$.flows"));
+        assert!(error.to_string().contains("at least one dev_team flow"));
+
+        let mut empty_steps = readiness_fixture();
+        empty_steps["flows"][0]["ordered_steps"] = serde_json::json!([]);
+        let error = compile_all_dev_team_flows(&empty_steps).expect_err("empty steps must fail");
+        assert!(error.to_string().contains("$.flows[0].steps"));
+        assert!(error.to_string().contains("steps must not be empty"));
+    }
+
+    #[test]
+    fn rejects_duplicate_roles_and_invalid_collection_shapes() {
+        let mut duplicate_roles = readiness_fixture();
+        duplicate_roles["roles"] = serde_json::json!([
+            {"role_id": "developer", "runtime_role": "implementation", "task_classes": ["implementation"]},
+            {"role_id": "developer", "runtime_role": "implementation", "task_classes": ["implementation"]}
+        ]);
+        let error =
+            compile_all_dev_team_flows(&duplicate_roles).expect_err("duplicate role ids must fail");
+        assert!(error.to_string().contains("duplicate role id `developer`"));
+
+        let mut malformed = readiness_fixture();
+        malformed["roles"] = serde_json::json!("not-a-collection");
+        let error = compile_all_dev_team_flows(&malformed)
+            .expect_err("malformed role collection must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("dev_team roles must be an array or mapping")
+        );
+    }
+
+    #[test]
+    fn schema_hash_is_deterministic_and_sensitive_to_identity_inputs() {
+        let step = CompiledFlowStep {
+            position: 0,
+            role_label: "analyst".to_string(),
+            runtime_role: "implementation".to_string(),
+            task_class: "analysis".to_string(),
+            proof_gate: None,
+            packet_template_kind: None,
+            requires_user_approval: false,
+        };
+        let base = flow_schema_hash("task", &["task".to_string()], std::slice::from_ref(&step));
+
+        assert_eq!(base, "flow-fnv64-10f0e686fd33a2a9");
+        assert_ne!(
+            base,
+            flow_schema_hash("defect", &["task".to_string()], std::slice::from_ref(&step))
+        );
+        assert_ne!(
+            base,
+            flow_schema_hash("task", &["bug".to_string()], std::slice::from_ref(&step))
+        );
+
+        let mut changed_step = step;
+        changed_step.task_class = "verification".to_string();
+        assert_ne!(
+            base,
+            flow_schema_hash("task", &["task".to_string()], &[changed_step])
+        );
+    }
+
+    #[test]
+    fn compiles_mapping_shaped_config_and_normalizes_binding_lookup() {
+        let readiness = serde_json::json!({
+            "default_flow_id": "default-flow",
+            "roles": {
+                "developer": {
+                    "runtime_role": "implementation",
+                    "task_classes": ["implementation"]
+                }
+            },
+            "flows": {
+                "default-flow": {
+                    "work_item_bindings": "Bug Fix, task",
+                    "steps": [
+                        {"role_id": "developer", "requires_user_approval": true}
+                    ]
+                }
+            }
+        });
+
+        let compiled = compile_dev_team_flow_for_work_item(&readiness, " bug-fix ")
+            .expect("mapping-shaped config should compile");
+
+        assert_eq!(compiled.flow.flow_id, "default-flow");
+        assert_eq!(
+            compiled.work_item_bindings,
+            vec!["Bug Fix".to_string(), "task".to_string()]
+        );
+        assert_eq!(compiled.flow.steps.len(), 1);
+        assert_eq!(compiled.flow.steps[0].role_id, "developer");
+        assert_eq!(compiled.flow.steps[0].lifecycle_stage, "step_0");
+    }
+
+    #[test]
     fn compiler_output_builds_core_task_role_step_state() {
         let compiled = compile_dev_team_flow_for_work_item(&readiness_fixture(), "task").unwrap();
         let state = taskflow_core::role_step::TaskRoleStepState::from_first_step(&compiled.flow)

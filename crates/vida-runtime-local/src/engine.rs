@@ -181,7 +181,7 @@ mod tests {
     use vida_contracts::{
         RuntimeEngineCapability, RuntimeQueryRequest, RuntimeWatchRequest,
         VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
-        VidaIdempotencyKey, VidaOperation, VidaRequestId, VidaSessionId,
+        VidaEventCursor, VidaIdempotencyKey, VidaOperation, VidaRequestId, VidaSessionId,
     };
 
     use super::*;
@@ -262,6 +262,132 @@ mod tests {
                 .unsupported(RuntimeEngineCapability::DurableTimers),
             Some(UNSUPPORTED_ENGINE_CAPABILITY)
         );
+    }
+
+    #[test]
+    fn local_engine_preserves_execute_query_and_watch_contract_fields() {
+        let engine = LocalRuntimeEngine;
+        let response = engine
+            .execute(envelope("vida.local.execute"))
+            .expect("execute");
+
+        assert_eq!(response.request_id.0, "fake-engine-request");
+        assert_eq!(
+            response.result.as_ref().unwrap()["operation"],
+            "vida.local.execute"
+        );
+        assert_eq!(
+            response.result.as_ref().unwrap()["engine_boundary"],
+            "runtime_engine"
+        );
+
+        let query = engine
+            .query(RuntimeQueryRequest {
+                operation: VidaOperation("vida.local.query".to_string()),
+                payload: serde_json::json!({"scope": "owned"}),
+            })
+            .expect("query");
+        assert_eq!(query["operation"], "vida.local.query");
+        assert_eq!(query["query_mode"], "local_projection_snapshot");
+
+        let watch = engine
+            .watch(RuntimeWatchRequest {
+                cursor: Some(VidaEventCursor("global-7".to_string())),
+                required_capability: RuntimeEngineCapability::Jobs,
+            })
+            .expect("jobs watch");
+        assert_eq!(watch.stream_kind, "domain_event_export");
+        assert_eq!(
+            watch.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+            Some("global-7")
+        );
+        assert!(watch.replayable);
+    }
+
+    #[test]
+    fn engine_capability_and_error_fields_are_explicit_for_each_boundary() {
+        let local = local_runtime_capabilities();
+        for (capability, mode) in [
+            (RuntimeEngineCapability::Jobs, "redb_outbox_effectum"),
+            (
+                RuntimeEngineCapability::EventExport,
+                "redb_operational_journal",
+            ),
+            (
+                RuntimeEngineCapability::StrongReads,
+                "local_projection_snapshot",
+            ),
+            (RuntimeEngineCapability::OfflineMode, "local_state_store"),
+        ] {
+            let entry = local
+                .capabilities
+                .iter()
+                .find(|entry| entry.capability == capability)
+                .expect("local capability should be advertised");
+            assert!(entry.supported);
+            assert_eq!(entry.mode, mode);
+            assert_eq!(entry.blocker_code, None);
+        }
+
+        let fake = fake_runtime_capabilities();
+        assert_eq!(fake.contract_version, VIDA_RUNTIME_ENGINE_CONTRACT_VERSION);
+        assert_eq!(fake.engine_id, FAKE_ENGINE_ID);
+        assert_eq!(fake.engine_kind, "fake_conformance");
+        for capability in [
+            RuntimeEngineCapability::Jobs,
+            RuntimeEngineCapability::EventExport,
+            RuntimeEngineCapability::StrongReads,
+        ] {
+            let entry = fake
+                .capabilities
+                .iter()
+                .find(|entry| entry.capability == capability)
+                .expect("fake supported capability should be advertised");
+            assert!(entry.supported);
+            assert_eq!(entry.mode, "in_memory_fake");
+            assert_eq!(entry.blocker_code, None);
+        }
+        for capability in [
+            RuntimeEngineCapability::DurableTimers,
+            RuntimeEngineCapability::KeyedSerialization,
+            RuntimeEngineCapability::Signals,
+            RuntimeEngineCapability::OfflineMode,
+        ] {
+            let entry = fake
+                .capabilities
+                .iter()
+                .find(|entry| entry.capability == capability)
+                .expect("fake unsupported capability should be advertised");
+            assert!(!entry.supported);
+            assert_eq!(entry.mode, "unsupported");
+            assert_eq!(
+                entry.blocker_code.as_deref(),
+                Some(UNSUPPORTED_ENGINE_CAPABILITY)
+            );
+        }
+        assert_eq!(FakeRuntimeEngine.health().engine_id, FAKE_ENGINE_ID);
+
+        let error = LocalRuntimeEngine
+            .watch(RuntimeWatchRequest {
+                cursor: None,
+                required_capability: RuntimeEngineCapability::DurableTimers,
+            })
+            .expect_err("unsupported capability should fail closed");
+        match error {
+            RuntimeEngineError::UnsupportedCapability {
+                capability,
+                blocker_code,
+                remediation,
+            } => {
+                assert_eq!(capability, RuntimeEngineCapability::DurableTimers);
+                assert_eq!(blocker_code, UNSUPPORTED_ENGINE_CAPABILITY);
+                assert_eq!(
+                    remediation,
+                    "Select an engine that advertises the requested capability before starting a watch."
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     fn envelope(operation: &str) -> VidaCommandEnvelope {

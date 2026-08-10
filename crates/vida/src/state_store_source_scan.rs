@@ -133,3 +133,121 @@ pub(crate) fn hierarchy_from_path(relative: &Path) -> Vec<String> {
 pub(crate) fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_source_metadata_trims_known_fields_and_lists() {
+        let metadata = parse_source_metadata(
+            "# source\n\
+             artifact_id: source-1\n\
+             artifact_kind: instruction_source\n\
+             version: 7\n\
+             ownership_class: project\n\
+             mutability_class: mutable\n\
+             activation_class: active\n\
+             required_follow_on: first, , second\n\
+             hierarchy: docs, process\n\
+             ignored: value\n\
+             malformed line",
+        );
+
+        assert_eq!(metadata.artifact_id.as_deref(), Some("source-1"));
+        assert_eq!(
+            metadata.artifact_kind.as_deref(),
+            Some("instruction_source")
+        );
+        assert_eq!(metadata.version, Some(7));
+        assert_eq!(metadata.ownership_class.as_deref(), Some("project"));
+        assert_eq!(metadata.mutability_class.as_deref(), Some("mutable"));
+        assert_eq!(metadata.activation_class.as_deref(), Some("active"));
+        assert_eq!(
+            metadata.required_follow_on,
+            vec!["first".to_string(), "second".to_string()]
+        );
+        assert_eq!(
+            metadata.hierarchy,
+            vec!["docs".to_string(), "process".to_string()]
+        );
+    }
+
+    #[test]
+    fn source_inference_preserves_slice_and_path_contracts() {
+        assert_eq!(
+            infer_artifact_kind("framework_memory", Path::new("agent-definition.md")),
+            "framework_memory_entry"
+        );
+        assert_eq!(
+            infer_artifact_kind("instruction_memory", Path::new("agent-definition.md")),
+            "agent_definition"
+        );
+        assert_eq!(
+            infer_artifact_kind("project", Path::new("instruction-contract.md")),
+            "instruction_contract"
+        );
+        assert_eq!(
+            infer_artifact_kind("project", Path::new("prompt-template-config.md")),
+            "prompt_template_configuration"
+        );
+        assert_eq!(
+            infer_artifact_kind("project", Path::new("notes.md")),
+            "instruction_source"
+        );
+
+        assert_eq!(infer_ownership_class("framework_memory"), "framework");
+        assert_eq!(infer_ownership_class("instruction_memory"), "framework");
+        assert_eq!(infer_ownership_class("project"), "project");
+        assert_eq!(infer_mutability_class("instruction_memory"), "immutable");
+        assert_eq!(infer_mutability_class("framework_memory"), "mutable");
+        assert_eq!(infer_mutability_class("project"), "mutable");
+
+        let relative = Path::new("docs\\process\\source.md");
+        assert_eq!(artifact_id_from_path(relative), "docs-process-source");
+        assert_eq!(
+            record_id_for_slice_source("instruction_memory", relative),
+            "instruction_memory-docs-process-source-source"
+        );
+        assert_eq!(
+            hierarchy_from_path(Path::new("docs/process/source.md")),
+            vec!["docs".to_string(), "process".to_string()]
+        );
+        assert_eq!(normalize_path(relative), "docs/process/source.md");
+    }
+
+    #[test]
+    fn collect_markdown_files_returns_sorted_markdown_only() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-store-source-scan-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nested/deep")).unwrap();
+        fs::write(root.join("b.md"), "b").unwrap();
+        fs::write(root.join("nested/a.md"), "a").unwrap();
+        fs::write(root.join("nested/deep/c.md"), "c").unwrap();
+        fs::write(root.join("nested/ignored.txt"), "ignored").unwrap();
+
+        let files = collect_markdown_files(&root).unwrap();
+        let relative = files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            relative,
+            vec![
+                "b.md".to_string(),
+                "nested/a.md".to_string(),
+                "nested/deep/c.md".to_string()
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+}

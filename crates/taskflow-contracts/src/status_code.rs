@@ -237,4 +237,38 @@ mod tests {
         assert_eq!(release1_contract_status_str(true), "pass");
         assert_eq!(release1_contract_status_str(false), "blocked");
     }
+
+    #[test]
+    fn status_code_errors_preserve_input_and_display() {
+        let approval_error = ApprovalStatus::try_from(" pending ").unwrap_err();
+        assert_eq!(approval_error.value, " pending ");
+        assert_eq!(
+            approval_error.to_string(),
+            "unknown status code ` pending `"
+        );
+
+        let lane_error = LaneStatus::try_from("lane_unknown").unwrap_err();
+        assert_eq!(lane_error.value, "lane_unknown");
+        assert_eq!(lane_error.to_string(), "unknown status code `lane_unknown`");
+
+        let release_error = Release1ContractStatus::try_from(" reject ").unwrap_err();
+        assert_eq!(release_error.value, " reject ");
+        assert_eq!(release_error.to_string(), "unknown status code ` reject `");
+    }
+
+    #[test]
+    fn status_code_serialization_uses_canonical_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ApprovalStatus::WaitingForApproval).unwrap(),
+            serde_json::json!("waiting_for_approval")
+        );
+        assert_eq!(
+            serde_json::to_value(LaneStatus::LaneExceptionTakeover).unwrap(),
+            serde_json::json!("lane_exception_takeover")
+        );
+        assert_eq!(
+            serde_json::to_value(Release1ContractStatus::Blocked).unwrap(),
+            serde_json::json!("blocked")
+        );
+    }
 }
