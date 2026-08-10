@@ -152,6 +152,24 @@ mod tests {
     }
 
     #[test]
+    fn env_var_guard_unset_restores_existing_value() {
+        const KEY: &str = "VIDA_TEST_CLI_SUPPORT_UNSET";
+        let original = std::env::var_os(KEY);
+        std::env::set_var(KEY, "before");
+
+        {
+            let _guard = EnvVarGuard::unset(KEY);
+            assert!(std::env::var_os(KEY).is_none());
+        }
+
+        assert_eq!(std::env::var(KEY).as_deref(), Ok("before"));
+        match original {
+            Some(value) => std::env::set_var(KEY, value),
+            None => std::env::remove_var(KEY),
+        }
+    }
+
+    #[test]
     fn current_dir_guard_restores_directory_after_scoped_change() {
         let original = std::env::current_dir().expect("current dir should resolve");
         let target = std::env::temp_dir().join(format!(

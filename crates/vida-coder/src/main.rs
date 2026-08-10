@@ -126,6 +126,7 @@ mod tests {
         assert_eq!(option_value(&args, "--model"), Some("provider/model"));
         assert_eq!(option_value(&args, "--model-profile"), Some("guarded"));
         assert_eq!(option_value(&args, "--auth-ref"), None);
+        assert_eq!(option_value(&["--model".to_string()], "--model"), None);
     }
 
     #[test]

@@ -159,4 +159,33 @@ mod tests {
         assert!(PROJECT_ACTIVATION_RECEIPT_LATEST.starts_with(".vida/receipts/"));
         assert!(SPEC_BOOTSTRAP_RECEIPT_LATEST.starts_with(".vida/receipts/"));
     }
+
+    #[test]
+    fn bootstrap_extension_sources_remain_parseable_with_expected_root_keys() {
+        let sources = [
+            (DEFAULT_AGENT_EXTENSION_ROLES_YAML, "roles"),
+            (DEFAULT_AGENT_EXTENSION_SKILLS_YAML, "skills"),
+            (DEFAULT_AGENT_EXTENSION_PROFILES_YAML, "profiles"),
+            (DEFAULT_AGENT_EXTENSION_FLOWS_YAML, "flow_sets"),
+            (DEFAULT_AGENT_EXTENSION_PACKS_YAML, "packs"),
+            (DEFAULT_AGENT_EXTENSION_COMMANDS_YAML, "commands"),
+            (
+                DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML,
+                "dispatch_aliases",
+            ),
+            (
+                DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML,
+                "hook_templates",
+            ),
+        ];
+
+        for (yaml, root_key) in sources {
+            let value: serde_yaml::Value =
+                serde_yaml::from_str(yaml).expect("extension source should parse");
+            assert!(
+                value.get(root_key).is_some(),
+                "missing root key: {root_key}"
+            );
+        }
+    }
 }

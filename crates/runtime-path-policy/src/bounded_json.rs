@@ -203,6 +203,21 @@ mod tests {
     }
 
     #[test]
+    fn read_json_value_file_preserves_metadata_path_when_file_disappears() {
+        let (root, file) = fixture_file("metadata-missing", "{\"value\":\"ok\"}");
+        let expected_path = file.path().to_path_buf();
+        std::fs::remove_file(&expected_path).unwrap();
+
+        let error = read_json_value_file(&file, DEFAULT_JSON_ARTIFACT_MAX_BYTES).unwrap_err();
+
+        match error {
+            PathPolicyError::Metadata { path, .. } => assert_eq!(path, expected_path),
+            other => panic!("expected metadata error, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn read_json_file_reports_typed_json_mismatch() {
         let (root, file) = fixture_file("typed-mismatch", r#"{"value":42}"#);
 

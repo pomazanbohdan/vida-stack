@@ -128,6 +128,10 @@ mod tests {
             compare_task_paths(&["a".into(), "b".into()], &["a".into(), "c".into()]),
             Ordering::Less
         );
+        assert_eq!(
+            compare_task_paths(&["a".into(), "b".into()], &["a".into(), "b".into()]),
+            Ordering::Equal
+        );
     }
 
     #[test]

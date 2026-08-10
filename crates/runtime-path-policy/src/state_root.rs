@@ -139,6 +139,38 @@ mod tests {
         let _ = std::fs::remove_file(file);
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn open_rejects_symlinked_state_roots() {
+        let target = temp_root("symlink-target");
+        let link = temp_root("symlink-link");
+        let _ = std::fs::remove_dir_all(&link);
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).expect("symlink creation");
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                let _ = std::fs::remove_dir_all(target);
+                return;
+            }
+            Err(error) => panic!("symlink creation failed: {error}"),
+        }
+
+        let error = StateRoot::open(&link).unwrap_err();
+        assert!(matches!(
+            error,
+            PathPolicyError::StateRootSymlink { path } if path == link
+        ));
+
+        let _ = std::fs::remove_dir_all(link);
+        let _ = std::fs::remove_dir_all(target);
+    }
+
     #[test]
     fn resolution_and_canonical_containment_preserve_root_boundaries() {
         let root_dir = temp_root("resolution");

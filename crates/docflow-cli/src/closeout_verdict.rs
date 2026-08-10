@@ -156,4 +156,32 @@ mod tests {
         assert_eq!(error_payload["blocker_codes"][0], "docflow_closeout_failed");
         assert_eq!(error_payload["task_id"], "task-42");
     }
+
+    #[test]
+    fn closeout_renderer_defaults_unknown_format_to_plain_and_expands_json_docs() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "changed",
+            task_id: Some("task-7"),
+            root: None,
+            profile: "",
+            changed_docs: vec!["docs/process/example.md".to_string()],
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        let plain = render_docflow_closeout_verdict("closeout", &verdict, "yaml", false);
+        assert!(plain.contains("  verdict: ok"));
+        assert!(plain.contains("    - docs/process/example.md"));
+
+        let json = render_docflow_closeout_verdict("closeout", &verdict, "json", false);
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("json should parse");
+        assert_eq!(
+            payload["changed_docs"],
+            serde_json::json!(["docs/process/example.md"])
+        );
+    }
 }
