@@ -71,4 +71,34 @@ mod tests {
         assert!(modules.contains(&"team_flow_inclusion"));
         assert!(modules.contains(&"team_flow_transition"));
     }
+
+    #[test]
+    fn public_authority_module_registry_has_unique_stable_entries() {
+        let modules = [
+            crate::authority_chain::MODULE,
+            crate::claims::MODULE,
+            crate::terminal_closure::MODULE,
+            crate::stale_guard::MODULE,
+            crate::exception_takeover::MODULE,
+            crate::projection_cache::MODULE,
+            crate::run_graph_evidence::MODULE,
+            crate::run_graph_transition::MODULE,
+            crate::run_workflow::MODULE,
+            crate::role_step::MODULE,
+            crate::scheduler_claim::MODULE,
+            crate::final_snapshot::MODULE,
+            crate::operation_authorization::MODULE,
+            crate::continuation_binding::MODULE,
+            crate::continuation_transition::MODULE,
+            crate::domain_conformance::MODULE,
+            crate::task_attempts::MODULE,
+            crate::task_transition::MODULE,
+            crate::team_flow_inclusion::MODULE,
+            crate::team_flow_transition::MODULE,
+        ];
+
+        let unique = modules.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), modules.len());
+        assert!(module_path!().ends_with("::tests"));
+    }
 }

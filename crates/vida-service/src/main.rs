@@ -72,3 +72,36 @@ async fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn service_cli_defaults_to_foreground_command() {
+        let cli = Cli::try_parse_from(["vida-service"]).expect("default CLI parses");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn service_cli_parses_json_subcommands_and_lifecycle_mode() {
+        let lifecycle = Cli::try_parse_from([
+            "vida-service",
+            "lifecycle-plan",
+            "--mode",
+            "apply",
+            "--json",
+        ])
+        .expect("lifecycle plan parses");
+        assert!(matches!(
+            lifecycle.command,
+            Some(Command::LifecyclePlan { mode, json }) if mode == "apply" && json
+        ));
+
+        let matrix = Cli::try_parse_from(["vida-service", "ipc-matrix", "--json"])
+            .expect("IPC matrix parses");
+        assert!(matches!(matrix.command, Some(Command::IpcMatrix { json }) if json));
+    }
+}

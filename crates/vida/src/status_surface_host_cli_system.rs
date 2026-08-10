@@ -68,3 +68,51 @@ pub(crate) fn default_host_cli_materialization_mode(
         "copy_tree_only".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_system_projects_runtime_root_and_catalog_mode() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            "host_environment:\n  cli_system: Codex\n  systems:\n    codex:\n      runtime_root: .vida/codex\n      carriers:\n        worker: {}\n",
+        )
+        .expect("host cli overlay should parse");
+
+        let (system, entry) = selected_host_cli_system_entry(&overlay);
+        let entry = entry.expect("selected system should have a registry entry");
+        assert_eq!(system, "codex");
+        assert_eq!(
+            runtime_surface_for_selected_system(&system, Some(&entry)),
+            ".vida/codex"
+        );
+        assert_eq!(
+            runtime_root_for_selected_system(Path::new("project-root"), &system, Some(&entry)),
+            Path::new("project-root")
+                .join(".vida/codex")
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            default_host_cli_materialization_mode(Some(&entry), &system),
+            "codex_toml_catalog_render"
+        );
+    }
+
+    #[test]
+    fn selected_system_falls_back_to_first_enabled_sorted_entry() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            "host_environment:\n  systems:\n    zeta:\n      enabled: false\n    alpha:\n      enabled: true\n",
+        )
+        .expect("host cli overlay should parse");
+
+        let (system, entry) = selected_host_cli_system_entry(&overlay);
+        assert_eq!(system, "alpha");
+        assert!(entry.is_some());
+        assert_eq!(
+            runtime_surface_for_selected_system(&system, entry.as_ref()),
+            ".alpha"
+        );
+    }
+}

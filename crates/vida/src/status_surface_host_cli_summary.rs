@@ -80,3 +80,63 @@ pub(crate) fn host_cli_system_carrier_summary(
     }
     agents
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{host_cli_system_carrier_summary, host_cli_system_entry_summary};
+
+    #[test]
+    fn host_cli_summary_defaults_missing_systems_to_safe_values() {
+        let summary = host_cli_system_entry_summary(None, "codex");
+
+        assert_eq!(summary["enabled"], true);
+        assert_eq!(summary["execution_class"], "unknown");
+        assert_eq!(summary["materialization_mode"], "copy_tree_only");
+        assert_eq!(summary["template_root"], ".codex");
+        assert_eq!(summary["runtime_root"], ".codex");
+        assert_eq!(summary["carriers"], serde_json::json!({}));
+        assert!(host_cli_system_carrier_summary(None).is_empty());
+    }
+
+    #[test]
+    fn host_cli_summary_preserves_carrier_contract_and_skips_blank_ids() {
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+enabled: false
+template_root: templates/codex
+runtime_root: runtime/codex
+materialization_mode: " Explicit_Render "
+execution_class: Internal
+carriers:
+  senior:
+    tier: 3
+    rate: 2.5
+    reasoning_band: max
+    default_runtime_role: verifier
+    runtime_roles: [verifier, prover]
+    task_classes: [implementation]
+  " ":
+    tier: 0
+"#,
+        )
+        .expect("carrier fixture parses");
+
+        let summary = host_cli_system_entry_summary(Some(&entry), "codex");
+        assert_eq!(summary["enabled"], false);
+        assert_eq!(summary["execution_class"], "internal");
+        assert_eq!(summary["materialization_mode"], "explicit_render");
+        assert_eq!(summary["template_root"], "templates/codex");
+        assert_eq!(summary["runtime_root"], "runtime/codex");
+
+        let carriers = host_cli_system_carrier_summary(Some(&entry));
+        assert_eq!(carriers.len(), 1);
+        assert_eq!(carriers["senior"]["tier"], 3);
+        assert_eq!(carriers["senior"]["rate"], 2.5);
+        assert_eq!(
+            carriers["senior"]["runtime_roles"],
+            serde_json::json!(["verifier", "prover"])
+        );
+        assert_eq!(carriers["senior"]["feedback_count"], 0);
+        assert!(carriers["senior"]["last_feedback_at"].is_null());
+    }
+}

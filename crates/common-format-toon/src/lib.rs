@@ -3,7 +3,7 @@ pub fn render_compact_block(title: &str, body: &str) -> String {
 }
 
 pub fn sanitize_toon_scalar(value: &str) -> String {
-    let mut sanitized = String::with_capacity(value.len());
+    let mut sanitized = String::new();
     for character in value.chars() {
         if character.is_control() {
             sanitized.extend(character.escape_default());
@@ -36,6 +36,12 @@ mod tests {
     #[test]
     fn renders_compact_block() {
         assert_eq!(render_compact_block("common", "ready"), "common\n  ready");
+    }
+
+    #[test]
+    fn compact_and_scalar_renderers_preserve_empty_and_unicode_boundaries() {
+        assert_eq!(render_compact_block("title", ""), "title\n  ");
+        assert_eq!(sanitize_toon_scalar("βeta ✅"), "βeta ✅");
     }
 
     #[test]

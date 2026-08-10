@@ -61,3 +61,26 @@ pub(crate) fn build_hook_template_registry_projection(
         validation_errors,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_hook_registry_path_preserves_configured_ids_and_strict_blocker() {
+        let config: serde_yaml::Value =
+            serde_yaml::from_str("agent_extensions:\n  enabled_hook_templates:\n    - preflight\n")
+                .expect("config fixture should parse");
+        let root = Path::new("project-root");
+
+        let permissive = build_hook_template_registry_projection(&config, root, false);
+        assert!(permissive.hook_templates_registry.is_null());
+        assert_eq!(permissive.enabled_hook_templates, vec!["preflight"]);
+        assert!(permissive.hook_templates_path.is_none());
+        assert!(permissive.validation_errors.is_empty());
+
+        let strict = build_hook_template_registry_projection(&config, root, true);
+        assert_eq!(strict.validation_errors.len(), 1);
+        assert!(strict.validation_errors[0].contains("registry path is required"));
+    }
+}

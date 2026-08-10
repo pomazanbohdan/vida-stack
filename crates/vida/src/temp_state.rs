@@ -45,6 +45,16 @@ mod tests {
 
         assert!(!path.exists());
     }
+
+    #[test]
+    fn temp_state_harness_reserves_distinct_live_roots() {
+        let first = TempStateHarness::new().expect("first temp state harness");
+        let second = TempStateHarness::new().expect("second temp state harness");
+
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().is_dir());
+        assert!(second.path().is_dir());
+    }
 }
 
 fn reserve_temp_root() -> io::Result<PathBuf> {

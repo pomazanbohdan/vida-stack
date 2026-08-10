@@ -31,8 +31,9 @@ pub(crate) fn print_json_pretty(value: &serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_cli_support::cli;
+    use super::{block_on_state_store, repo_runtime_root};
     use crate::Cli;
+    use crate::test_cli_support::cli;
     use clap::CommandFactory;
     use std::process::ExitCode;
 
@@ -65,5 +66,24 @@ mod tests {
             init_index < boot_index,
             "init should appear before boot in help"
         );
+    }
+
+    #[test]
+    fn block_on_state_store_handles_outside_and_inside_runtime_calls() {
+        assert_eq!(
+            block_on_state_store(async { Ok::<_, crate::StateStoreError>(7_u32) })
+                .expect("outside-runtime state future should resolve"),
+            7
+        );
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let inside = runtime.block_on(async {
+            block_on_state_store(async { Ok::<_, crate::StateStoreError>(11_u32) })
+        });
+        assert_eq!(
+            inside.expect("inside-runtime state future should resolve"),
+            11
+        );
+        assert!(repo_runtime_root().join("Cargo.toml").is_file());
     }
 }
