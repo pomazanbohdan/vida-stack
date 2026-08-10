@@ -466,6 +466,27 @@ function Get-MutestEnvironment {
     return $environment
 }
 
+function Get-MutestWorkerTempRoot {
+    param([string]$RunKey, [string]$WorkerKey)
+
+    $safeRunKey = Convert-ToSafeName $RunKey
+    $safeWorkerKey = Convert-ToSafeName $WorkerKey
+    $baseRoot = $null
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $systemDrive = [Environment]::GetEnvironmentVariable("SystemDrive")
+        if ([string]::IsNullOrWhiteSpace($systemDrive)) {
+            $systemDrive = [System.IO.Path]::GetPathRoot($RepoRoot)
+        }
+        if ([string]::IsNullOrWhiteSpace($systemDrive)) {
+            $systemDrive = "C:"
+        }
+        $baseRoot = Join-Path $systemDrive "vida-mutest-tmp"
+    } else {
+        $baseRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vida-mutest-tmp"
+    }
+    return Join-Path (Join-Path $baseRoot $safeRunKey) $safeWorkerKey
+}
+
 function Get-OptionalProperty {
     param([object]$Object, [string]$Name, [object]$Default = $null)
     if ($null -eq $Object) { return $Default }
@@ -1249,7 +1270,7 @@ function Start-MutestWorker {
     $waveRoot = if ([string]::IsNullOrWhiteSpace($WaveId)) { $EvidenceNamespace } else { Join-Path $EvidenceNamespace (Convert-ToSafeName $WaveId) }
     $workerEvidence = Join-Path $RunEvidenceRoot "$waveRoot\files\$workerKey"
     if (Test-Path -LiteralPath $workerMetadata) { Remove-Item -LiteralPath $workerMetadata -Recurse -Force }
-    $workerTemp = Join-Path $workerEvidence "tmp"
+    $workerTemp = Get-MutestWorkerTempRoot -RunKey $WaveId -WorkerKey $workerKey
     [void](New-Item -ItemType Directory -Force -Path $workerTarget, $workerMetadata, $workerEvidence, $workerTemp)
     $stdout = Join-Path $workerEvidence "stdout.log"
     $stderr = Join-Path $workerEvidence "stderr.log"
@@ -1447,7 +1468,7 @@ $ConfigHash = Get-CommandHash -Commands @([ordered]@{
     command_policy = "one-file-filtered-worker-v2"; threshold = $Threshold; nightly = $Nightly; depth = $Depth; batch_size = $BatchSize
     timeout_minutes = $PackageTimeoutMinutes; include_working_tree = [bool]$IncludeWorkingTree; file_scope = "crates/**/src/**/*.rs"
     mutest_cargo_path = $MutestCargoPathAbsolute; mutest_cargo_path_source = $MutestCargoPathSource; mutest_native_lib_path = $MutestNativeLibPathAbsolute
-    target_selector_policy = "auto-lib-bin-v1"; temp_environment_policy = "worker-private-tmp-v1"
+    target_selector_policy = "auto-lib-bin-v1"; temp_environment_policy = "worker-private-short-tmp-v2"
 })
 $Registry = Read-FileRegistry -Path $RegistryPathAbsolute
 $PartialSelection = @($Files).Count -gt 0 -or @($Packages).Count -gt 0
@@ -1534,7 +1555,7 @@ $WaveSummary = [ordered]@{ wave_id = $WaveId; run_id = $RunId; started_at = [Dat
 $Manifest = [ordered]@{
     schema_version = 1; run_id = $RunId; generated_at = [DateTime]::UtcNow.ToString("o"); repo_root = $RepoRoot
     provenance = $Provenance; packages = $SelectedPackages; queue_packages = $QueuePackages; ignored_tests = @(Get-IgnoredTests); resources = $ResourcePlan
-    config = [ordered]@{ nightly = $Nightly; depth = $Depth; batch_size = $BatchSize; package_timeout_minutes = $PackageTimeoutMinutes; max_hours = $MaxHours; target_dir = $TargetDir; metadata_root = $MetadataRoot; evidence_root = $EvidenceRoot; requested_workers = $MaxWorkers; include_working_tree = [bool]$IncludeWorkingTree; threshold_percent = $Threshold; full_rescan = [bool]$FullRescan; registry_path = $RegistryPathAbsolute; defect_log_path = $DefectLogPathAbsolute; auto_update_tests = [bool]$AutoUpdateTests; test_update_command = $TestUpdateCommand; mutest_cargo_path = $MutestCargoPathAbsolute; mutest_cargo_path_source = $MutestCargoPathSource; mutest_native_lib_path = $MutestNativeLibPathAbsolute; target_selector_policy = "auto-lib-bin-v1"; temp_environment_policy = "worker-private-tmp-v1" }
+    config = [ordered]@{ nightly = $Nightly; depth = $Depth; batch_size = $BatchSize; package_timeout_minutes = $PackageTimeoutMinutes; max_hours = $MaxHours; target_dir = $TargetDir; metadata_root = $MetadataRoot; evidence_root = $EvidenceRoot; requested_workers = $MaxWorkers; include_working_tree = [bool]$IncludeWorkingTree; threshold_percent = $Threshold; full_rescan = [bool]$FullRescan; registry_path = $RegistryPathAbsolute; defect_log_path = $DefectLogPathAbsolute; auto_update_tests = [bool]$AutoUpdateTests; test_update_command = $TestUpdateCommand; mutest_cargo_path = $MutestCargoPathAbsolute; mutest_cargo_path_source = $MutestCargoPathSource; mutest_native_lib_path = $MutestNativeLibPathAbsolute; target_selector_policy = "auto-lib-bin-v1"; temp_environment_policy = "worker-private-short-tmp-v2" }
     command_hash = $CommandHash; config_hash = $ConfigHash; commands = $Commands; registry_path = $RegistryPathAbsolute; registry_revision = [int](Get-OptionalProperty $Registry "registry_revision" 0); wave_id = $WaveId; wave = $WaveSummary; index = [ordered]@{ role = "mutation_wave_orchestrator"; path = $RegistryPathAbsolute; row_count = @($FilePlan.files).Count; unique_path_count = @($FilePlan.files | ForEach-Object path | Sort-Object -Unique).Count }
     file_scan = [ordered]@{ mode = if ($FullRescan) { "full_rescan" } else { "diff" }; candidate_files = @($CandidateFiles).Count; queued_files = @($QueueFiles).Count; resumed_files = @($FilePlan.resumed).Count; deleted_files = @($FilePlan.deleted).Count; registry_role = "mutation_wave_orchestrator" }
 }
