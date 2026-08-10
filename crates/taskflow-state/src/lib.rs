@@ -1555,6 +1555,15 @@ mod tests {
                 .0
                 .starts_with("taskflow.run_workflow.effect.")
         );
+        let fingerprint = &journal
+            .append_idempotency
+            .get("run-workflow:run-envelope:1:1")
+            .expect("append idempotency row should be persisted")
+            .request_fingerprint;
+        assert!(
+            fingerprint.contains("Some(\"task-envelope\")"),
+            "append fingerprint must retain correlation metadata"
+        );
     }
 
     #[test]
@@ -1571,6 +1580,13 @@ mod tests {
             .expect_err("changed payload must conflict on the existing idempotency key");
         assert_eq!(
             error,
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
+        );
+        let retry_error = journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect_err("the original payload must remain blocked after a conflict");
+        assert_eq!(
+            retry_error,
             TaskflowStateError::IdempotencyConflict("idem-1".to_string())
         );
 
@@ -1647,6 +1663,24 @@ mod tests {
                 .map(|record| record.global_cursor.clone()),
             Some(VidaEventCursor("global-2".to_string()))
         );
+
+        let mut next_request = append_request(2, vec![event(3)], vec![effect("effect-3")]);
+        next_request.command_id = VidaCommandRef("command-2".to_string());
+        next_request.idempotency_key = VidaIdempotencyKey("idem-2".to_string());
+        let next_receipt = journal
+            .append(next_request)
+            .expect("second append should advance the global cursor range");
+        assert_eq!(
+            next_receipt.first_global_cursor,
+            Some(VidaEventCursor("global-3".to_string()))
+        );
+        assert_eq!(
+            next_receipt.last_global_cursor,
+            Some(VidaEventCursor("global-3".to_string()))
+        );
+        assert_eq!(next_receipt.stream_version, VidaStreamVersion(3));
+        assert_eq!(next_receipt.event_count, 1);
+        assert_eq!(next_receipt.effect_intent_count, 1);
 
         let record = journal
             .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
