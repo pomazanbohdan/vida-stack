@@ -642,4 +642,68 @@ mod tests {
         );
         assert!(runtime.state.completed_packets.is_empty());
     }
+
+    #[test]
+    fn cedar_transition_policy_matrix_rejects_wrong_roles_and_actions() {
+        let valid = AnalystCompletionRequest::next_developer_packet("run-policy", "idem-policy");
+        let verdict = authorize_next_packet_materialization(&valid);
+        assert!(verdict.allowed);
+        assert_eq!(verdict.policy_engine, "cedar");
+
+        for (from_role, next_role, cedar_action) in [
+            (
+                "developer",
+                "developer",
+                "vida.taskflow.materialize_next_packet",
+            ),
+            ("analyst", "tester", "vida.taskflow.materialize_next_packet"),
+            ("analyst", "developer", "vida.taskflow.bypass_policy"),
+        ] {
+            let request = AnalystCompletionRequest {
+                run_id: "run-policy".to_string(),
+                from_role: from_role.to_string(),
+                next_role: next_role.to_string(),
+                idempotency_key: "idem-policy".to_string(),
+                approval_required: false,
+                cedar_action: cedar_action.to_string(),
+            };
+            let verdict = authorize_next_packet_materialization(&request);
+            assert!(!verdict.allowed, "unexpectedly allowed {request:?}");
+            assert!(verdict.reason.contains("does not satisfy"));
+        }
+    }
+
+    #[test]
+    fn retry_budget_exactly_exhausted_completes_after_last_transient_failure() {
+        let config = WorkerAutomationConfig {
+            max_attempts: 2,
+            base_retry_seconds: 5,
+        };
+        let mut runtime = AutomationWorkerRuntime::new(config);
+        let request = AnalystCompletionRequest::next_developer_packet("run-boundary", "idem-1");
+        runtime.inject_transient_failures("run-boundary", 2);
+
+        let first = runtime.process_analyst_completion(request.clone());
+        assert_eq!(first.status, AutomationWorkerStatus::Retrying);
+        assert_eq!(first.retry.as_ref().map(|retry| retry.attempt), Some(1));
+
+        let second = runtime.process_analyst_completion(request.clone());
+        assert_eq!(second.status, AutomationWorkerStatus::Retrying);
+        assert_eq!(second.retry.as_ref().map(|retry| retry.attempt), Some(2));
+        assert_eq!(
+            second
+                .retry
+                .as_ref()
+                .and_then(|retry| retry.blocker_code.as_deref()),
+            None
+        );
+
+        let completed = runtime.process_analyst_completion(request);
+        assert_eq!(
+            completed.status,
+            AutomationWorkerStatus::MaterializedNextPacket
+        );
+        assert!(completed.packet.is_some());
+        assert!(runtime.state.active_claims.is_empty());
+    }
 }

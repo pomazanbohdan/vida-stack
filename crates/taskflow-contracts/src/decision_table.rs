@@ -415,6 +415,26 @@ mod tests {
     }
 
     #[test]
+    fn request_json_round_trip_preserves_optional_task_and_values() {
+        let request = DecisionTableEvaluationRequest::new(
+            "taskflow.route",
+            None,
+            vec![
+                DecisionTableInput::new("enabled", DecisionTableValue::Boolean(true)),
+                DecisionTableInput::new("attempt", DecisionTableValue::Integer(2)),
+            ],
+            Vec::new(),
+        );
+
+        let encoded = serde_json::to_value(&request).expect("request serializes");
+        let decoded: DecisionTableEvaluationRequest =
+            serde_json::from_value(encoded).expect("request deserializes");
+
+        assert_eq!(decoded, request);
+        assert!(decoded.task_id.is_none());
+    }
+
+    #[test]
     fn matched_response_carries_rule_and_output_boundary() {
         let response = DecisionTableEvaluationResponse::matched(
             "taskflow.route",
@@ -471,6 +491,23 @@ mod tests {
                 "notes": ["golden behavior preserved"]
             })
         );
+    }
+
+    #[test]
+    fn transition_contract_rejected_decision_preserves_blockers_without_blocked_status() {
+        let decision = TransitionContractDecision::rejected(
+            "task.lifecycle",
+            Some(TaskId::new("task-1")),
+            vec![TransitionContractBlocker::known(
+                TransitionContractBlockerCode::InvalidTransition,
+            )],
+        );
+
+        assert_eq!(decision.outcome, TransitionContractOutcome::Rejected);
+        assert_eq!(decision.status.as_str(), "rejected");
+        assert_eq!(decision.blocker_codes[0].as_str(), "invalid_transition");
+        assert!(decision.notes.is_empty());
+        assert!(!decision.is_fail_closed_blocked());
     }
 
     #[test]

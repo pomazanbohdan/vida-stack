@@ -1650,6 +1650,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_bridge_request_snapshot_defaults_and_dead_letter_payload_are_explicit() {
+        assert_eq!(
+            HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({})),
+            None
+        );
+
+        let snapshot = HostBridgeRequestJobSnapshot::from_request(&serde_json::json!({
+            "request_id": "req-dead/letter",
+            "run_id": "run-1",
+            "status": "failed",
+            "attempt_count": 3,
+            "blocker_reason": "adapter result missing"
+        }))
+        .expect("request id should be sufficient to build a snapshot");
+        assert_eq!(
+            snapshot.failure_reason.as_deref(),
+            Some("adapter result missing")
+        );
+        assert_eq!(snapshot.result_path, None);
+
+        let plan = plan_host_bridge_request_job(&snapshot, &RetryPolicy::default());
+        assert_eq!(plan.lifecycle, DurableJobLifecycle::DeadLettered);
+        assert_eq!(plan.retry_after_seconds, None);
+        assert_eq!(plan.next_action, "emit_blocked_host_bridge_result");
+        assert_eq!(
+            plan.blocker.as_ref().map(|blocker| blocker.code.as_str()),
+            Some(HOST_BRIDGE_DEAD_LETTER_BLOCKER_CODE)
+        );
+        assert!(
+            plan.blocker
+                .as_ref()
+                .expect("dead-letter blocker")
+                .repair_action
+                .contains("adapter result missing")
+        );
+
+        let payload = host_bridge_request_job_status_payload(&plan);
+        assert_eq!(payload["job_id"], "host-bridge-request-req-dead-letter");
+        assert_eq!(payload["status"], "deadlettered");
+        assert_eq!(payload["authority"], "host_bridge_request");
+        assert_eq!(payload["runner"], "parent_host_adapter");
+        assert_eq!(payload["job_type"], HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
+    }
+
     #[tokio::test]
     async fn host_bridge_request_enqueue_is_idempotent_by_request_id() {
         let dir = tempdir().unwrap();

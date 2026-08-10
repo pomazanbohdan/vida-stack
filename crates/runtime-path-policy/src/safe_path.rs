@@ -517,6 +517,31 @@ mod tests {
     }
 
     #[test]
+    fn existing_regular_file_rejects_missing_and_directory_paths() {
+        let root_dir = temp_root("missing-or-directory");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        std::fs::create_dir_all(root_dir.join("directory")).unwrap();
+
+        let missing = existing_regular_file_under_root(
+            &state_root,
+            "missing.json",
+            ArtifactPathKind::GenericJson,
+        )
+        .unwrap_err();
+        assert!(matches!(missing, PathPolicyError::Metadata { .. }));
+
+        let directory = existing_regular_file_under_root(
+            &state_root,
+            "directory",
+            ArtifactPathKind::GenericJson,
+        )
+        .unwrap_err();
+        assert!(matches!(directory, PathPolicyError::NotRegularFile { .. }));
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
     fn bounded_text_file_reads_within_limit() {
         let root_dir = temp_root("bounded-text-file");
         let state_root = StateRoot::open(&root_dir).unwrap();
@@ -550,6 +575,24 @@ mod tests {
         assert!(matches!(err, PathPolicyError::TooLarge { .. }));
     }
 
+    #[test]
+    fn bounded_text_file_rejects_invalid_utf8() {
+        let root_dir = temp_root("bounded-text-invalid-utf8");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        std::fs::write(root_dir.join("requirements.md"), [0xff, 0xfe]).unwrap();
+
+        let err = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            64,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::Read { .. }));
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn bounded_text_file_rejects_fifo_without_blocking() {
@@ -581,6 +624,22 @@ mod tests {
     }
 
     #[test]
+    fn path_contains_dot_segment_distinguishes_exact_segments_from_literals() {
+        for path in [".", "..", "requests/.", "requests/../request.json"] {
+            assert!(
+                path_contains_dot_segment(path),
+                "expected dot segment: {path}"
+            );
+        }
+        for path in ["requests/file..json", "requests/.../request.json"] {
+            assert!(
+                !path_contains_dot_segment(path),
+                "unexpected dot segment: {path}"
+            );
+        }
+    }
+
+    #[test]
     fn new_output_path_rejects_existing_without_replace() {
         let root_dir = temp_root("new-output-existing");
         let state_root = StateRoot::open(&root_dir).unwrap();
@@ -597,6 +656,27 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::AlreadyExists { .. }));
+    }
+
+    #[test]
+    fn new_output_path_allows_replacing_existing_regular_file() {
+        let root_dir = temp_root("new-output-replace-existing");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let file = root_dir.join("results").join("result.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{}").unwrap();
+
+        let output = new_output_path_under_root(
+            &state_root,
+            &file,
+            ArtifactPathKind::HostBridgeResult,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(output.path(), file);
+        assert_eq!(output.kind(), ArtifactPathKind::HostBridgeResult);
+        let _ = std::fs::remove_dir_all(root_dir);
     }
 
     #[test]

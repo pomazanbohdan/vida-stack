@@ -966,6 +966,36 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_store_lists_sorted_tasks_and_replaces_existing_records() {
+        let mut store = InMemoryTaskStore::default();
+        store.upsert_task(TaskRecord::new(
+            TaskId::new("task-b"),
+            "second",
+            IssueType::Task,
+        ));
+        store.upsert_task(TaskRecord::new(
+            TaskId::new("task-a"),
+            "first",
+            IssueType::Task,
+        ));
+
+        let mut updated = TaskRecord::new(TaskId::new("task-a"), "replacement", IssueType::Task);
+        updated.title = "updated".to_string();
+        store.upsert_task(updated);
+
+        let ids = store
+            .list_tasks()
+            .into_iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["task-a", "task-b"]);
+        assert_eq!(
+            store.get_task(&TaskId::new("task-a")).unwrap().title,
+            "updated"
+        );
+    }
+
+    #[test]
     fn missing_task_is_reported() {
         let store = InMemoryTaskStore::default();
         let error = store
@@ -1023,6 +1053,22 @@ mod tests {
             conflict,
             TaskflowStateError::IdempotencyConflict("idem-1".to_string())
         );
+    }
+
+    #[test]
+    fn operational_journal_accepts_empty_append_without_global_or_outbox_rows() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let receipt = journal
+            .append(append_request(0, Vec::new(), Vec::new()))
+            .expect("empty append should remain a no-op");
+
+        assert_eq!(receipt.stream_version, VidaStreamVersion(0));
+        assert_eq!(receipt.event_count, 0);
+        assert_eq!(receipt.effect_intent_count, 0);
+        assert_eq!(receipt.first_global_cursor, None);
+        assert_eq!(receipt.last_global_cursor, None);
+        assert!(journal.read_global_after(None, 10).is_empty());
+        assert!(journal.claim_outbox_batch("worker-1", 10).is_empty());
     }
 
     #[test]

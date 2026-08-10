@@ -420,6 +420,37 @@ mod tests {
     }
 
     #[test]
+    fn provider_config_validation_fails_closed_for_each_required_field() {
+        let mut unsupported = config_from_knowledge_pack(&pack(), auth_ref());
+        unsupported.provider = "other-provider".to_string();
+        assert_eq!(
+            validate_provider_config(&unsupported),
+            Err(CoderContractError::UnsupportedProvider)
+        );
+
+        let mut missing_model = config_from_knowledge_pack(&pack(), auth_ref());
+        missing_model.model_ref = "  ".to_string();
+        assert_eq!(
+            validate_provider_config(&missing_model),
+            Err(CoderContractError::MissingModelRef)
+        );
+
+        let mut missing_profile = config_from_knowledge_pack(&pack(), auth_ref());
+        missing_profile.model_profile_id = "".to_string();
+        assert_eq!(
+            validate_provider_config(&missing_profile),
+            Err(CoderContractError::MissingModelProfile)
+        );
+
+        let mut missing_auth = config_from_knowledge_pack(&pack(), auth_ref());
+        missing_auth.auth_ref.profile_ref = "\t".to_string();
+        assert_eq!(
+            validate_provider_config(&missing_auth),
+            Err(CoderContractError::MissingAuthRef)
+        );
+    }
+
+    #[test]
     fn receipt_builder_records_scope_checked_touched_paths() {
         let pack = pack();
         let config = config_from_knowledge_pack(&pack, auth_ref());
@@ -575,5 +606,43 @@ mod tests {
             ))
         );
         assert_eq!(scheduler.active_lease_count(), 1);
+    }
+
+    #[test]
+    fn service_scheduler_rejects_duplicate_projects_and_unknown_claims() {
+        let project = ServiceProjectRuntime {
+            project_id: "vida-stack".to_string(),
+            project_root: "C:/project/vida-stack".to_string(),
+            state_dir: "C:/project/vida-stack/.vida/data/state".to_string(),
+            vida_binary_fingerprint: "vida-fp-1".to_string(),
+            config_hash: "cfg-1".to_string(),
+        };
+        let mut scheduler = ServiceScheduler::default();
+        scheduler
+            .register_project(project.clone())
+            .expect("first project should register");
+        assert_eq!(
+            scheduler.register_project(project),
+            Err(CoderContractError::ProjectAlreadyRegistered(
+                "vida-stack".to_string()
+            ))
+        );
+
+        let unknown_claim = ServiceWorkerLease {
+            project_id: "unknown-project".to_string(),
+            task_id: "task-unknown".to_string(),
+            packet_id: "packet-unknown".to_string(),
+            conflict_domain: None,
+            parallel_group: None,
+            expires_at_epoch_ms: 2_000,
+            heartbeat_at_epoch_ms: 1_000,
+        };
+        assert_eq!(
+            scheduler.claim_worker(unknown_claim),
+            Err(CoderContractError::ProjectNotRegistered(
+                "unknown-project".to_string()
+            ))
+        );
+        assert_eq!(scheduler.active_lease_count(), 0);
     }
 }

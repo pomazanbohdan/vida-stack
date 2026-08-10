@@ -2849,6 +2849,25 @@ mod tests {
     }
 
     #[test]
+    fn projection_health_operator_payload_is_pass_for_empty_failure_state() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let health = journal.health_status().expect("empty health should load");
+        let payload = redb_projection_health_operator_payload(&health, &[]);
+
+        assert_eq!(payload["status"], "pass");
+        assert!(payload["blocker_codes"].as_array().unwrap().is_empty());
+        assert!(payload["next_actions"].as_array().unwrap().is_empty());
+        assert_eq!(payload["artifact_refs"]["projection_checkpoint_count"], 0);
+        assert_eq!(payload["artifact_refs"]["projection_failure_count"], 0);
+        assert_eq!(
+            payload["artifact_refs"]["latest_projection_failure_hash"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
     fn replay_after_projection_checkpoint_resumes_from_event_cursor() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
