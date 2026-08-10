@@ -53,6 +53,34 @@ mod tests {
         assert_eq!(defaults["execution_carrier_model"], model);
         assert_eq!(defaults["documentation_first_for_feature_requests"], true);
         assert_eq!(
+            defaults["local_feature_design_template"],
+            crate::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
+        );
+        assert_eq!(
+            defaults["local_product_spec_index"],
+            crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX
+        );
+        assert_eq!(
+            defaults["local_documentation_tooling_map"],
+            crate::DEFAULT_PROJECT_DOC_TOOLING_DOC
+        );
+        assert_eq!(
+            defaults["local_agent_guide"],
+            crate::DEFAULT_PROJECT_AGENT_GUIDE_DOC
+        );
+        assert_eq!(
+            defaults["local_host_agent_guide"],
+            crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
+        );
+        assert_eq!(
+            defaults["local_agent_score_state"]["strategy_store"],
+            crate::WORKER_STRATEGY_STATE
+        );
+        assert_eq!(
+            defaults["local_agent_score_state"]["scorecards_store"],
+            crate::WORKER_SCORECARDS_STATE
+        );
+        assert_eq!(
             defaults["recommended_flow"].as_array().map(Vec::len),
             Some(5)
         );

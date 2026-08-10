@@ -42,10 +42,15 @@ mod tests {
             canonical_activation_status(Some("pending_activation"), false),
             "pending"
         );
+        assert_eq!(
+            canonical_activation_status(Some(" PENDINGISH "), false),
+            "ready_enough_for_normal_work"
+        );
         assert_eq!(canonical_activation_status(Some("ready"), true), "pending");
 
         assert!(activation_status_is_pending(Some(" PENDING_ACTIVATION ")));
         assert!(!activation_status_is_pending(Some("ready")));
+        assert!(!activation_status_is_pending(Some("pending-ish")));
         assert!(!activation_status_is_pending(None));
     }
 }

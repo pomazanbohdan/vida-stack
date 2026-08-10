@@ -51,5 +51,8 @@ mod tests {
                 "autonomous_execution": {"agent_only_development": "true"}
             })
         ));
+        assert!(!execution_plan_agent_only_development_required(
+            &serde_json::json!({"autonomous_execution": true})
+        ));
     }
 }
