@@ -2125,9 +2125,9 @@ mod tests {
         APPEND_IDEMPOTENCY_TABLE, ARTIFACT_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
         EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
         REDB_PROJECTION_FAILURE_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
-        REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE, RedbAppendIdempotencyRecord,
-        RedbOperationalJournal, classify_redb_journal_error, redb_journal_blocker_operator_payload,
-        redb_projection_health_operator_payload,
+        REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE, RedbAppendIdempotencyRecord, RedbJournalHealth,
+        RedbOperationalJournal, RedbProjectionFailureRecord, classify_redb_journal_error,
+        redb_journal_blocker_operator_payload, redb_projection_health_operator_payload,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -2723,6 +2723,29 @@ mod tests {
     }
 
     #[test]
+    fn stream_version_conflict_blocker_preserves_rebase_versions() {
+        let path = Path::new("state/journal.redb");
+        let blocker = classify_redb_journal_error(
+            &TaskflowStateError::StreamVersionConflict {
+                stream_id: "stream-1".to_string(),
+                expected: Some(3),
+                actual: 7,
+            },
+            path,
+        )
+        .expect("stream conflict should classify");
+
+        assert_eq!(blocker.code, REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE);
+        assert!(blocker.next_action.contains("stream-1"));
+        assert!(blocker.next_action.contains("actual version `7`"));
+        assert!(blocker.next_action.contains("expected version `3`"));
+        assert!(
+            classify_redb_journal_error(&TaskflowStateError::Storage("disk full".into()), path)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn idempotency_and_outbox_survive_reopen() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
@@ -2864,6 +2887,54 @@ mod tests {
         assert_eq!(
             payload["artifact_refs"]["latest_projection_failure_hash"],
             serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn projection_health_operator_payload_exposes_failure_repair_context() {
+        let health = RedbJournalHealth {
+            schema_version: "1".to_string(),
+            stream_event_count: 4,
+            global_event_count: 4,
+            append_idempotency_count: 1,
+            idempotency_count: 0,
+            outbox_pending_count: 0,
+            outbox_claimed_count: 0,
+            outbox_succeeded_count: 0,
+            outbox_failed_count: 0,
+            projection_checkpoint_count: 2,
+            projection_failure_count: 1,
+            artifact_count: 0,
+        };
+        let failures = vec![RedbProjectionFailureRecord {
+            projection_id: VidaProjectionRef("projection-1".to_string()),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            source_event_cursor: Some(VidaEventCursor("global-4".to_string())),
+            failure_kind: "projection_rebuild_failed".to_string(),
+            failure_message: "decode failed".to_string(),
+            retry_after: None,
+            repair_plan_ref: Some("repair-1".to_string()),
+            content_hash: "failure-hash-1".to_string(),
+        }];
+
+        let payload = redb_projection_health_operator_payload(&health, &failures);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            REDB_PROJECTION_FAILURE_BLOCKER_CODE
+        );
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("repair action")
+                .contains("source_event_cursor")
+        );
+        assert_eq!(payload["artifact_refs"]["projection_checkpoint_count"], 2);
+        assert_eq!(payload["artifact_refs"]["projection_failure_count"], 1);
+        assert_eq!(
+            payload["artifact_refs"]["latest_projection_failure_hash"],
+            "failure-hash-1"
         );
     }
 

@@ -458,6 +458,28 @@ mod tests {
         root
     }
 
+    #[cfg(any(unix, windows))]
+    fn create_test_symlink(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).unwrap();
+            true
+        }
+        #[cfg(windows)]
+        {
+            match std::os::windows::fs::symlink_file(target, link) {
+                Ok(()) => true,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::PermissionDenied
+                        || error.raw_os_error() == Some(1314) =>
+                {
+                    false
+                }
+                Err(error) => panic!("symlink creation failed: {error}"),
+            }
+        }
+    }
+
     #[test]
     fn existing_regular_file_must_be_under_state_root() {
         let root_dir = temp_root("existing-under-root");
@@ -545,6 +567,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(root_dir);
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn existing_regular_file_rejects_symlink_path() {
+        let root_dir = temp_root("existing-symlink");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let target = root_dir.join("target.json");
+        let link = root_dir.join("link.json");
+        std::fs::write(&target, "{}").unwrap();
+        if !create_test_symlink(&target, &link) {
+            let _ = std::fs::remove_dir_all(root_dir);
+            return;
+        }
+
+        let error = existing_regular_file_under_root(
+            &state_root,
+            "link.json",
+            ArtifactPathKind::GenericJson,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { .. }));
+    }
+
     #[test]
     fn bounded_text_file_reads_within_limit() {
         let root_dir = temp_root("bounded-text-file");
@@ -618,6 +663,30 @@ mod tests {
             other => panic!("expected metadata error, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn bounded_text_file_rejects_symlink_path() {
+        let root_dir = temp_root("bounded-text-symlink");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let target = root_dir.join("target.md");
+        let link = root_dir.join("requirements.md");
+        std::fs::write(&target, "content").unwrap();
+        if !create_test_symlink(&target, &link) {
+            let _ = std::fs::remove_dir_all(root_dir);
+            return;
+        }
+
+        let error = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            64,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { .. }));
     }
 
     #[test]
@@ -701,6 +770,31 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::AlreadyExists { .. }));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn new_output_path_rejects_existing_symlink_even_when_replacing() {
+        let root_dir = temp_root("new-output-symlink");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let target = root_dir.join("target.json");
+        let link = root_dir.join("results").join("result.json");
+        std::fs::write(&target, "{}").unwrap();
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if !create_test_symlink(&target, &link) {
+            let _ = std::fs::remove_dir_all(root_dir);
+            return;
+        }
+
+        let error = new_output_path_under_root(
+            &state_root,
+            &link,
+            ArtifactPathKind::HostBridgeResult,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Symlink { .. }));
     }
 
     #[test]
@@ -823,7 +917,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(err, PathPolicyError::Symlink { .. }));
+        match err {
+            PathPolicyError::Symlink { path, .. } => assert_eq!(path, link_parent),
+            other => panic!("expected symlink error, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&root_dir);
         let _ = std::fs::remove_dir_all(&outside_root);
     }

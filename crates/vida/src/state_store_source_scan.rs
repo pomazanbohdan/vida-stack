@@ -174,6 +174,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_source_metadata_rejects_invalid_versions_and_empty_lists() {
+        let metadata =
+            parse_source_metadata("version: not-a-number\nrequired_follow_on: , \nhierarchy:  ,\n");
+
+        assert_eq!(metadata.version, None);
+        assert!(metadata.required_follow_on.is_empty());
+        assert!(metadata.hierarchy.is_empty());
+    }
+
+    #[test]
     fn source_inference_preserves_slice_and_path_contracts() {
         assert_eq!(
             infer_artifact_kind("framework_memory", Path::new("agent-definition.md")),
@@ -213,6 +223,7 @@ mod tests {
             hierarchy_from_path(Path::new("docs/process/source.md")),
             vec!["docs".to_string(), "process".to_string()]
         );
+        assert!(hierarchy_from_path(Path::new("source.md")).is_empty());
         assert_eq!(normalize_path(relative), "docs/process/source.md");
     }
 
@@ -249,5 +260,18 @@ mod tests {
             ]
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn collect_markdown_files_reports_missing_root() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-store-source-scan-missing-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        let error = collect_markdown_files(&root).expect_err("missing root should fail closed");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }
