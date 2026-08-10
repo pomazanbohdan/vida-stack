@@ -154,6 +154,17 @@ mod tests {
     }
 
     #[test]
+    fn read_json_value_file_accepts_exact_size_limit() {
+        let body = r#"{"value":"abc"}"#;
+        let (root, file) = fixture_file("exact-limit", body);
+
+        let value = read_json_value_file(&file, body.len() as u64).unwrap();
+
+        assert_eq!(value["value"], "abc");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn read_json_file_deserializes_bounded_json() {
         let root = std::env::temp_dir().join(format!(
             "runtime-path-policy-json-ok-{}",
@@ -180,10 +191,14 @@ mod tests {
     #[test]
     fn read_json_value_file_reports_malformed_json() {
         let (root, file) = fixture_file("malformed", "{\"value\":");
+        let expected_path = file.path().to_path_buf();
 
         let error = read_json_value_file(&file, DEFAULT_JSON_ARTIFACT_MAX_BYTES).unwrap_err();
 
-        assert!(matches!(error, PathPolicyError::Json { .. }));
+        match error {
+            PathPolicyError::Json { path, .. } => assert_eq!(path, expected_path),
+            other => panic!("expected json error, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

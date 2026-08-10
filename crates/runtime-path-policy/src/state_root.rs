@@ -160,6 +160,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(root_dir);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn resolve_raw_preserves_windows_rooted_paths_without_a_drive_prefix() {
+        let root_dir = temp_root("windows-rooted");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let rooted = PathBuf::from(r"\nested\state.json");
+
+        assert!(path_is_rooted(&rooted));
+        assert_eq!(state_root.resolve_raw(&rooted), rooted);
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
     #[test]
     fn cap_relative_path_accepts_rooted_inside_and_rejects_outside() {
         let root_dir = temp_root("cap-relative");

@@ -505,15 +505,19 @@ mod tests {
     fn existing_regular_file_rejects_dot_segments() {
         let root_dir = temp_root("dot-segment");
         let state_root = StateRoot::open(root_dir).unwrap();
+        let raw_path = Path::new("requests/../request.json");
 
         let err = existing_regular_file_under_root(
             &state_root,
-            "requests/../request.json",
+            raw_path,
             ArtifactPathKind::HostBridgeRequest,
         )
         .unwrap_err();
 
-        assert!(matches!(err, PathPolicyError::DotSegment { .. }));
+        match err {
+            PathPolicyError::DotSegment { path, .. } => assert_eq!(path, raw_path),
+            other => panic!("expected dot-segment error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -573,6 +577,47 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::TooLarge { .. }));
+    }
+
+    #[test]
+    fn bounded_text_file_accepts_exact_size_limit() {
+        let root_dir = temp_root("bounded-text-exact-limit");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let body = "12345";
+        std::fs::write(root_dir.join("requirements.md"), body).unwrap();
+
+        let text = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            body.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(text, body);
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn bounded_text_file_metadata_error_preserves_resolved_path() {
+        let root_dir = temp_root("bounded-text-missing-path");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let raw_path = Path::new("requirements.md");
+        let expected_path = root_dir.join(raw_path);
+
+        let err = read_bounded_text_file_under_root(
+            &state_root,
+            raw_path,
+            ArtifactPathKind::RequirementSourceFile,
+            64,
+        )
+        .unwrap_err();
+
+        match err {
+            PathPolicyError::Metadata { path, .. } => assert_eq!(path, expected_path),
+            other => panic!("expected metadata error, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root_dir);
     }
 
     #[test]
@@ -707,6 +752,53 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root_dir);
         let _ = std::fs::remove_dir_all(&outside_root);
+    }
+
+    #[test]
+    fn ensure_under_root_error_preserves_path_and_root() {
+        let root_dir = temp_root("ensure-under-root-error");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let outside = root_dir.with_file_name(format!(
+            "{}-outside",
+            root_dir.file_name().unwrap().to_string_lossy()
+        ));
+
+        let err = ensure_under_root(&state_root, &outside, ArtifactPathKind::HostBridgeResult)
+            .unwrap_err();
+
+        match err {
+            PathPolicyError::OutsideStateRoot { path, root, .. } => {
+                assert_eq!(path, outside);
+                assert_eq!(root, state_root.canonical());
+            }
+            other => panic!("expected outside-root error, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root_dir);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn new_output_path_rejects_file_parent_with_precise_path() {
+        let root_dir = temp_root("new-output-file-parent");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let parent = root_dir.join("parent-file");
+        std::fs::write(&parent, b"not a directory").unwrap();
+        let target = parent.join("result.json");
+
+        let err = new_output_path_under_root(
+            &state_root,
+            &target,
+            ArtifactPathKind::HostBridgeResult,
+            true,
+        )
+        .unwrap_err();
+
+        match err {
+            PathPolicyError::NotRegularFile { path, .. } => assert_eq!(path, parent),
+            other => panic!("expected non-regular parent error, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(parent);
+        let _ = std::fs::remove_dir_all(root_dir);
     }
 
     #[cfg(unix)]
