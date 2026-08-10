@@ -1,13 +1,13 @@
 {
   "schema_version": 3,
   "index_role": "mutation_wave_orchestrator",
-  "registry_revision": 413,
-  "updated_at": "2026-08-10T16:00:00.6882464Z",
+  "registry_revision": 426,
+  "updated_at": "2026-08-10T16:22:47.9419951Z",
   "repo_root": "C:\\project\\vida-stack",
-  "run_id": "mutest-20260810-185746-a02c9c17",
-  "last_wave_id": "wave-mutest-20260810-185746-a02c9c17",
+  "run_id": "mutest-20260810-191852-e61c18f0",
+  "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
   "snapshot_mode": "working_tree",
-  "snapshot_index_tree": "1f96feedbfac6b371daa67f67c852206ac997ad9",
+  "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
   "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
   "threshold_percent": 90.0,
   "full_rescan": false,
@@ -463,6 +463,26 @@
       },
       "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-185746-a02c9c17",
       "registry_revision": 412
+    },
+    {
+      "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+      "run_id": "mutest-20260810-191852-e61c18f0",
+      "started_at": "2026-08-10T16:18:54.2598655Z",
+      "completed_at": "2026-08-10T16:22:46.0722568Z",
+      "status": "completed_with_followups",
+      "counts": {
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "needs_tests": 10,
+        "needs_rerun": 0,
+        "needs_rescan": 0,
+        "deleted_from_snapshot": 0
+      },
+      "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-191852-e61c18f0",
+      "registry_revision": 425
     }
   ],
   "files": [
@@ -2006,13 +2026,13 @@
     {
       "path": "crates/runtime-path-policy/src/size_limits.rs",
       "package": "runtime-path-policy",
-      "hash": "d5b3b127656b4db3b2c8b60d0f33b318538a42005475136b335678be35426c1e",
-      "content_hash_sha256": "d5b3b127656b4db3b2c8b60d0f33b318538a42005475136b335678be35426c1e",
-      "loc": 4,
-      "loc_total": 4,
-      "loc_hash": "d5b3b127656b4db3b2c8b60d0f33b318538a42005475136b335678be35426c1e",
+      "hash": "98eaf9090d5a0e14d6617d964fc62e15e749317372de956095c22347bfd7ee9f",
+      "content_hash_sha256": "98eaf9090d5a0e14d6617d964fc62e15e749317372de956095c22347bfd7ee9f",
+      "loc": 21,
+      "loc_total": 23,
+      "loc_hash": "98eaf9090d5a0e14d6617d964fc62e15e749317372de956095c22347bfd7ee9f",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -2022,21 +2042,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-ab3c4fa70c92b63d57ad712b2d621cae41a7eb88d5a1e2d3543ce729e808e0b5",
-          "type": "survived_mutants",
+          "defect_key": "mut-92d2fef4ffc836fc2cfdf738594408f52d4dcd9a7cc9b50e69c7665efebac255",
+          "type": "mutation_no_evidence",
           "path": "crates/runtime-path-policy/src/size_limits.rs",
           "package": "runtime-path-policy",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "d5b3b127656b4db3b2c8b60d0f33b318538a42005475136b335678be35426c1e",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "98eaf9090d5a0e14d6617d964fc62e15e749317372de956095c22347bfd7ee9f",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260808-232532-f86c006b/packages/runtime-path-policy/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260808-232532-f86c006b/packages/runtime-path-policy/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -2050,18 +2066,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "d5b3b127656b4db3b2c8b60d0f33b318538a42005475136b335678be35426c1e",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "98eaf9090d5a0e14d6617d964fc62e15e749317372de956095c22347bfd7ee9f",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.302056Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9465657Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3020482Z"
+      "updated_at": "2026-08-10T16:22:45.9346355Z"
     },
     {
       "path": "crates/runtime-path-policy/src/state_root.rs",
@@ -2126,13 +2142,13 @@
     {
       "path": "crates/runtime-path-policy/src/symlink_policy.rs",
       "package": "runtime-path-policy",
-      "hash": "ebee4a22426dd9d223483785ffbfed4c158e628be408d56fe788f1292f78d8d3",
-      "content_hash_sha256": "ebee4a22426dd9d223483785ffbfed4c158e628be408d56fe788f1292f78d8d3",
-      "loc": 4,
-      "loc_total": 5,
-      "loc_hash": "ebee4a22426dd9d223483785ffbfed4c158e628be408d56fe788f1292f78d8d3",
+      "hash": "cd339576bd3c9c6794e359c51bea99bbd6afb5b13de5418f265356b719b3961c",
+      "content_hash_sha256": "cd339576bd3c9c6794e359c51bea99bbd6afb5b13de5418f265356b719b3961c",
+      "loc": 42,
+      "loc_total": 47,
+      "loc_hash": "cd339576bd3c9c6794e359c51bea99bbd6afb5b13de5418f265356b719b3961c",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -2146,17 +2162,13 @@
           "type": "survived_mutants",
           "path": "crates/runtime-path-policy/src/symlink_policy.rs",
           "package": "runtime-path-policy",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "ebee4a22426dd9d223483785ffbfed4c158e628be408d56fe788f1292f78d8d3",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "cd339576bd3c9c6794e359c51bea99bbd6afb5b13de5418f265356b719b3961c",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260808-232532-f86c006b/packages/runtime-path-policy/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260808-232532-f86c006b/packages/runtime-path-policy/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -2170,18 +2182,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "ebee4a22426dd9d223483785ffbfed4c158e628be408d56fe788f1292f78d8d3",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "cd339576bd3c9c6794e359c51bea99bbd6afb5b13de5418f265356b719b3961c",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.302258Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9496760Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3022498Z"
+      "updated_at": "2026-08-10T16:22:45.9469267Z"
     },
     {
       "path": "crates/taskflow-authority/src/authority_chain.rs",
@@ -2443,13 +2455,13 @@
     {
       "path": "crates/taskflow-authority/src/errors.rs",
       "package": "taskflow-authority",
-      "hash": "b63490742e9d6e41e6e3292efa7d0f7f40b94431641b1c38d79af405c70582cd",
-      "content_hash_sha256": "b63490742e9d6e41e6e3292efa7d0f7f40b94431641b1c38d79af405c70582cd",
-      "loc": 5,
-      "loc_total": 5,
-      "loc_hash": "b63490742e9d6e41e6e3292efa7d0f7f40b94431641b1c38d79af405c70582cd",
+      "hash": "5727533e07bc2c9864e2dc425c9db43e987e391dfbfd4d1f232e60152da5802e",
+      "content_hash_sha256": "5727533e07bc2c9864e2dc425c9db43e987e391dfbfd4d1f232e60152da5802e",
+      "loc": 24,
+      "loc_total": 27,
+      "loc_hash": "5727533e07bc2c9864e2dc425c9db43e987e391dfbfd4d1f232e60152da5802e",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -2459,21 +2471,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-614ce35743282d244717b9c80793bb5075795a3dd4c59fc23ff2c7a0b5613984",
-          "type": "survived_mutants",
+          "defect_key": "mut-1081294def7993af8ef731f39066aae26633798cf1c43e954a1a53db8c61f5f8",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-authority/src/errors.rs",
           "package": "taskflow-authority",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "b63490742e9d6e41e6e3292efa7d0f7f40b94431641b1c38d79af405c70582cd",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "5727533e07bc2c9864e2dc425c9db43e987e391dfbfd4d1f232e60152da5802e",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-authority/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-authority/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -2487,18 +2495,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "b63490742e9d6e41e6e3292efa7d0f7f40b94431641b1c38d79af405c70582cd",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "5727533e07bc2c9864e2dc425c9db43e987e391dfbfd4d1f232e60152da5802e",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3029617Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9523454Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3029526Z"
+      "updated_at": "2026-08-10T16:22:45.9499546Z"
     },
     {
       "path": "crates/taskflow-authority/src/exception_takeover.rs",
@@ -4092,7 +4100,7 @@
       "wave_updated_at": "2026-08-10T15:59:58.7629484Z",
       "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T15:59:58.7604030Z"
+      "updated_at": "2026-08-10T15:59:58.760403Z"
     },
     {
       "path": "crates/taskflow-core/src/consume/resume_receipt.rs",
@@ -4201,7 +4209,7 @@
       "scan_count": 4,
       "last_wave_id": "wave-mutest-20260810-185746-a02c9c17",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T15:59:58.7685040Z",
+      "wave_updated_at": "2026-08-10T15:59:58.768504Z",
       "wave_count": 4,
       "test_update_status": "not_requested",
       "updated_at": "2026-08-10T15:59:58.7660598Z"
@@ -4576,7 +4584,7 @@
       "scan_count": 4,
       "last_wave_id": "wave-mutest-20260810-185746-a02c9c17",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T15:59:58.7712640Z",
+      "wave_updated_at": "2026-08-10T15:59:58.771264Z",
       "wave_count": 4,
       "test_update_status": "not_requested",
       "updated_at": "2026-08-10T15:59:58.7687473Z"
@@ -4635,7 +4643,7 @@
       "wave_updated_at": "2026-08-10T15:59:58.7774509Z",
       "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T15:59:58.7715060Z"
+      "updated_at": "2026-08-10T15:59:58.771506Z"
     },
     {
       "path": "crates/taskflow-core/src/run_graph/model.rs",
@@ -4861,13 +4869,13 @@
     {
       "path": "crates/taskflow-core/src/run_graph/status.rs",
       "package": "taskflow-core",
-      "hash": "e6f4f9703452e6bc6ec301de54bdb425890be177999222cfdae6bc36ea393d0e",
-      "content_hash_sha256": "e6f4f9703452e6bc6ec301de54bdb425890be177999222cfdae6bc36ea393d0e",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "e6f4f9703452e6bc6ec301de54bdb425890be177999222cfdae6bc36ea393d0e",
+      "hash": "1d14af87f46f5e946077af4e2fc9fdb74f4d8c0cd37b093546b681dd23f0cf95",
+      "content_hash_sha256": "1d14af87f46f5e946077af4e2fc9fdb74f4d8c0cd37b093546b681dd23f0cf95",
+      "loc": 8,
+      "loc_total": 9,
+      "loc_hash": "1d14af87f46f5e946077af4e2fc9fdb74f4d8c0cd37b093546b681dd23f0cf95",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -4877,21 +4885,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-b2f87e5ab9fa6deab24045bb5bda229182334ac06289ff9d8f0e5100f6d253ef",
-          "type": "survived_mutants",
+          "defect_key": "mut-efb44ed19d1a1fa1839086dd88b79e7a8836d374c9977b354729ac72b7b43d39",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-core/src/run_graph/status.rs",
           "package": "taskflow-core",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "e6f4f9703452e6bc6ec301de54bdb425890be177999222cfdae6bc36ea393d0e",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "1d14af87f46f5e946077af4e2fc9fdb74f4d8c0cd37b093546b681dd23f0cf95",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -4905,18 +4909,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "e6f4f9703452e6bc6ec301de54bdb425890be177999222cfdae6bc36ea393d0e",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "1d14af87f46f5e946077af4e2fc9fdb74f4d8c0cd37b093546b681dd23f0cf95",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3093221Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9551899Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3093158Z"
+      "updated_at": "2026-08-10T16:22:45.9526195Z"
     },
     {
       "path": "crates/taskflow-core/src/run_workflow/mod.rs",
@@ -5087,13 +5091,13 @@
     {
       "path": "crates/taskflow-core/src/scheduling/actualize.rs",
       "package": "taskflow-core",
-      "hash": "6a348714e508ed1bb59cc1960c852e8ce272d4c0c5f5ee40cf4b8b6fce548f12",
-      "content_hash_sha256": "6a348714e508ed1bb59cc1960c852e8ce272d4c0c5f5ee40cf4b8b6fce548f12",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "6a348714e508ed1bb59cc1960c852e8ce272d4c0c5f5ee40cf4b8b6fce548f12",
+      "hash": "84282f0537d00fbc917bac9f76255c9e5177d00482916a717d45fb6be1dc88f4",
+      "content_hash_sha256": "84282f0537d00fbc917bac9f76255c9e5177d00482916a717d45fb6be1dc88f4",
+      "loc": 8,
+      "loc_total": 9,
+      "loc_hash": "84282f0537d00fbc917bac9f76255c9e5177d00482916a717d45fb6be1dc88f4",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -5103,21 +5107,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-d59ea3bfc6a41255983bcbfd3c1a62de39191e9170630676e41599e2bbbec217",
-          "type": "survived_mutants",
+          "defect_key": "mut-93a7a72317c9a7ad926ea848ce167bc95c68c71d4eda2edf3ded515e04eaa1c0",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-core/src/scheduling/actualize.rs",
           "package": "taskflow-core",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "6a348714e508ed1bb59cc1960c852e8ce272d4c0c5f5ee40cf4b8b6fce548f12",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "84282f0537d00fbc917bac9f76255c9e5177d00482916a717d45fb6be1dc88f4",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -5131,29 +5131,29 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "6a348714e508ed1bb59cc1960c852e8ce272d4c0c5f5ee40cf4b8b6fce548f12",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "84282f0537d00fbc917bac9f76255c9e5177d00482916a717d45fb6be1dc88f4",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3096833Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9580129Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3096766Z"
+      "updated_at": "2026-08-10T16:22:45.9554728Z"
     },
     {
       "path": "crates/taskflow-core/src/scheduling/graph_summary.rs",
       "package": "taskflow-core",
-      "hash": "d17656c08dd91e610e696582033522faf5ff0070ec4c74c782984bf94f3fa66b",
-      "content_hash_sha256": "d17656c08dd91e610e696582033522faf5ff0070ec4c74c782984bf94f3fa66b",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "d17656c08dd91e610e696582033522faf5ff0070ec4c74c782984bf94f3fa66b",
+      "hash": "dc90994c8409938b57611079911fcb95a201e58dbea644723e71c74a1ca0e222",
+      "content_hash_sha256": "dc90994c8409938b57611079911fcb95a201e58dbea644723e71c74a1ca0e222",
+      "loc": 8,
+      "loc_total": 9,
+      "loc_hash": "dc90994c8409938b57611079911fcb95a201e58dbea644723e71c74a1ca0e222",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -5163,21 +5163,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-43d8669a6bac1160d7e4a49b39b057bcc8975fee59b2023b50b84a4b0d2d3f1c",
-          "type": "survived_mutants",
+          "defect_key": "mut-f965d6bda34e6ab51f0b10e877b1bdbbf77dd3cfe0851d301ce59107a72615f1",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-core/src/scheduling/graph_summary.rs",
           "package": "taskflow-core",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "d17656c08dd91e610e696582033522faf5ff0070ec4c74c782984bf94f3fa66b",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "dc90994c8409938b57611079911fcb95a201e58dbea644723e71c74a1ca0e222",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -5191,29 +5187,29 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "d17656c08dd91e610e696582033522faf5ff0070ec4c74c782984bf94f3fa66b",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "dc90994c8409938b57611079911fcb95a201e58dbea644723e71c74a1ca0e222",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.30976Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9607714Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3097542Z"
+      "updated_at": "2026-08-10T16:22:45.9582637Z"
     },
     {
       "path": "crates/taskflow-core/src/scheduling/next_lawful.rs",
       "package": "taskflow-core",
-      "hash": "f17d7f184af613720e569e1fb0601c5d32b5b9f43ae83bcf230e8bb7cd3d0c51",
-      "content_hash_sha256": "f17d7f184af613720e569e1fb0601c5d32b5b9f43ae83bcf230e8bb7cd3d0c51",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "f17d7f184af613720e569e1fb0601c5d32b5b9f43ae83bcf230e8bb7cd3d0c51",
+      "hash": "25b81bcd298da0bde2fd3676965d5f0be687d8586d2a7b90fc592bcaefd8fd5c",
+      "content_hash_sha256": "25b81bcd298da0bde2fd3676965d5f0be687d8586d2a7b90fc592bcaefd8fd5c",
+      "loc": 8,
+      "loc_total": 9,
+      "loc_hash": "25b81bcd298da0bde2fd3676965d5f0be687d8586d2a7b90fc592bcaefd8fd5c",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -5223,21 +5219,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-ac2ba75f34162ace835369c6a36eead0be5a61b1bd20895d2f8dae18f9b9078f",
-          "type": "survived_mutants",
+          "defect_key": "mut-7daf592351b6c396c5b7ecdb62dd1352e883763cdfa2c3224690128642f2e5e3",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-core/src/scheduling/next_lawful.rs",
           "package": "taskflow-core",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "f17d7f184af613720e569e1fb0601c5d32b5b9f43ae83bcf230e8bb7cd3d0c51",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "25b81bcd298da0bde2fd3676965d5f0be687d8586d2a7b90fc592bcaefd8fd5c",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -5251,29 +5243,29 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "f17d7f184af613720e569e1fb0601c5d32b5b9f43ae83bcf230e8bb7cd3d0c51",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "25b81bcd298da0bde2fd3676965d5f0be687d8586d2a7b90fc592bcaefd8fd5c",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3098393Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9677993Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3098333Z"
+      "updated_at": "2026-08-10T16:22:45.9610190Z"
     },
     {
       "path": "crates/taskflow-core/src/scheduling/route_explain.rs",
       "package": "taskflow-core",
-      "hash": "9c43af61b8a0489f349594c1c056b7b8686b66aa3e5204294fe0fbb13f879bba",
-      "content_hash_sha256": "9c43af61b8a0489f349594c1c056b7b8686b66aa3e5204294fe0fbb13f879bba",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "9c43af61b8a0489f349594c1c056b7b8686b66aa3e5204294fe0fbb13f879bba",
+      "hash": "b837ae925fe75df15be18a04101295902cf776b77a92fa33c0b1686437e8231f",
+      "content_hash_sha256": "b837ae925fe75df15be18a04101295902cf776b77a92fa33c0b1686437e8231f",
+      "loc": 8,
+      "loc_total": 9,
+      "loc_hash": "b837ae925fe75df15be18a04101295902cf776b77a92fa33c0b1686437e8231f",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -5283,21 +5275,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-c671eee8fd147b8cd4e9a3fb74e724f9b71eff47d0fa24da70e5a8459bd0282f",
-          "type": "survived_mutants",
+          "defect_key": "mut-f3dd3bdc1948f2d9e65d54659caa09824c2cb9ccb52761509a02f2a51a52f713",
+          "type": "mutation_no_evidence",
           "path": "crates/taskflow-core/src/scheduling/route_explain.rs",
           "package": "taskflow-core",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "9c43af61b8a0489f349594c1c056b7b8686b66aa3e5204294fe0fbb13f879bba",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "b837ae925fe75df15be18a04101295902cf776b77a92fa33c0b1686437e8231f",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/taskflow-core/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -5311,18 +5299,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "9c43af61b8a0489f349594c1c056b7b8686b66aa3e5204294fe0fbb13f879bba",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "b837ae925fe75df15be18a04101295902cf776b77a92fa33c0b1686437e8231f",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3099205Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9705536Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3099143Z"
+      "updated_at": "2026-08-10T16:22:45.9680470Z"
     },
     {
       "path": "crates/taskflow-core/src/scheduling/scheduler_dispatch.rs",
@@ -8566,13 +8554,13 @@
     {
       "path": "crates/vida-test-support/src/model/mod.rs",
       "package": "vida-test-support",
-      "hash": "170aaabeea886fc515738169c9c2af0fa8b4e7e52333cd40e2fdc1366941772e",
-      "content_hash_sha256": "170aaabeea886fc515738169c9c2af0fa8b4e7e52333cd40e2fdc1366941772e",
-      "loc": 1,
-      "loc_total": 1,
-      "loc_hash": "170aaabeea886fc515738169c9c2af0fa8b4e7e52333cd40e2fdc1366941772e",
+      "hash": "492cd13d295493fb6eda7e6c4fe214c2be12447cb1dbc95be7c57b728b742d4e",
+      "content_hash_sha256": "492cd13d295493fb6eda7e6c4fe214c2be12447cb1dbc95be7c57b728b742d4e",
+      "loc": 28,
+      "loc_total": 32,
+      "loc_hash": "492cd13d295493fb6eda7e6c4fe214c2be12447cb1dbc95be7c57b728b742d4e",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -8582,21 +8570,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-cb5d3cc11756ec601bbb2f4e854a0e25fef7b8e6f4ddae0dbd9ac8c9d816e217",
-          "type": "survived_mutants",
+          "defect_key": "mut-429b72ce2d3dacee23cc908c54bbeb58eda4a7654dd13e4f291d1506bd27c458",
+          "type": "mutation_no_evidence",
           "path": "crates/vida-test-support/src/model/mod.rs",
           "package": "vida-test-support",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "170aaabeea886fc515738169c9c2af0fa8b4e7e52333cd40e2fdc1366941772e",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "492cd13d295493fb6eda7e6c4fe214c2be12447cb1dbc95be7c57b728b742d4e",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida-test-support/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida-test-support/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -8610,18 +8594,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "170aaabeea886fc515738169c9c2af0fa8b4e7e52333cd40e2fdc1366941772e",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "492cd13d295493fb6eda7e6c4fe214c2be12447cb1dbc95be7c57b728b742d4e",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.3174501Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9731034Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3174445Z"
+      "updated_at": "2026-08-10T16:22:45.9707895Z"
     },
     {
       "path": "crates/vida-test-support/src/model/snapshot_authority.rs",
@@ -10926,13 +10910,13 @@
     {
       "path": "crates/vida/src/init.rs",
       "package": "vida",
-      "hash": "bc9abcbc61dc3dab3fa4b47e25b265fd364f21e9791939ac374a3cc5b3bb7ecc",
-      "content_hash_sha256": "bc9abcbc61dc3dab3fa4b47e25b265fd364f21e9791939ac374a3cc5b3bb7ecc",
-      "loc": 2,
-      "loc_total": 2,
-      "loc_hash": "bc9abcbc61dc3dab3fa4b47e25b265fd364f21e9791939ac374a3cc5b3bb7ecc",
+      "hash": "c0f66d9a4972d3ae3f72d0837ec1878deb6774c8dfb01b21d48dd4992cf3e6eb",
+      "content_hash_sha256": "c0f66d9a4972d3ae3f72d0837ec1878deb6774c8dfb01b21d48dd4992cf3e6eb",
+      "loc": 22,
+      "loc_total": 24,
+      "loc_hash": "c0f66d9a4972d3ae3f72d0837ec1878deb6774c8dfb01b21d48dd4992cf3e6eb",
       "status": "needs_tests",
-      "queue_reason": "needs_rerun",
+      "queue_reason": "content_hash_changed",
       "mutation_score": null,
       "mutation_score_ratio": null,
       "killed": 0,
@@ -10942,21 +10926,17 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-b8463ce866f2b4db0acab056555b45e31094bb15fe6c3864afcb6cb9e9311a41",
-          "type": "survived_mutants",
+          "defect_key": "mut-ce276e3d59ba9e18cd2069089567a9e4625058a059dc907d55e60a633b506653",
+          "type": "mutation_no_evidence",
           "path": "crates/vida/src/init.rs",
           "package": "vida",
-          "wave_id": "wave-mutest-20260810-132356-54dbf0c3",
-          "observed_hash": "bc9abcbc61dc3dab3fa4b47e25b265fd364f21e9791939ac374a3cc5b3bb7ecc",
+          "wave_id": "wave-mutest-20260810-191852-e61c18f0",
+          "observed_hash": "c0f66d9a4972d3ae3f72d0837ec1878deb6774c8dfb01b21d48dd4992cf3e6eb",
           "mutation_identity": "file-level",
           "killed": 0,
           "survived": 0,
           "no_coverage": 0,
-          "recommendation": "add focused tests, then rescan this file",
-          "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida/stdout.log"
-          ]
+          "recommendation": "add focused tests, then rescan this file"
         }
       ],
       "recommendations": [
@@ -10970,18 +10950,18 @@
       "blocker_family": null,
       "blocker_reason": null,
       "next_action": null,
-      "last_scan_hash": "bc9abcbc61dc3dab3fa4b47e25b265fd364f21e9791939ac374a3cc5b3bb7ecc",
-      "last_scan_run_id": "mutest-20260810-132356-54dbf0c3",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "05d9455fcd48c89b44287ce2848025bbdad99899fe0585f28c93b166f0be1668",
+      "last_scan_hash": "c0f66d9a4972d3ae3f72d0837ec1878deb6774c8dfb01b21d48dd4992cf3e6eb",
+      "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+      "snapshot_index_tree": "a90d5fe6f7880cee9faa3c6bda260853ad1fa75b",
+      "config_hash": "cae1fd2bf71920001ca5b751dbce61389ebf10d9a4098c16d066f03df670048f",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260810-132356-54dbf0c3",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260810-191852-e61c18f0",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-10T12:32:23.321352Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-10T16:22:45.9756386Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3213462Z"
+      "updated_at": "2026-08-10T16:22:45.9733823Z"
     },
     {
       "path": "crates/vida/src/init/bootstrap_sources.rs",
@@ -18268,14 +18248,14 @@
     "crates/vida/src/zombie_d_gate.rs"
   ],
   "needs_rescan": [],
-  "last_scan_run_id": "mutest-20260810-185746-a02c9c17",
-  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-185746-a02c9c17\\defect-remediation.json",
+  "last_scan_run_id": "mutest-20260810-191852-e61c18f0",
+  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-191852-e61c18f0\\defect-remediation.json",
   "summary": {
-    "run_id": "mutest-20260810-185746-a02c9c17",
-    "wave_id": "wave-mutest-20260810-185746-a02c9c17",
+    "run_id": "mutest-20260810-191852-e61c18f0",
+    "wave_id": "wave-mutest-20260810-191852-e61c18f0",
     "status": "completed_with_followups",
     "mutation_score": null,
-    "generated": 0,
+    "generated": 3,
     "evaluated": 0,
     "killed": 0,
     "survived": 0,
@@ -18290,23 +18270,23 @@
     "files_needs_rescan": 0,
     "defects": 10,
     "defect_counts": {
-      "survived_mutants": 0,
+      "survived_mutants": 1,
       "mutation_compiler_error": 0,
       "mutation_timeout": 0,
-      "mutation_no_evidence": 10,
+      "mutation_no_evidence": 9,
       "no_coverage": 0
     },
     "active_defects": 280,
     "active_defect_counts": {
-      "survived_mutants": 83,
+      "survived_mutants": 74,
       "mutation_compiler_error": 63,
-      "mutation_no_evidence": 12,
+      "mutation_no_evidence": 21,
       "mutation_timeout": 122
     },
     "active_defect_paths": 280,
-    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-185746-a02c9c17",
-    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-185746-a02c9c17\\parallel-report.json",
-    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-185746-a02c9c17\\defect-remediation.json"
+    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-191852-e61c18f0",
+    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-191852-e61c18f0\\parallel-report.json",
+    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260810-191852-e61c18f0\\defect-remediation.json"
   },
   "loc_policy": {
     "loc": "non_empty_source_lines",
