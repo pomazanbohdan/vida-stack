@@ -7,3 +7,11 @@ pub mod resume_projection;
 pub mod resume_receipt;
 pub mod resume_reconciliation;
 pub mod resume_state_machine;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn consume_module_identity_is_stable() {
+        assert!(module_path!().ends_with("::consume::tests"));
+    }
+}

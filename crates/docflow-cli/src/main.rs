@@ -7,3 +7,11 @@ fn main() -> std::process::ExitCode {
     println!("{}", result.output);
     result.exit_code
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn docflow_entrypoint_signature_contract() {
+        let _: fn() -> std::process::ExitCode = super::main;
+    }
+}

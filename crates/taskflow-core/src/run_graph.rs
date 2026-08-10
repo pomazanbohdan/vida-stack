@@ -7,3 +7,11 @@ pub mod projections;
 pub mod recovery;
 pub mod stale;
 pub mod status;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn run_graph_module_identity_is_stable() {
+        assert!(module_path!().ends_with("::run_graph::tests"));
+    }
+}
