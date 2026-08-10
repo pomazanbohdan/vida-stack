@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use crate::{print_surface_header, print_surface_line, state_store, MemoryArgs, StateStore};
+use crate::{MemoryArgs, StateStore, print_surface_header, print_surface_line, state_store};
 
 const MEMORY_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -81,5 +81,33 @@ pub(crate) async fn run_memory(args: MemoryArgs) -> ExitCode {
             );
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_memory;
+    use crate::{MemoryArgs, RenderMode};
+
+    #[tokio::test]
+    async fn memory_surface_fails_closed_when_state_store_is_missing() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "vida-memory-surface-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        assert!(!state_dir.exists());
+
+        let exit_code = run_memory(MemoryArgs {
+            state_dir: Some(state_dir.clone()),
+            render: RenderMode::Plain,
+        })
+        .await;
+
+        assert_eq!(exit_code, std::process::ExitCode::from(1));
+        assert!(!state_dir.exists());
     }
 }

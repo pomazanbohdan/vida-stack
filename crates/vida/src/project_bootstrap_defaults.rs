@@ -83,3 +83,80 @@ pub(crate) const DEFAULT_PROJECT_RESEARCH_INDEX: &str = "docs/research/index.md"
 pub(crate) const PROJECT_ACTIVATION_RECEIPT_LATEST: &str =
     ".vida/receipts/project-activation.latest.json";
 pub(crate) const SPEC_BOOTSTRAP_RECEIPT_LATEST: &str = ".vida/receipts/spec-bootstrap.latest.json";
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn bootstrap_sidecar_defaults_keep_versioned_empty_collections() {
+        let sidecars = [
+            (DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML, "roles: []"),
+            (DEFAULT_AGENT_EXTENSION_SKILLS_SIDECAR_YAML, "skills: []"),
+            (
+                DEFAULT_AGENT_EXTENSION_PROFILES_SIDECAR_YAML,
+                "profiles: []",
+            ),
+            (DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML, "flow_sets: []"),
+            (DEFAULT_AGENT_EXTENSION_PACKS_SIDECAR_YAML, "packs: []"),
+            (
+                DEFAULT_AGENT_EXTENSION_COMMANDS_SIDECAR_YAML,
+                "commands: []",
+            ),
+            (
+                DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML,
+                "dispatch_aliases: []",
+            ),
+            (
+                DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_SIDECAR_YAML,
+                "hook_templates: []",
+            ),
+        ];
+
+        for (yaml, collection) in sidecars {
+            assert!(yaml.starts_with("version: 1\n"));
+            assert!(yaml.contains(collection));
+        }
+        assert!(DEFAULT_RUNTIME_AGENT_EXTENSIONS_INDEX.contains(".vida/project/agent-extensions"));
+    }
+
+    #[test]
+    fn bootstrap_placeholders_and_document_paths_are_stable_and_distinct() {
+        let placeholders = [
+            PROJECT_ID_PLACEHOLDER,
+            DOCS_ROOT_PLACEHOLDER,
+            PROCESS_ROOT_PLACEHOLDER,
+            RESEARCH_ROOT_PLACEHOLDER,
+            README_DOC_PLACEHOLDER,
+            ARCHITECTURE_DOC_PLACEHOLDER,
+            DECISIONS_DOC_PLACEHOLDER,
+            ENVIRONMENTS_DOC_PLACEHOLDER,
+            PROJECT_OPERATIONS_DOC_PLACEHOLDER,
+            AGENT_SYSTEM_DOC_PLACEHOLDER,
+            USER_COMMUNICATION_PLACEHOLDER,
+            REASONING_LANGUAGE_PLACEHOLDER,
+            DOCUMENTATION_LANGUAGE_PLACEHOLDER,
+            TODO_PROTOCOL_LANGUAGE_PLACEHOLDER,
+        ];
+        let unique = placeholders.iter().collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), placeholders.len());
+        assert!(
+            placeholders
+                .iter()
+                .all(|value| value.starts_with("__") && value.ends_with("__"))
+        );
+        assert_eq!(
+            DEFAULT_PROJECT_ARCHITECTURE_DOC,
+            DEFAULT_PROJECT_PRODUCT_SPEC_INDEX
+        );
+        assert_eq!(
+            DEFAULT_PROJECT_AGENT_GUIDE_DOC,
+            DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
+        );
+        assert!(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE.ends_with(".template.md"));
+        assert!(PROJECT_ACTIVATION_RECEIPT_LATEST.starts_with(".vida/receipts/"));
+        assert!(SPEC_BOOTSTRAP_RECEIPT_LATEST.starts_with(".vida/receipts/"));
+    }
+}

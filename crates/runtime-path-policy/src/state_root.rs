@@ -96,3 +96,91 @@ impl StateRoot {
 fn path_is_rooted(path: &Path) -> bool {
     path.is_absolute() || path.has_root()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{StateRoot, path_is_rooted};
+    use crate::safe_path::{ArtifactPathKind, PathPolicyError};
+    use std::path::{Path, PathBuf};
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "runtime-path-policy-state-root-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn open_rejects_missing_and_non_directory_paths() {
+        let missing = std::env::temp_dir().join(format!(
+            "runtime-path-policy-state-root-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+        let missing_error = StateRoot::open(&missing).unwrap_err();
+        assert!(matches!(
+            missing_error,
+            PathPolicyError::StateRootOpen { .. }
+        ));
+
+        let file = std::env::temp_dir().join(format!(
+            "runtime-path-policy-state-root-file-{}",
+            std::process::id()
+        ));
+        std::fs::write(&file, b"state").unwrap();
+        let file_error = StateRoot::open(&file).unwrap_err();
+        assert!(matches!(
+            file_error,
+            PathPolicyError::StateRootNotDirectory { .. }
+        ));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn resolution_and_canonical_containment_preserve_root_boundaries() {
+        let root_dir = temp_root("resolution");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let relative = Path::new("nested/state.json");
+        let rooted = root_dir.join(relative);
+        let sibling = root_dir.with_file_name(format!(
+            "runtime-path-policy-state-root-resolution-sibling-{}",
+            std::process::id()
+        ));
+
+        assert!(!path_is_rooted(relative));
+        assert!(path_is_rooted(&rooted));
+        assert_eq!(state_root.resolve_raw(relative), rooted);
+        assert_eq!(state_root.resolve_raw(&rooted), rooted);
+        assert!(state_root.contains_canonical(&state_root.canonical().join(relative)));
+        assert!(!state_root.contains_canonical(&sibling));
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn cap_relative_path_accepts_rooted_inside_and_rejects_outside() {
+        let root_dir = temp_root("cap-relative");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let inside = root_dir.join("nested.json");
+        let outside = root_dir.with_file_name(format!(
+            "runtime-path-policy-state-root-cap-relative-outside-{}",
+            std::process::id()
+        ));
+
+        assert_eq!(
+            state_root
+                .cap_relative_path(&inside, ArtifactPathKind::GenericJson)
+                .unwrap(),
+            PathBuf::from("nested.json")
+        );
+        assert!(matches!(
+            state_root.cap_relative_path(&outside, ArtifactPathKind::GenericJson),
+            Err(PathPolicyError::OutsideStateRoot { .. })
+        ));
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+}

@@ -84,7 +84,7 @@ fn main() {
     }
 }
 
-fn write_line(stdout: &mut io::Stdout, value: Value) {
+fn write_line<W: Write>(stdout: &mut W, value: Value) {
     writeln!(
         stdout,
         "{}",
@@ -92,4 +92,35 @@ fn write_line(stdout: &mut io::Stdout, value: Value) {
     )
     .expect("fake Pi stdout should write");
     stdout.flush().expect("fake Pi stdout should flush");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{main, write_line};
+    use serde_json::json;
+
+    #[test]
+    fn write_line_emits_one_round_trippable_json_line() {
+        let value = json!({"type":"response", "success":true});
+        let mut output = Vec::new();
+
+        write_line(&mut output, value.clone());
+
+        assert!(output.ends_with(b"\n"));
+        let rendered = std::str::from_utf8(&output).unwrap().trim_end();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn fake_pi_entrypoint_preserves_zero_argument_binary_contract() {
+        let entrypoint: fn() = main;
+
+        assert_eq!(
+            std::mem::size_of_val(&entrypoint),
+            std::mem::size_of::<fn()>()
+        );
+    }
 }

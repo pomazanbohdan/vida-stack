@@ -90,3 +90,27 @@ pub(crate) fn feature_delivery_design_terms(request: &str) -> Vec<String> {
     }
     combined
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_keywords, feature_delivery_design_terms};
+
+    #[test]
+    fn contains_keywords_requires_boundaries_and_preserves_keyword_order() {
+        let keywords = ["plan", "implementation", "spec"].map(str::to_string);
+
+        assert_eq!(
+            contains_keywords("planning, implementation; specifier; spec", &keywords),
+            vec!["implementation", "spec"]
+        );
+    }
+
+    #[test]
+    fn feature_delivery_terms_require_both_design_and_implementation_signals() {
+        assert!(feature_delivery_design_terms("write the full code").is_empty());
+        assert_eq!(
+            feature_delivery_design_terms("research and plan, then implement the result"),
+            vec!["research", "plan", "implement"]
+        );
+    }
+}

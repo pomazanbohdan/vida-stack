@@ -87,3 +87,64 @@ pub(crate) fn build_project_activator_agent_extensions_summary(
         execution_carrier_model,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_project_activator_agent_extensions_summary;
+    use std::path::Path;
+
+    #[test]
+    fn missing_overlay_uses_disabled_ready_and_stable_carrier_defaults() {
+        let summary = build_project_activator_agent_extensions_summary(Path::new("."), None);
+
+        assert!(!summary.agent_extensions_enabled);
+        assert!(summary.agent_extensions_ready);
+        assert!(summary.agent_extension_validation_error.is_none());
+        assert_eq!(
+            summary.execution_carrier_model["agent_identity"],
+            "execution_carrier"
+        );
+        assert_eq!(
+            summary.execution_carrier_model["runtime_role_identity"],
+            "activation_state"
+        );
+        assert_eq!(
+            summary.execution_carrier_model["selection_rule"],
+            "capability_first_then_score_guard_then_cheapest_tier"
+        );
+    }
+
+    #[test]
+    fn disabled_overlay_preserves_explicit_agent_system_identity_fields() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            "agent_extensions:\n  enabled: false\nagent_system:\n  agent_identity: explicit-carrier\n  runtime_role_identity: explicit-role\n",
+        )
+        .unwrap();
+
+        let summary =
+            build_project_activator_agent_extensions_summary(Path::new("."), Some(&overlay));
+
+        assert!(!summary.agent_extensions_enabled);
+        assert!(summary.agent_extensions_ready);
+        assert_eq!(
+            summary.execution_carrier_model["agent_identity"],
+            "explicit-carrier"
+        );
+        assert_eq!(
+            summary.execution_carrier_model["runtime_role_identity"],
+            "explicit-role"
+        );
+    }
+
+    #[test]
+    fn enabled_overlay_reports_bundle_validation_failures() {
+        let overlay: serde_yaml::Value =
+            serde_yaml::from_str("agent_extensions:\n  enabled: true\n").unwrap();
+
+        let summary =
+            build_project_activator_agent_extensions_summary(Path::new("."), Some(&overlay));
+
+        assert!(!summary.agent_extensions_ready);
+        assert!(summary.agent_extension_validation_error.is_some());
+    }
+}

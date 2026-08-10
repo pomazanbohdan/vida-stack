@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::project_activator_surface::{
-    canonical_project_activation_status_truth, ProjectActivationStatusTruth,
+    ProjectActivationStatusTruth, canonical_project_activation_status_truth,
 };
 use crate::status_surface_host_agents::build_host_agent_status_summary;
 use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;
@@ -90,5 +90,54 @@ pub(crate) fn build_status_truth_inputs(
         activation_truth,
         project_activation_status,
         project_activation_pending,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_status_truth_inputs;
+    use std::path::{Path, PathBuf};
+
+    fn temp_state_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-truth-inputs-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn summary_only_selects_final_input_and_omits_recorded_snapshot() {
+        let state_root = temp_state_root("final");
+        let latest = state_root
+            .join("runtime-consumption")
+            .join("final-001.json");
+        let latest = latest.to_string_lossy().into_owned();
+
+        let inputs = build_status_truth_inputs(&state_root, Some(&latest), true);
+
+        assert_eq!(
+            inputs.latest_final_snapshot_path.as_deref(),
+            Some(latest.as_str())
+        );
+        assert!(inputs.latest_recorded_final_snapshot_path.is_none());
+
+        let _ = std::fs::remove_dir_all(state_root);
+    }
+
+    #[test]
+    fn summary_only_rejects_non_final_runtime_snapshot_input() {
+        let state_root = temp_state_root("non-final");
+        let latest = Path::new("runtime-consumption/latest.json");
+        let latest = latest.to_string_lossy().into_owned();
+
+        let inputs = build_status_truth_inputs(&state_root, Some(&latest), true);
+
+        assert!(inputs.latest_final_snapshot_path.is_none());
+        assert!(inputs.latest_recorded_final_snapshot_path.is_none());
+
+        let _ = std::fs::remove_dir_all(state_root);
     }
 }
