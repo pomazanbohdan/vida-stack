@@ -474,7 +474,7 @@ Add-Case "launcher_environment_and_target_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @(
         "Resolve-MutestCargoPath", "mutest_cargo_path_source", "Get-CargoTargetArguments",
-        "--lib", "--bin", "workerTemp", "Get-MutestEnvironment -TempRoot", '$environment["TMP"]', '$environment["TEMP"]',
+        "--lib", "--bin", "workerTemp", "Get-MutestEnvironment -TempRoot", "Get-MutestWorkerTempRoot", "vida-mutest-tmp", "worker-private-short-tmp-v2", '$environment["TMP"]', '$environment["TEMP"]',
         "Get-ExecutionBlocker", "mutest_driver_target_metadata", "windows_linker_temp_path", "defect_groups"
     )) {
         Assert-True ($source.Contains($needle)) "missing automatic execution contract: $needle"
