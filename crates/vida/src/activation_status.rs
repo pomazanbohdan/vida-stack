@@ -23,3 +23,29 @@ pub(crate) fn activation_status_is_pending(status: Option<&str>) -> bool {
         Some("pending") | Some("pending_activation")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{activation_status_is_pending, canonical_activation_status};
+
+    #[test]
+    fn activation_status_normalizes_pending_aliases_and_explicit_flag() {
+        assert_eq!(
+            canonical_activation_status(None, false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" PENDING "), false),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some("pending_activation"), false),
+            "pending"
+        );
+        assert_eq!(canonical_activation_status(Some("ready"), true), "pending");
+
+        assert!(activation_status_is_pending(Some(" PENDING_ACTIVATION ")));
+        assert!(!activation_status_is_pending(Some("ready")));
+        assert!(!activation_status_is_pending(None));
+    }
+}

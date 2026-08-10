@@ -22,3 +22,29 @@ impl OperatorEnvelope {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OperatorEnvelope;
+    use crate::artifact_refs::ArtifactRef;
+
+    #[test]
+    fn operator_envelope_new_preserves_empty_defaults_and_round_trip() {
+        let mut envelope = OperatorEnvelope::new("vida status", "blocked");
+        assert_eq!(envelope.surface, "vida status");
+        assert_eq!(envelope.status, "blocked");
+        assert!(envelope.blocker_codes.is_empty());
+        assert!(envelope.next_actions.is_empty());
+        assert!(envelope.artifact_refs.is_empty());
+
+        envelope.blocker_codes.push("missing_receipt".to_string());
+        envelope.next_actions.push("inspect evidence".to_string());
+        envelope
+            .artifact_refs
+            .push(ArtifactRef::new("proof", ".vida/proof.json"));
+        let encoded = serde_json::to_value(&envelope).expect("envelope serializes");
+        let decoded: OperatorEnvelope =
+            serde_json::from_value(encoded).expect("envelope deserializes");
+        assert_eq!(decoded, envelope);
+    }
+}

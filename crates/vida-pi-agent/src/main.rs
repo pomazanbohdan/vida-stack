@@ -14,3 +14,13 @@ fn main() -> ExitCode {
         ExitCode::from(output.exit_code as u8)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pi_agent_entrypoint_signature_contract() {
+        let _: fn() -> ExitCode = main;
+    }
+}

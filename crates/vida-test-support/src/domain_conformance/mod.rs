@@ -9,3 +9,19 @@ pub fn assert_domain_conformance() -> DomainConformanceReport {
     assert!(report.clean(), "{report:#?}");
     report
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assertion_wrapper_returns_clean_versioned_report() {
+        let report = assert_domain_conformance();
+
+        assert_eq!(report.schema_version, DOMAIN_CONFORMANCE_SCHEMA_VERSION);
+        assert_eq!(report.scenario_count(), 9);
+        assert_eq!(report.error_count(), 0);
+        assert!(report.clean());
+        assert!(!report.covered_semantic_areas().is_empty());
+    }
+}

@@ -26,3 +26,23 @@ pub(crate) fn resolved_pricing_policy(
         &crate::carrier_runtime_metadata::pricing_vendor_basis(config),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_worker_strategy;
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn resolved_worker_strategy_empty_roles_returns_stable_default_shape() {
+        let strategy = resolved_worker_strategy(Path::new("unused"), &[], &json!({}));
+
+        assert_eq!(strategy["schema_version"], 1);
+        assert_eq!(strategy["store_path"], super::super::WORKER_STRATEGY_STATE);
+        assert_eq!(
+            strategy["scorecards_path"],
+            super::super::WORKER_SCORECARDS_STATE
+        );
+        assert_eq!(strategy["agents"], json!({}));
+    }
+}
