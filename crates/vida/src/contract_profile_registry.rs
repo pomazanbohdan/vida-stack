@@ -30,4 +30,12 @@ mod tests {
         assert_eq!(profile.id, ContractProfileId::OperatorContracts);
         assert_eq!(profile.name, "release-1");
     }
+
+    #[test]
+    fn selected_contract_profile_id_matches_selected_profile() {
+        assert_eq!(
+            selected_contract_profile_id(),
+            selected_contract_profile().id
+        );
+    }
 }

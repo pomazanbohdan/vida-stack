@@ -51,3 +51,46 @@ pub(crate) fn config_file_path_for_root(root: &Path) -> PathBuf {
 pub(crate) fn normalize_root_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_helpers_cover_empty_explicit_and_placeholder_boundaries() {
+        assert_eq!(trimmed_non_empty(None), None);
+        assert_eq!(
+            trimmed_non_empty(Some("  Vida  ")),
+            Some("Vida".to_string())
+        );
+        assert_eq!(trimmed_non_empty(Some("   ")), None);
+
+        assert_eq!(
+            slugify_project_id(" Hello, VIDA_stack! "),
+            "hello-vida-stack"
+        );
+        assert_eq!(slugify_project_id("---"), "");
+        assert_eq!(
+            inferred_project_title("project-id", Some("  Project Name  ")),
+            "Project Name"
+        );
+        assert_eq!(inferred_project_title("project-id", None), "project-id");
+
+        assert!(is_missing_or_placeholder(None, "placeholder"));
+        assert!(is_missing_or_placeholder(
+            Some(" placeholder "),
+            "placeholder"
+        ));
+        assert!(!is_missing_or_placeholder(Some("real"), "placeholder"));
+    }
+
+    #[test]
+    fn path_helpers_keep_root_and_config_file_contracts() {
+        let root = Path::new("project-root");
+        assert_eq!(
+            config_file_path_for_root(root),
+            root.join("vida.config.yaml")
+        );
+        assert_eq!(normalize_root_arg(root), root.to_string_lossy());
+    }
+}

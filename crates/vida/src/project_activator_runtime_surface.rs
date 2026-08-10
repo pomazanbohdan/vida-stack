@@ -47,3 +47,91 @@ pub(crate) fn build_project_activator_activation_algorithm() -> serde_json::Valu
         "activation_receipt_glob": ".vida/receipts/project-activation*.json"
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        build_project_activator_activation_algorithm, build_project_activator_host_environment,
+    };
+
+    #[test]
+    fn project_activator_host_environment_preserves_selection_and_normalizes_source_path() {
+        let environment = build_project_activator_host_environment(
+            vec!["codex".to_string(), "claude".to_string()],
+            Some("codex".to_string()),
+            Some("internal".to_string()),
+            true,
+            false,
+            true,
+            "runtime/codex".to_string(),
+            Some(PathBuf::from(r"templates\codex")),
+            vec!["default".to_string()],
+        );
+
+        assert_eq!(
+            environment["supported_cli_systems"],
+            serde_json::json!(["codex", "claude"])
+        );
+        assert_eq!(environment["selected_cli_system"], "codex");
+        assert_eq!(environment["selected_cli_execution_class"], "internal");
+        assert!(environment["selection_required"].as_bool().unwrap());
+        assert!(!environment["template_materialized"].as_bool().unwrap());
+        assert!(environment["materialization_required"].as_bool().unwrap());
+        assert_eq!(environment["runtime_template_root"], "runtime/codex");
+        assert_eq!(environment["template_source_root"], "templates/codex");
+        assert_eq!(
+            environment["default_host_agent_templates"],
+            serde_json::json!(["default"])
+        );
+        assert_eq!(
+            environment["configuration_protocols"],
+            serde_json::json!(["runtime-instructions/work.host-cli-agent-setup-protocol"])
+        );
+
+        let no_source = build_project_activator_host_environment(
+            Vec::new(),
+            None,
+            None,
+            false,
+            false,
+            false,
+            String::new(),
+            None,
+            Vec::new(),
+        );
+        assert!(no_source["template_source_root"].is_null());
+    }
+
+    #[test]
+    fn project_activator_activation_algorithm_remains_fail_closed_while_pending() {
+        let algorithm = build_project_activator_activation_algorithm();
+
+        assert_eq!(algorithm["mode"], "bounded_interview_then_materialize");
+        assert!(
+            !algorithm["taskflow_admitted_while_pending"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(algorithm["docflow_first"].as_bool().unwrap());
+        assert_eq!(algorithm["docflow_surface"], "vida docflow");
+        assert_eq!(
+            algorithm["activation_receipt_glob"],
+            ".vida/receipts/project-activation*.json"
+        );
+        assert_eq!(
+            algorithm["non_canonical_taskflow_surfaces_forbidden_while_pending"],
+            serde_json::json!(["vida taskflow", "external_taskflow_runtime"])
+        );
+        assert_eq!(
+            algorithm["allowed_activation_surfaces"],
+            serde_json::json!([
+                "vida project-activator",
+                "vida docflow",
+                "vida protocol view bootstrap/router",
+                "vida protocol view runtime-instructions/work.host-cli-agent-setup-protocol"
+            ])
+        );
+    }
+}

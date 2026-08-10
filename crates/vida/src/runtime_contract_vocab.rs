@@ -45,3 +45,44 @@ pub(crate) fn backend_admissibility_key_for_task_class(task_class: &str) -> Opti
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_aliases_trim_known_targets_and_retain_unknown_names() {
+        for (input, expected) in [
+            (" coach ", DISPATCH_TARGET_COACH),
+            ("implementer", DISPATCH_TARGET_IMPLEMENTER),
+            ("verification", DISPATCH_TARGET_VERIFICATION),
+        ] {
+            assert_eq!(canonical_dispatch_target_alias(input), Some(expected));
+            assert_eq!(canonical_dispatch_target_name(input), expected);
+        }
+
+        assert_eq!(canonical_dispatch_target_alias(""), None);
+        assert_eq!(
+            canonical_dispatch_target_name(" custom-lane "),
+            "custom-lane"
+        );
+    }
+
+    #[test]
+    fn backend_admissibility_maps_aliases_to_canonical_task_classes() {
+        for (input, expected) in [
+            (" writer ", TASK_CLASS_IMPLEMENTATION),
+            ("test_authoring", TASK_CLASS_VERIFICATION),
+            ("execution_preparation", TASK_CLASS_ARCHITECTURE),
+            ("planning", TASK_CLASS_SPECIFICATION),
+            ("review", TASK_CLASS_COACH),
+        ] {
+            assert_eq!(
+                backend_admissibility_key_for_task_class(input),
+                Some(expected)
+            );
+        }
+
+        assert_eq!(backend_admissibility_key_for_task_class("unknown"), None);
+    }
+}

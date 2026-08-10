@@ -48,4 +48,9 @@ mod tests {
 
         assert_eq!(modules.len(), 19);
     }
+
+    #[test]
+    fn task_module_test_surface_keeps_stable_identity() {
+        assert!(module_path!().ends_with("::task::tests"));
+    }
 }

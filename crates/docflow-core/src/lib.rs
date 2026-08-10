@@ -62,4 +62,23 @@ mod tests {
     fn empty_artifact_path_is_rejected() {
         assert!(validate_artifact_path(&ArtifactPath("".into())).is_err());
     }
+
+    #[test]
+    fn artifact_path_validation_rejects_whitespace_and_accepts_non_empty_paths() {
+        assert!(matches!(
+            validate_artifact_path(&ArtifactPath("  \t".into())),
+            Err(super::DocflowCoreError::EmptyArtifactPath)
+        ));
+        assert!(validate_artifact_path(&ArtifactPath("proof/report.json".into())).is_ok());
+    }
+
+    #[test]
+    fn readiness_verdict_variants_remain_distinct_and_debuggable() {
+        assert_ne!(ReadinessVerdict::Ok, ReadinessVerdict::Warning);
+        assert_ne!(ReadinessVerdict::Warning, ReadinessVerdict::Blocking);
+        assert_ne!(ReadinessVerdict::Ok, ReadinessVerdict::Blocking);
+        assert_eq!(format!("{:?}", ReadinessVerdict::Ok), "Ok");
+        assert_eq!(format!("{:?}", ReadinessVerdict::Warning), "Warning");
+        assert_eq!(format!("{:?}", ReadinessVerdict::Blocking), "Blocking");
+    }
 }

@@ -27,3 +27,47 @@ pub(crate) fn build_project_activator_normal_work_defaults(
         ]
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_work_defaults_preserve_explicit_runtime_inputs() {
+        let topology = vec!["worker".to_string(), "reviewer".to_string()];
+        let mut rates = serde_json::Map::new();
+        rates.insert("junior".to_string(), serde_json::json!(1));
+        let model = serde_json::json!({"provider": "local", "model": "unit"});
+
+        let defaults = build_project_activator_normal_work_defaults(
+            topology.clone(),
+            rates.clone(),
+            model.clone(),
+        );
+
+        assert_eq!(
+            defaults["default_agent_topology"],
+            serde_json::json!(topology)
+        );
+        assert_eq!(defaults["carrier_tier_rates"], serde_json::json!(rates));
+        assert_eq!(defaults["execution_carrier_model"], model);
+        assert_eq!(defaults["documentation_first_for_feature_requests"], true);
+        assert_eq!(
+            defaults["recommended_flow"].as_array().map(Vec::len),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn normal_work_defaults_keep_empty_inputs_typed() {
+        let defaults = build_project_activator_normal_work_defaults(
+            Vec::new(),
+            serde_json::Map::new(),
+            serde_json::Value::Null,
+        );
+
+        assert_eq!(defaults["default_agent_topology"], serde_json::json!([]));
+        assert_eq!(defaults["carrier_tier_rates"], serde_json::json!({}));
+        assert!(defaults["execution_carrier_model"].is_null());
+    }
+}
