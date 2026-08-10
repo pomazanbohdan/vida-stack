@@ -145,13 +145,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: 2026-07-03T14:40:00+03:00
+updated_at: 2026-08-10T05:53:38+03:00
 changelog_ref: runtime.task-state-telemetry-protocol.changelog.jsonl
 protocol_authoring_gate: enforced
 protocol_compression_status: audit_passed
 protocol_compression_algorithm: list-compaction+continuation-atom-preserve-exact+gate-preserve-exact
 protocol_compression_baseline_ref: 3aefbd5b8:vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md
-protocol_compression_audit_at: 2026-07-03T14:40:00+03:00
+protocol_compression_audit_at: 2026-08-10T05:53:38+03:00
 protocol_compression_before_tokens: 2413
 protocol_compression_after_tokens: 2353
-protocol_compression_content_sha256: 75379cce02132b951016fb559611e10358aa082e80c018675a3a330f2c57d0fc
+protocol_compression_content_sha256: 1efec159d43a28b82980eaa1ba61962c168352d7a865104d934b7ebf127492dc

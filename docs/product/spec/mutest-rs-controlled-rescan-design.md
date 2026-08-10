@@ -188,10 +188,10 @@ Will implement / choose:
 artifact_path: product/spec/mutest-rs-controlled-rescan-design
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-08-09'
+artifact_revision: '2026-08-10'
 schema_version: '1'
 status: implemented
 source_path: docs/product/spec/mutest-rs-controlled-rescan-design.md
 created_at: '2026-08-08T00:00:00+03:00'
-updated_at: '2026-08-08T00:00:00+03:00'
+updated_at: '2026-08-10T05:53:38+03:00'
 changelog_ref: mutest-rs-controlled-rescan-design.changelog.jsonl

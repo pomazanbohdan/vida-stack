@@ -297,13 +297,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.taskflow-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: 2026-07-03T11:12:39.6247137+03:00
+updated_at: 2026-08-10T05:53:38+03:00
 changelog_ref: work.taskflow-protocol.changelog.jsonl
 protocol_authoring_gate: enforced
 protocol_compression_status: audit_passed
 protocol_compression_algorithm: semantic-atom-coverage+conservative-llmlingua+pre-change-baseline-audit
 protocol_compression_baseline_ref: HEAD:vida/config/instructions/runtime-instructions/work.taskflow-protocol.md
-protocol_compression_audit_at: 2026-07-03T11:12:39.6247137+03:00
+protocol_compression_audit_at: 2026-08-10T05:53:38+03:00
 protocol_compression_before_tokens: 6338
 protocol_compression_after_tokens: 4633
-protocol_compression_content_sha256: bdcc5a1090535c4a9830017529d4b8c3e0f4a27e31195b272c6e784e76b04943
+protocol_compression_content_sha256: aa06270c52a47e74d696137e026f03488d97dd48a3c6e603bb9a5616f99602fc

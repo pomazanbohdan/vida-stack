@@ -97,3 +97,15 @@ Focused script contract proof:
 ```powershell
 pwsh -NoProfile -File scripts/tests/vida-mutest-audit.tests.ps1
 ```
+
+-----
+artifact_path: process/mutest-rs-audit-script-adaptation
+artifact_type: process_doc
+artifact_version: '1'
+artifact_revision: 2026-08-10
+schema_version: '1'
+status: canonical
+source_path: docs/process/mutest-rs-audit-script-adaptation.md
+created_at: '2026-08-09T00:00:00+03:00'
+updated_at: '2026-08-10T05:53:38+03:00'
+changelog_ref: mutest-rs-audit-script-adaptation.changelog.jsonl

@@ -94,15 +94,17 @@ Canonical entrypoints:
     - project-owned requirement-analysis method skills and activation evidence
 39. `docs/process/rhai-policy-authoring-runbook.md`
     - project-owned runbook for authoring, validating, promoting, rolling back, and resuming versioned Rhai policies
+40. `docs/process/mutest-rs-audit-script-adaptation.md`
+    - project-owned process adapter for bounded mutest-rs mutation-audit waves, registry continuity, and evidence handoff
 
 -----
 artifact_path: process/index
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-07-01
+artifact_revision: 2026-08-10
 schema_version: '1'
 status: canonical
 source_path: docs/process/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-07-01T18:30:01.7724948Z
+updated_at: 2026-08-10T05:53:38+03:00
 changelog_ref: index.changelog.jsonl

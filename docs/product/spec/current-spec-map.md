@@ -214,15 +214,16 @@ The following active-canon spec documents are registered here exactly once for D
 100. [vida-coder-service-mode-executor-contract.md](vida-coder-service-mode-executor-contract.md)
 101. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
 102. [workflow-policy-loader-service-orchestration-contract.md](workflow-policy-loader-service-orchestration-contract.md)
+103. [mutest-rs-controlled-rescan-design.md](mutest-rs-controlled-rescan-design.md)
 
 -----
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-25
+artifact_revision: 2026-08-10
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-10T10:20:00+02:00'
-updated_at: '2026-07-12T06:31:24.4228302Z'
+updated_at: '2026-08-10T05:53:38+03:00'
 changelog_ref: current-spec-map.changelog.jsonl

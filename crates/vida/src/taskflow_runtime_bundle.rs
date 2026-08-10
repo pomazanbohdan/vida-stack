@@ -1511,6 +1511,7 @@ fn is_canonical_release1_metadata_key(key: &str) -> bool {
             | "protocol_binding_cache_token"
             | "compiled_at"
             | "binding_status"
+            | "taskflow_runtime"
             | "error"
     )
 }
@@ -2628,6 +2629,50 @@ mod tests {
 
         let blockers = cache_contract_consistency_blockers(&payload);
         assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_metadata_tuple_keys"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_accepts_generated_taskflow_runtime_metadata() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "bundle_id": "taskflow-runtime-bundle-1",
+            "bundle_schema_version": "release-1-v1",
+            "framework_revision": "release-1",
+            "project_activation_revision": "pa-1",
+            "protocol_binding_revision": "pb-1",
+            "protocol_binding_cache_token": "token-pb-1",
+            "compiled_at": "2026-03-17T00:00:00Z",
+            "binding_status": "bound",
+            "taskflow_runtime": {
+                "management_runtime": crate::taskflow_management::runtime_metadata(),
+                "dispatch_runtime": {
+                    "enabled": false,
+                    "authority": "execution_bound_transitions",
+                    "disabled_blocker": crate::taskflow_runtime::DISPATCH_RUNTIME_DISABLED_CODE,
+                }
+            }
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(!blockers
             .iter()
             .any(|row| row == "invalid_metadata_tuple_keys"));
     }
