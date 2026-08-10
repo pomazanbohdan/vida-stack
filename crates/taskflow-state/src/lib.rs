@@ -1119,6 +1119,14 @@ mod tests {
         journal
             .mark_outbox_failed(&outbox.outbox_id, "dispatch failed".to_string())
             .expect("failure should persist");
+        assert!(matches!(
+            journal
+                .outbox
+                .iter()
+                .find(|record| record.outbox_id == outbox.outbox_id)
+                .map(|record| &record.state),
+            Some(JournalOutboxState::Failed { reason }) if reason == "dispatch failed"
+        ));
         assert!(journal.claim_outbox_batch("worker-2", 1).is_empty());
     }
 
@@ -1367,6 +1375,13 @@ mod tests {
             "run-031-corrupt",
         )
         .expect("corrupt payload must fail closed");
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("run-workflow:run-031-corrupt".to_string()))
+                .len(),
+            1,
+            "corrupt payload helper must append to the requested run stream"
+        );
     }
 
     #[test]
@@ -1428,14 +1443,42 @@ mod tests {
         let mut replay_hash = baseline;
         replay_hash.replay_hash = "forged-replay-hash".to_string();
 
-        for (label, snapshot) in [
-            ("aggregate identity", aggregate_id),
-            ("stream identity", stream_id),
-            ("payload run identity", payload_run),
-            ("payload task identity", payload_task),
-            ("payload version", payload_version),
-            ("stream version", stream_version),
-            ("replay hash", replay_hash),
+        for (label, snapshot, expected) in [
+            (
+                "aggregate identity",
+                aggregate_id,
+                "run workflow snapshot aggregate identity mismatch",
+            ),
+            (
+                "stream identity",
+                stream_id,
+                "run workflow snapshot aggregate identity mismatch",
+            ),
+            (
+                "payload run identity",
+                payload_run,
+                "run workflow snapshot payload identity mismatch",
+            ),
+            (
+                "payload task identity",
+                payload_task,
+                "run workflow snapshot payload identity mismatch",
+            ),
+            (
+                "payload version",
+                payload_version,
+                "run workflow snapshot version mismatch",
+            ),
+            (
+                "stream version",
+                stream_version,
+                "run workflow snapshot version mismatch",
+            ),
+            (
+                "replay hash",
+                replay_hash,
+                "run workflow snapshot replay hash mismatch",
+            ),
         ] {
             let error = validate_run_workflow_snapshot_record(
                 &snapshot,
@@ -1443,9 +1486,10 @@ mod tests {
                 "task-snapshot-contract",
             )
             .expect_err("forged snapshot must fail closed");
-            assert!(
-                matches!(error, TaskflowStateError::PayloadDecode(_)),
-                "{label} should produce payload decode, got {error:?}"
+            assert_eq!(
+                error,
+                TaskflowStateError::PayloadDecode(expected.to_string()),
+                "{label} should preserve the fail-closed diagnostic"
             );
         }
     }
@@ -1514,6 +1558,116 @@ mod tests {
     }
 
     #[test]
+    fn operational_journal_changed_append_records_conflict_identity_and_reason() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("initial append should pass");
+
+        let mut changed = append_request(1, vec![event(2)], vec![effect("effect-2")]);
+        changed.command_id = VidaCommandRef("command-conflict".to_string());
+        let error = journal
+            .append(changed)
+            .expect_err("changed payload must conflict on the existing idempotency key");
+        assert_eq!(
+            error,
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
+        );
+
+        let record = journal
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("conflict should retain an idempotency record");
+        assert_eq!(record.key, VidaIdempotencyKey("idem-1".to_string()));
+        assert_eq!(
+            record.command_id,
+            VidaCommandRef("command-conflict".to_string())
+        );
+        assert_eq!(record.state, JournalIdempotencyState::Conflicted);
+        assert_eq!(
+            record.receipt_id,
+            Some(VidaReceiptId("append:idem-1".to_string()))
+        );
+        assert_eq!(
+            record.conflict_reason.as_deref(),
+            Some(
+                "idempotency_payload_conflict: same idempotency key used with different append payload"
+            )
+        );
+    }
+
+    #[test]
+    fn operational_journal_rejects_stale_stream_version_with_expected_and_actual() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("initial append should pass");
+
+        let mut stale = append_request(0, vec![event(2)], Vec::new());
+        stale.command_id = VidaCommandRef("command-stale".to_string());
+        stale.idempotency_key = VidaIdempotencyKey("idem-stale".to_string());
+        let error = journal
+            .append(stale)
+            .expect_err("stale stream version must fail closed");
+        assert_eq!(
+            error,
+            TaskflowStateError::StreamVersionConflict {
+                stream_id: "stream-1".to_string(),
+                expected: Some(0),
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn operational_journal_append_receipt_tracks_global_range_and_idempotency() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let request = append_request(
+            0,
+            vec![event(1), event(2)],
+            vec![effect("effect-1"), effect("effect-2")],
+        );
+        let receipt = journal
+            .append(request.clone())
+            .expect("append should produce a complete receipt");
+        assert_eq!(
+            receipt.first_global_cursor,
+            Some(VidaEventCursor("global-1".to_string()))
+        );
+        assert_eq!(
+            receipt.last_global_cursor,
+            Some(VidaEventCursor("global-2".to_string()))
+        );
+        assert_eq!(receipt.stream_version, VidaStreamVersion(2));
+        assert_eq!(receipt.event_count, 2);
+        assert_eq!(receipt.effect_intent_count, 2);
+        assert_eq!(
+            journal
+                .read_global_after(Some(&VidaEventCursor("global-1".to_string())), 10)
+                .first()
+                .map(|record| record.global_cursor.clone()),
+            Some(VidaEventCursor("global-2".to_string()))
+        );
+
+        let record = journal
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("successful append should record idempotency completion");
+        assert_eq!(record.key, VidaIdempotencyKey("idem-1".to_string()));
+        assert_eq!(record.command_id, VidaCommandRef("command-1".to_string()));
+        assert_eq!(record.state, JournalIdempotencyState::Completed);
+        assert_eq!(
+            record.receipt_id,
+            Some(VidaReceiptId("append:command-1".to_string()))
+        );
+        assert_eq!(record.conflict_reason, None);
+        assert_eq!(
+            journal
+                .append(request)
+                .expect("same append should be idempotent"),
+            receipt
+        );
+    }
+
+    #[test]
     fn run_workflow_repository_load_rejects_forged_terminal_state() {
         let mut journal = InMemoryOperationalJournal::default();
         let run_id = "run-031-forged";
@@ -1557,10 +1711,12 @@ mod tests {
         let error = RunWorkflowJournalRepository::new(&mut journal)
             .load(run_id, "ldr-031")
             .expect_err("forged terminal state must fail closed");
-        assert!(matches!(
+        assert_eq!(
             error,
-            TaskflowStateError::JournalReplayValidation(_)
-        ));
+            TaskflowStateError::JournalReplayValidation(
+                "persisted event does not match run workflow state machine replay".to_string()
+            )
+        );
     }
 
     #[test]
