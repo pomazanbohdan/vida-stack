@@ -233,6 +233,32 @@ fn coverage_gate_preserves_diagnostics_for_flaky_workspace_and_crap_regressions(
 }
 
 #[test]
+fn nextest_summary_skips_git_status_for_passes() {
+    let script = dev_gate_script().replace("\r\n", "\n");
+
+    assert!(
+        script.contains("$changedPaths = @()"),
+        "nextest summaries should initialize changed paths without a Git read"
+    );
+    let status_call = script
+        .find("$changedPaths = @(Get-GitPorcelainPaths")
+        .expect("nextest summaries should retain the failure relevance Git read");
+    let failure_guard = script[..status_call]
+        .rfind("if ($failedCount -gt 0) {")
+        .expect("nextest Git status read should be guarded by the failure count");
+    assert!(
+        failure_guard < status_call,
+        "passing nextest summaries must skip the Git status read"
+    );
+    assert!(
+        script.contains("function Invoke-NextestSummarySmoke")
+            && script.contains("nextest-summary-smoke-fail")
+            && script.contains("nextest-summary-smoke-pass"),
+        "existing nextest summary smoke coverage should remain"
+    );
+}
+
+#[test]
 fn proof_ladder_smoke_covers_lock_contention_retry_contract() {
     let script = dev_gate_script();
 

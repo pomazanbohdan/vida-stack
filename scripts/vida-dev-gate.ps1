@@ -1606,13 +1606,16 @@ function New-NextestSummary {
         $failedCount = $failedNames.Count
     }
 
-    $changedPaths = @(Get-GitPorcelainPaths | Where-Object {
-            -not [string]::IsNullOrWhiteSpace($_) -and
-            -not $_.StartsWith(".vida/", [System.StringComparison]::OrdinalIgnoreCase) -and
-            -not $_.StartsWith(".vida\", [System.StringComparison]::OrdinalIgnoreCase) -and
-            -not $_.StartsWith("~/", [System.StringComparison]::OrdinalIgnoreCase) -and
-            -not $_.StartsWith("~\", [System.StringComparison]::OrdinalIgnoreCase)
-        })
+    $changedPaths = @()
+    if ($failedCount -gt 0) {
+        $changedPaths = @(Get-GitPorcelainPaths | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                -not $_.StartsWith(".vida/", [System.StringComparison]::OrdinalIgnoreCase) -and
+                -not $_.StartsWith(".vida\", [System.StringComparison]::OrdinalIgnoreCase) -and
+                -not $_.StartsWith("~/", [System.StringComparison]::OrdinalIgnoreCase) -and
+                -not $_.StartsWith("~\", [System.StringComparison]::OrdinalIgnoreCase)
+            })
+    }
     $relevance = "not_applicable"
     if ($failedCount -gt 0) {
         $relevance = $(if ($changedPaths.Count -gt 0) { "needs_review" } else { "unknown_no_touched_files" })
