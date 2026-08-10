@@ -172,6 +172,24 @@ Add-Case "committed_registry_uses_string_compact_references" {
     }
 }
 
+Add-Case "refresh_preserves_string_evidence_refs" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('if ($Value -is [string]) { return [string]$Value }')) "JSON-safe serialization does not preserve strings before PSObject handling"
+    $registryPath = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-evidence-refs-" + [guid]::NewGuid().ToString("N") + ".json")
+    $path = "crates/docflow-markdown/src/lib.rs"
+    [void](Invoke-IndexRefresh -RegistryPath $registryPath -Package "docflow-markdown" -FilesCsv $path)
+    $seed = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+    $row = @($seed.files | Where-Object { $_.path -eq $path })[0]
+    $row.status = "blocked"; $row.needs_rerun = $true
+    $row.defects = @([ordered]@{ type = "mutation_compiler_error"; blocker_code = "seed"; path = $path; package = "docflow-markdown"; mutation_identity = "file-level"; evidence_refs = @(".vida/evidence/mutest-audit/seed/stderr.log", ".vida/evidence/mutest-audit/seed/stdout.log") })
+    $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registryPath -Encoding UTF8
+    [void](Invoke-IndexRefresh -RegistryPath $registryPath -Package "docflow-markdown" -FilesCsv $path)
+    $refreshed = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+    $refs = @(@($refreshed.files | Where-Object { $_.path -eq $path })[0].defects[0].evidence_refs)
+    Assert-True ($refs.Count -eq 2) "RefreshIndex dropped string evidence references"
+    foreach ($reference in $refs) { Assert-True ($reference -is [string]) "RefreshIndex serialized a string evidence reference as an object" }
+}
+
 Add-Case "per_file_loc_and_hash_refresh_contract" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     foreach ($needle in @("Get-FileLineMetrics", "loc_total", "loc_hash", "loc_policy", "RefreshIndex", "content_hash_changed", "mutation_workers_started = `$false")) {
@@ -329,6 +347,12 @@ Add-Case "active_backlog_changes_only_selected_rows" {
     Assert-True (@($changed.defects).Count -eq 0) "changed row retained stale active defects"
     Assert-True ($untouched.status -eq "blocked") "partial refresh changed an untouched row"
     Assert-True (@($untouched.defects).Count -eq 1) "partial refresh removed an untouched defect"
+}
+
+Add-Case "partial_wave_finalization_scopes_to_queue" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('foreach ($fileRecord in @($QueueFiles | Where-Object')) "partial-wave finalization does not scope to queued files"
+    Assert-True (-not $source.Contains('foreach ($fileRecord in @($FilePlan.files | Where-Object')) "partial-wave finalization still iterates the full file plan"
 }
 
 Add-Case "defect_history_is_local_only" {

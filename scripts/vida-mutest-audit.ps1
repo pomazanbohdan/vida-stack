@@ -1039,6 +1039,7 @@ function Get-IgnoredTests {
 function Convert-ToJsonSafeValue {
     param([object]$Value)
     if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return [string]$Value }
     if ($Value -is [System.Collections.IDictionary]) {
         $record = [ordered]@{}
         $adapterProperties = @("Count", "IsReadOnly", "Keys", "Values", "SyncRoot", "IsFixedSize", "IsSynchronized")
@@ -1612,7 +1613,7 @@ while ($RetryFiles.Count -gt 0 -or $PendingFiles.Count -gt 0 -or $Active.Count -
 
 $Defects = New-Object System.Collections.Generic.List[object]
 $RescanFiles = New-Object System.Collections.Generic.List[object]
-foreach ($fileRecord in @($FilePlan.files | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -ne "compatible_registry" -and [string](Get-OptionalProperty $_ "status" "") -ne "deleted_from_snapshot" })) {
+foreach ($fileRecord in @($QueueFiles | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -ne "compatible_registry" -and [string](Get-OptionalProperty $_ "status" "") -ne "deleted_from_snapshot" })) {
     $fileResult = @($Results | Where-Object { ([string](Get-OptionalProperty $_ "path" "")).ToLowerInvariant() -eq ([string]$fileRecord.path).ToLowerInvariant() } | Select-Object -Last 1)
     if (@($fileResult).Count -eq 0) {
         $fileRecord.status = "blocked"; $fileRecord.wave_status = "blocked"; $fileRecord.needs_rerun = $true; $fileRecord.updated_at = [DateTime]::UtcNow.ToString("o")
