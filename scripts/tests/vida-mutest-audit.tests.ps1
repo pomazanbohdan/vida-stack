@@ -115,6 +115,27 @@ Add-Case "continuous_refill_and_report_contract" {
     }
 }
 
+Add-Case "zero_mutation_evidence_is_followup" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('$noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0')) "zero-evidence detection is not independent of metadata file count"
+    Assert-True ($source.Contains('$rescanNoEvidence = [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0')) "rescan zero-evidence detection is missing"
+    Assert-True ($source.Contains('type = if ($noEvidence) { "mutation_no_evidence" }')) "zero-evidence defect classification is missing"
+    Assert-True ($source.Contains('type = if ($rescanNoEvidence) { "mutation_no_evidence" }')) "rescan zero-evidence defect classification is missing"
+    Assert-True (-not $source.Contains('$fileReport.status -ne "completed" -or $noEvidence -or $compilerError')) "zero evidence is still treated as a runtime blocker after a successful worker"
+}
+
+Add-Case "finalization_updates_canonical_rows" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('foreach ($queuedRecord in @($QueueFiles')) "finalization still iterates ambiguous queue records"
+    Assert-True ($source.Contains('$fileRecord = $FileByPath[$fileKey]')) "finalization does not update the canonical registry row"
+}
+
+Add-Case "empty_queue_command_hash_is_safe" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('$commandArray = @($Commands)')) "command hash does not normalize an empty command list"
+    Assert-True ($source.Contains('ConvertTo-Json -InputObject $commandArray')) "command hash still depends on pipeline output for empty queues"
+}
+
 Add-Case "resume_rejects_drift" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
     Assert-True ($source.Contains("Resume rejected")) "resume drift rejection is missing"
@@ -188,6 +209,47 @@ Add-Case "refresh_preserves_string_evidence_refs" {
     $refs = @(@($refreshed.files | Where-Object { $_.path -eq $path })[0].defects[0].evidence_refs)
     Assert-True ($refs.Count -eq 2) "RefreshIndex dropped string evidence references"
     foreach ($reference in $refs) { Assert-True ($reference -is [string]) "RefreshIndex serialized a string evidence reference as an object" }
+}
+
+Add-Case "legacy_registry_wrappers_recover_paths_and_preserve_state" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    foreach ($needle in @("Test-LegacyLengthWrapper", "Normalize-MutationRegistryLegacyValues", "Get-LegacyDefectPathMap", "defect-remediation.json")) {
+        Assert-True ($source.Contains($needle)) "legacy registry normalization contract is missing: $needle"
+    }
+    $registryPath = Join-Path (Join-Path (Get-Location) ".vida/tmp") ("mutest-legacy-registry-" + [guid]::NewGuid().ToString("N") + ".json")
+    $path = "crates/docflow-markdown/src/lib.rs"
+    [void](Invoke-IndexRefresh -RegistryPath $registryPath -Package "docflow-markdown" -FilesCsv $path)
+    $seed = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+    $row = @($seed.files | Where-Object { $_.path -eq $path })[0]
+    $runId = "mutest-20260810-142338-36d12c97"
+    $waveId = "wave-$runId"
+    $defectKey = "mut-synthetic-legacy-wrapper"
+    $row.status = "blocked"; $row.needs_rerun = $true
+    $row.defects = @([ordered]@{
+        defect_key = $defectKey; type = "survived_mutants"; blocker_code = "seed"; path = [ordered]@{ Length = $path.Length }
+        package = "docflow-markdown"; mutation_identity = "file-level"; observed_hash = [string]$row.hash
+    })
+    $seed.run_id = $runId
+    $seed.last_wave_id = $waveId
+    $seed.waves = @([ordered]@{ wave_id = $waveId; run_id = $runId; artifact_root = [ordered]@{ Length = 81 } })
+    $seed.summary = [ordered]@{
+        run_id = $runId; evidence_root = [ordered]@{ Length = 81 }; report_path = [ordered]@{ Length = 102 }
+        defect_protocol_path = [ordered]@{ Length = 105 }
+    }
+    $seed.defect_protocol_path = [ordered]@{ Length = 105 }
+    $seed | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $registryPath -Encoding UTF8
+    [void](Invoke-IndexRefresh -RegistryPath $registryPath -Package "docflow-markdown" -FilesCsv $path)
+    $refreshed = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+    $refreshedRow = @($refreshed.files | Where-Object { $_.path -eq $path })[0]
+    $expectedRoot = Join-Path (Join-Path (Get-Location) ".vida/evidence/mutest-audit") $runId
+    Assert-True ($refreshedRow.status -eq "blocked") "legacy normalization changed the file status"
+    Assert-True ([string]$refreshedRow.hash -eq [string]$row.hash) "legacy normalization changed the file hash"
+    Assert-True ([string]$refreshedRow.defects[0].defect_key -eq $defectKey) "legacy normalization changed the defect key"
+    Assert-True ([string]$refreshedRow.defects[0].path -eq $path) "legacy defect path wrapper was not recovered"
+    Assert-True ([string]$refreshed.waves[0].artifact_root -eq $expectedRoot) "legacy wave artifact root was not recovered"
+    Assert-True ([string]$refreshed.summary.evidence_root -eq $expectedRoot) "legacy summary evidence root was not recovered"
+    Assert-True ([string]$refreshed.summary.report_path -eq (Join-Path $expectedRoot "parallel-report.json")) "legacy report path was not recovered"
+    Assert-True ([string]$refreshed.defect_protocol_path -eq (Join-Path $expectedRoot "defect-remediation.json")) "legacy defect protocol path was not recovered"
 }
 
 Add-Case "per_file_loc_and_hash_refresh_contract" {
@@ -351,8 +413,12 @@ Add-Case "active_backlog_changes_only_selected_rows" {
 
 Add-Case "partial_wave_finalization_scopes_to_queue" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
-    Assert-True ($source.Contains('foreach ($fileRecord in @($QueueFiles | Where-Object')) "partial-wave finalization does not scope to queued files"
-    Assert-True (-not $source.Contains('foreach ($fileRecord in @($FilePlan.files | Where-Object')) "partial-wave finalization still iterates the full file plan"
+    $queuedPattern = 'foreach ($queuedRecord in @($QueueFiles | Where-Object'
+    $fullPlanPattern = 'foreach ($fileRecord in @($FilePlan.files | Where-Object'
+    $queuedMatch = Select-String -LiteralPath $ScriptPath -SimpleMatch -Pattern $queuedPattern
+    $fullPlanMatch = Select-String -LiteralPath $ScriptPath -SimpleMatch -Pattern $fullPlanPattern
+    Assert-True ($null -ne $queuedMatch) "partial-wave finalization does not scope to queued files"
+    Assert-True ($null -eq $fullPlanMatch) "partial-wave finalization still iterates the full file plan"
 }
 
 Add-Case "defect_history_is_local_only" {
@@ -420,6 +486,9 @@ Add-Case "csv_selector_contract" {
     Assert-True ($plan.file_scan.candidate_files -eq 1) "CSV file selector did not produce one candidate"
     Assert-True ($plan.commands[0].args -contains "--lib") "CSV file selector did not select --lib"
     Assert-True ($plan.commands[0].args -contains "file:crates/docflow-markdown/src/lib.rs") "CSV file selector did not preserve the path"
+
+    $modulePlan = Invoke-Plan -Package "taskflow-authority" -FilesCsv "crates/taskflow-authority/src/authority_chain.rs"
+    Assert-True ($modulePlan.commands[0].args -contains "--lib") "library module selector did not select --lib"
 }
 
 Add-Case "defect_protocol_and_test_update_contract" {

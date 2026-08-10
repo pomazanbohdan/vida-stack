@@ -14,15 +14,17 @@
 
 ## Audit command
 
-Each package receives the exact command:
+Each package receives a file-scoped command. The target selector is derived from the source path: `--lib` for library modules (including `src/lib.rs`), `--bin <name>` for `src/bin/<name>.rs`, and `--all-targets` for other production targets:
 
 ```text
-cargo +nightly-2026-07-18 mutest run --package <pkg> --all-targets --locked
+cargo +nightly-2026-07-18 mutest run --package <pkg> --lib --locked
   --target-dir <isolated-target> --metadata-out-root-dir <isolated-metadata>
   --depth 3 --safe --mutation-operators all --parallel-mutants
   --mutant-batch-algorithm greedy --mutant-batch-size 1 --timings
-  --filter-mutations file:crates/<pkg>/src/<file>.rs
+  --filter-mutations file:crates/<pkg>/src/<module>.rs
 ```
+
+The `--lib`/`--bin` selector is required for module-file filters: mutest-driver resolves the package target from the crate entry point, while the file filter narrows mutation generation to the selected module.
 
 The script records one command manifest entry per queued production file and a SHA-256 command hash. `-PlanOnly` persists a `manifest.json`, a `parallel-report.json` with `status=planned`, and a human-readable `parallel-report.md` under the run evidence root; it does not mutate the canonical registry, create workers, checkpoints, or event streams. `-Json` is accepted as an explicit machine-readable-output switch; JSON is the stable output format. `-Files` and `-Packages` accept comma-separated values, so child PowerShell waves do not require array syntax or positional-argument workarounds.
 
@@ -48,7 +50,9 @@ contributes `stats.total_mutations_count` to `generated`, while the latest
 detected, undetected, timed-out, and crashed counts to `evaluated`, `killed`,
 `survived`, `timeout`, and `compile_error`. Unknown JSON retains the generic
 recursive fallback parser; a zero killed/survived denominator remains a failed
-coverage result rather than a green score.
+coverage result rather than a green score. A successful worker with zero
+`generated` and zero `evaluated` is recorded as `needs_tests` with a
+`mutation_no_evidence` defect, even when metadata files were emitted.
 
 ## Provenance and resume
 

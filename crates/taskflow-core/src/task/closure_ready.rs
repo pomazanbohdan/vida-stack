@@ -72,10 +72,85 @@ mod tests {
         let readiness = task_closure_readiness_from_progress(&summary);
 
         assert!(readiness.ready_for_close);
+        assert!(readiness.closure_candidate);
         assert_eq!(readiness.closure_candidate_state, "ready_to_close");
+        assert_eq!(
+            readiness.closure_candidate_reason.as_deref(),
+            Some("descendants are closed")
+        );
         assert_eq!(
             readiness.next_required_command.as_deref(),
             Some("vida task close VH-30 --reason \"descendants closed\"")
         );
+        assert_eq!(
+            readiness.recommended_next_action,
+            "vida task close VH-30 --reason \"descendants closed\""
+        );
+    }
+
+    #[test]
+    fn closure_readiness_preserves_false_and_missing_optional_values() {
+        let mut summary = TaskProgressSummary {
+            root_task: TaskProgressRow {
+                id: "VH-31".to_string(),
+                title: "Await evidence".to_string(),
+                status: "in_progress".to_string(),
+                issue_type: "task".to_string(),
+                priority: 3,
+                labels: Vec::new(),
+                proof_targets: Vec::new(),
+                proof_satisfied: false,
+                parent_id: None,
+            },
+            progress_basis: "direct_children".to_string(),
+            direct_child_count: 0,
+            descendant_count: 0,
+            open_count: 0,
+            in_progress_count: 0,
+            closed_count: 0,
+            epic_count: 0,
+            status_counts: BTreeMap::new(),
+            percent_closed: 0.0,
+            closure_candidate: false,
+            closure_candidate_state: "leaf_in_progress".to_string(),
+            closure_candidate_reason: None,
+            ready_for_close: false,
+            missing_proof: true,
+            proof_blocked_by_runtime: false,
+            blocked_by_runtime: false,
+            next_required_command: None,
+            recommended_next_action: "Continue evidence gathering".to_string(),
+            canonical_commands: Vec::new(),
+        };
+
+        let readiness = task_closure_readiness_from_progress(&summary);
+
+        assert!(!readiness.ready_for_close);
+        assert!(!readiness.closure_candidate);
+        assert_eq!(readiness.closure_candidate_state, "leaf_in_progress");
+        assert_eq!(readiness.closure_candidate_reason, None);
+        assert_eq!(readiness.next_required_command, None);
+        assert_eq!(
+            readiness.recommended_next_action,
+            "Continue evidence gathering"
+        );
+
+        summary.closure_candidate_reason = Some("now has a reason".to_string());
+        summary.closure_candidate_state = "leaf_blocked_by_runtime".to_string();
+        summary.next_required_command = Some("vida task verify VH-31".to_string());
+        summary.recommended_next_action = "Resolve runtime blocker".to_string();
+        let readiness = task_closure_readiness_from_progress(&summary);
+        assert!(!readiness.ready_for_close);
+        assert!(!readiness.closure_candidate);
+        assert_eq!(readiness.closure_candidate_state, "leaf_blocked_by_runtime");
+        assert_eq!(
+            readiness.closure_candidate_reason.as_deref(),
+            Some("now has a reason")
+        );
+        assert_eq!(
+            readiness.next_required_command.as_deref(),
+            Some("vida task verify VH-31")
+        );
+        assert_eq!(readiness.recommended_next_action, "Resolve runtime blocker");
     }
 }

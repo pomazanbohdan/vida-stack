@@ -14,11 +14,13 @@ pub struct RunWorkflowProofSummary {
 
 #[must_use]
 pub fn run_workflow_proof_summary() -> RunWorkflowProofSummary {
+    let status_cases = status_mapping_corpus();
+
     RunWorkflowProofSummary {
         transition_rows: transition_matrix().len(),
         mermaid_lines: transition_matrix_mermaid().lines().count(),
-        status_mapping_cases: status_mapping_corpus().len(),
-        unknown_status_blockers: status_mapping_corpus()
+        status_mapping_cases: status_cases.len(),
+        unknown_status_blockers: status_cases
             .iter()
             .filter(|case| {
                 matches!(

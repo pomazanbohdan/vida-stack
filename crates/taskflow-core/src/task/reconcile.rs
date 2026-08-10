@@ -43,12 +43,23 @@ mod tests {
     #[test]
     fn reconcile_scope_required_payload_preserves_public_contract() {
         let payload = scope_required_payload("vida task reconcile", true, false);
+        assert_eq!(payload.surface, "vida task reconcile");
         assert_eq!(payload.status, "blocked");
         assert_eq!(payload.scope, None);
+        assert!(payload.dry_run);
+        assert!(!payload.close_if_complete);
+        assert!(payload.closed_epics.is_empty());
+        assert!(payload.blocked_epics.is_empty());
+        assert!(payload.missing_children.is_empty());
         assert_eq!(payload.blocker_codes, vec!["scope_required"]);
         assert_eq!(
             payload.next_actions,
             vec!["Run vida task reconcile --epics to inspect open epics."]
         );
+
+        let toggled = scope_required_payload("custom surface", false, true);
+        assert_eq!(toggled.surface, "custom surface");
+        assert!(!toggled.dry_run);
+        assert!(toggled.close_if_complete);
     }
 }

@@ -17,7 +17,7 @@ pub fn parse_split_child_specs(values: &[String]) -> Result<Vec<ParsedSplitChild
     }
 
     let mut seen = BTreeSet::new();
-    let mut parsed = Vec::with_capacity(values.len());
+    let mut parsed = Vec::new();
     for value in values {
         let Some((task_id, title)) = value.split_once(':') else {
             return Err(format!(
@@ -48,6 +48,9 @@ mod tests {
 
     #[test]
     fn split_child_specs_require_two_children() {
+        let error = parse_split_child_specs(&[]).expect_err("empty split should fail");
+        assert!(error.contains("at least two"));
+
         let error = parse_split_child_specs(&["child-a:First".to_string()])
             .expect_err("single child split should fail");
         assert!(error.contains("at least two"));
@@ -60,10 +63,50 @@ mod tests {
                 .expect("valid children should parse");
         assert_eq!(parsed[0].task_id, "child-a");
         assert_eq!(parsed[0].title, "First");
+        assert_eq!(parsed[1].task_id, "child-b");
+        assert_eq!(parsed[1].title, "Second");
 
         let error =
             parse_split_child_specs(&["child-a:First".to_string(), "child-a:Second".to_string()])
                 .expect_err("duplicate child id should fail");
         assert!(error.contains("Duplicate split child task id"));
+    }
+
+    #[test]
+    fn split_child_specs_trim_fields_and_split_only_at_the_first_colon() {
+        let parsed = parse_split_child_specs(&[
+            " child-a : First: retain the rest ".to_string(),
+            "child-b: Second".to_string(),
+            "child-c:Third".to_string(),
+        ])
+        .expect("trimmed children with a colon in a title should parse");
+
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].task_id, "child-a");
+        assert_eq!(parsed[0].title, "First: retain the rest");
+        assert_eq!(parsed[1].title, "Second");
+        assert_eq!(parsed[2].task_id, "child-c");
+    }
+
+    #[test]
+    fn split_child_specs_reject_missing_separator_and_empty_fields() {
+        for value in ["child-a", ":Title", "child-a:", " : "] {
+            let error = parse_split_child_specs(&[value.to_string(), "child-b:Second".to_string()])
+                .expect_err("malformed child should fail");
+            assert!(
+                error.contains("Expected `<task-id>:<title>`")
+                    || error.contains("Both task id and title are required"),
+                "unexpected error for {value:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_child_specs_reject_duplicate_ids_after_trimming() {
+        let error =
+            parse_split_child_specs(&["child-a:First".to_string(), " child-a :Second".to_string()])
+                .expect_err("trim-equivalent child ids should fail");
+
+        assert_eq!(error, "Duplicate split child task id `child-a`.");
     }
 }

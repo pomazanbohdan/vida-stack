@@ -202,11 +202,11 @@ function Get-CargoTargetArguments {
     param([string]$MutationFilterPath)
     if ([string]::IsNullOrWhiteSpace($MutationFilterPath)) { return @("--all-targets") }
     $normalized = Normalize-RepoPath $MutationFilterPath
-    if ($normalized -match '^crates/[^/]+/src/lib\.rs$') { return @("--lib") }
     if ($normalized -match '^crates/[^/]+/src/bin/(.+)\.rs$') {
         $binName = $Matches[1].Replace('/', '-').Replace('\\', '-')
         return @("--bin", $binName)
     }
+    if ($normalized -match '^crates/[^/]+/src/.+\.rs$') { return @("--lib") }
     return @("--all-targets")
 }
 
@@ -473,6 +473,83 @@ function Get-OptionalProperty {
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $Default }
     return $property.Value
+}
+
+function Test-LegacyLengthWrapper {
+    param([object]$Value)
+    if ($null -eq $Value -or $Value -is [string]) { return $false }
+    $properties = @($Value.PSObject.Properties | Where-Object { $_.Name -notin @("Length") })
+    $allProperties = @($Value.PSObject.Properties)
+    if ($allProperties.Count -ne 1 -or $allProperties[0].Name -ne "Length") { return $false }
+    $length = 0
+    return [int]::TryParse([string]$allProperties[0].Value, [ref]$length) -and $length -ge 0
+}
+
+function Get-LegacyDefectPathMap {
+    param([string]$Path)
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $map }
+    foreach ($line in Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue) {
+        if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+        try { $defect = $line | ConvertFrom-Json } catch { continue }
+        $key = [string](Get-OptionalProperty -Object $defect -Name "defect_key" "")
+        $pathValue = Get-OptionalProperty -Object $defect -Name "path"
+        if ([string]::IsNullOrWhiteSpace($key) -or $pathValue -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$pathValue)) { continue }
+        $map[$key] = [string]$pathValue
+    }
+    return $map
+}
+
+function Normalize-MutationRegistryLegacyValues {
+    param([object]$Registry, [string]$DefectLogPath = "")
+    $defectPaths = Get-LegacyDefectPathMap -Path $DefectLogPath
+    foreach ($row in @((Get-OptionalProperty -Object $Registry -Name "files" @()))) {
+        $rowPath = [string](Get-OptionalProperty -Object $row -Name "path" "")
+        foreach ($defect in @((Get-OptionalProperty -Object $row -Name "defects" @()))) {
+            $defectPath = Get-OptionalProperty -Object $defect -Name "path"
+            if (-not (Test-LegacyLengthWrapper -Value $defectPath)) { continue }
+            $defectKey = [string](Get-OptionalProperty -Object $defect -Name "defect_key" "")
+            if ($defectPaths.ContainsKey($defectKey)) {
+                $defect.path = $defectPaths[$defectKey]
+                continue
+            }
+            $legacyLength = 0
+            [void][int]::TryParse([string](Get-OptionalProperty -Object $defectPath -Name "Length" 0), [ref]$legacyLength)
+            if (-not [string]::IsNullOrWhiteSpace($rowPath) -and $rowPath.Length -eq $legacyLength) {
+                $defect.path = $rowPath
+            }
+        }
+    }
+
+    $waves = @((Get-OptionalProperty -Object $Registry -Name "waves" @()))
+    foreach ($wave in $waves) {
+        $artifactRoot = Get-OptionalProperty -Object $wave -Name "artifact_root"
+        if (-not (Test-LegacyLengthWrapper -Value $artifactRoot)) { continue }
+        $runId = [string](Get-OptionalProperty -Object $wave -Name "run_id" "")
+        if ([string]::IsNullOrWhiteSpace($runId)) { $runId = [string](Get-OptionalProperty -Object $Registry -Name "run_id" "") }
+        if ([string]::IsNullOrWhiteSpace($runId)) { continue }
+        $relativeRoot = Join-Path $EvidenceRoot $runId
+        $wave.artifact_root = Get-AbsoluteArtifactPath -Path $relativeRoot -DefaultPath $relativeRoot
+    }
+
+    $summary = Get-OptionalProperty -Object $Registry -Name "summary"
+    $runId = [string](Get-OptionalProperty -Object $summary -Name "run_id" "")
+    if ([string]::IsNullOrWhiteSpace($runId)) { $runId = [string](Get-OptionalProperty -Object $Registry -Name "run_id" "") }
+    $runRoot = if ([string]::IsNullOrWhiteSpace($runId)) {
+        Get-AbsoluteArtifactPath -Path $EvidenceRoot -DefaultPath $EvidenceRoot
+    } else {
+        $relativeRoot = Join-Path $EvidenceRoot $runId
+        Get-AbsoluteArtifactPath -Path $relativeRoot -DefaultPath $relativeRoot
+    }
+    if ($null -ne $summary) {
+        if (Test-LegacyLengthWrapper -Value (Get-OptionalProperty -Object $summary -Name "evidence_root")) { $summary.evidence_root = $runRoot }
+        if (Test-LegacyLengthWrapper -Value (Get-OptionalProperty -Object $summary -Name "report_path")) { $summary.report_path = Join-Path $runRoot "parallel-report.json" }
+        if (Test-LegacyLengthWrapper -Value (Get-OptionalProperty -Object $summary -Name "defect_protocol_path")) { $summary.defect_protocol_path = Join-Path $runRoot "defect-remediation.json" }
+    }
+    if (Test-LegacyLengthWrapper -Value (Get-OptionalProperty -Object $Registry -Name "defect_protocol_path")) {
+        $Registry.defect_protocol_path = if ($null -ne $summary) { [string](Get-OptionalProperty -Object $summary -Name "defect_protocol_path" (Join-Path $runRoot "defect-remediation.json")) } else { Join-Path $runRoot "defect-remediation.json" }
+    }
+    return $Registry
 }
 
 function Get-DeterministicHash {
@@ -807,8 +884,10 @@ function Read-FileRegistry {
         $registry.schema_version = 3
         $registry.index_role = "mutation_wave_orchestrator"
         $registry.registry_revision = [int](Get-OptionalProperty $value "registry_revision" 0)
-        $registry.files = @(Get-UniqueFileRows -Rows @(Get-OptionalProperty $value "files" @()))
+        $registry.files = @(Get-OptionalProperty $value "files" @())
         $registry.waves = @((Get-OptionalProperty $value "waves" @()))
+        $registry = Normalize-MutationRegistryLegacyValues -Registry $registry -DefectLogPath $DefectLogPathAbsolute
+        $registry.files = @(Get-UniqueFileRows -Rows @($registry.files))
         return $registry
     } catch {
         throw "Cannot read file registry $Path`: $($_.Exception.Message)"
@@ -848,6 +927,7 @@ function Get-InferredRegistryWaves {
 
 function Write-CanonicalRegistry {
     param([object]$Registry, [string]$Path)
+    $Registry = Normalize-MutationRegistryLegacyValues -Registry $Registry -DefectLogPath $DefectLogPathAbsolute
     if ($Registry -is [System.Collections.IDictionary]) { $Registry = Convert-ToOrderedRecord -Object $Registry }
     $Registry.files = @(Get-UniqueFileRows -Rows @($Registry.files))
     $Registry.schema_version = 3
@@ -1019,7 +1099,8 @@ function Get-MutestCommand {
 
 function Get-CommandHash {
     param([object[]]$Commands)
-    $json = $Commands | ConvertTo-Json -Depth 20 -Compress
+    $commandArray = @($Commands)
+    $json = ConvertTo-Json -InputObject $commandArray -Depth 20 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
@@ -1213,7 +1294,7 @@ function Complete-MutestWorker {
     $stats = Get-MutestStats -MetadataPath $Worker.metadata_dir
     $stderrText = if (Test-Path -LiteralPath $Worker.stderr) { Get-Content -LiteralPath $Worker.stderr -Raw } else { "" }
     $stdoutText = if (Test-Path -LiteralPath $Worker.stdout) { Get-Content -LiteralPath $Worker.stdout -Raw } else { "" }
-    $noEvidence = [int](Get-OptionalProperty $stats "metadata_files" 0) -eq 0 -and [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
+    $noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
     $toolFailure = ($stderrText + "`n" + $stdoutText) -match '(?i)(compiler unexpectedly|internal compiler error|cannot find target|could not compile|error: aborting|panic)'
     $status = if ($Worker.timed_out) { "timeout" } elseif ($noEvidence -and $toolFailure) { "blocked" } elseif ($exitCode -eq 0 -or [int]$stats.evaluated -gt 0) { "completed" } else { "blocked" }
     $blocker = if ($status -eq "blocked") { Get-ExecutionBlocker -Text ($stderrText + "`n" + $stdoutText) } else { $null }
@@ -1613,8 +1694,11 @@ while ($RetryFiles.Count -gt 0 -or $PendingFiles.Count -gt 0 -or $Active.Count -
 
 $Defects = New-Object System.Collections.Generic.List[object]
 $RescanFiles = New-Object System.Collections.Generic.List[object]
-foreach ($fileRecord in @($QueueFiles | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -ne "compatible_registry" -and [string](Get-OptionalProperty $_ "status" "") -ne "deleted_from_snapshot" })) {
-    $fileResult = @($Results | Where-Object { ([string](Get-OptionalProperty $_ "path" "")).ToLowerInvariant() -eq ([string]$fileRecord.path).ToLowerInvariant() } | Select-Object -Last 1)
+foreach ($queuedRecord in @($QueueFiles | Where-Object { [string](Get-OptionalProperty $_ "resume_source" "") -ne "compatible_registry" -and [string](Get-OptionalProperty $_ "status" "") -ne "deleted_from_snapshot" })) {
+    $fileKey = ([string]$queuedRecord.path).ToLowerInvariant()
+    if (-not $FileByPath.ContainsKey($fileKey)) { continue }
+    $fileRecord = $FileByPath[$fileKey]
+    $fileResult = @($Results | Where-Object { ([string](Get-OptionalProperty $_ "path" "")).ToLowerInvariant() -eq $fileKey } | Select-Object -Last 1)
     if (@($fileResult).Count -eq 0) {
         $fileRecord.status = "blocked"; $fileRecord.wave_status = "blocked"; $fileRecord.needs_rerun = $true; $fileRecord.updated_at = [DateTime]::UtcNow.ToString("o")
         continue
@@ -1632,9 +1716,9 @@ foreach ($fileRecord in @($QueueFiles | Where-Object { [string](Get-OptionalProp
     $fileRecord.updated_at = [DateTime]::UtcNow.ToString("o")
     $lowCoverage = ($null -eq $fileRecord.mutation_score) -or ([double]$fileRecord.mutation_score -le $Threshold) -or ([int]$fileRecord.no_coverage -gt 0)
     $stderrText = if ($fileReport.stderr -and (Test-Path -LiteralPath $fileReport.stderr)) { Get-Content -LiteralPath $fileReport.stderr -Raw } else { "" }
-    $noEvidence = ([int](Get-OptionalProperty $stats "metadata_files" 0) -eq 0 -and [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0)
+    $noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
     $compilerError = $stderrText -match '(?i)(internal compiler error|rustc.*panic|compiler unexpectedly|could not compile)'
-    if ($fileReport.status -ne "completed" -or $noEvidence -or $compilerError) {
+    if ($fileReport.status -ne "completed" -or $compilerError) {
         $blocker = Get-ExecutionBlocker -Text $stderrText
         $fileRecord.status = if ($fileReport.timed_out) { "timeout" } else { "blocked" }; $fileRecord.wave_status = $fileRecord.status; $fileRecord.needs_rerun = $true; $fileRecord.needs_tests = $false
         $fileRecord.blocker_code = if ($fileReport.timed_out) { "mutation_timeout" } else { $blocker.code }
@@ -1647,7 +1731,7 @@ foreach ($fileRecord in @($QueueFiles | Where-Object { [string](Get-OptionalProp
     } elseif ($lowCoverage) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true; $fileRecord.needs_rerun = $false; $fileRecord.needs_rescan = $false
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
-        $defectRecord = [ordered]@{ type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
+        $defectRecord = [ordered]@{ type = if ($noEvidence) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
         $currentDefects = @(Set-CurrentFileDefects -FileRecord $fileRecord -Defects @($defectRecord) -ObservedHash $fileRecord.hash -WaveId $WaveId)
         foreach ($currentDefect in $currentDefects) { [void]$Defects.Add($currentDefect) }
         $update = Invoke-TestUpdateHook -FileRecord $fileRecord -RunEvidenceRoot $RunEvidenceRoot -EventPath $EventPath
@@ -1679,10 +1763,10 @@ foreach ($fileRecord in @($RescanFiles.ToArray())) {
     $rescanStderrPath = [string](Get-OptionalProperty $rescan "stderr" "")
     $rescanStdoutPath = [string](Get-OptionalProperty $rescan "stdout" "")
     $rescanStderrText = if (-not [string]::IsNullOrWhiteSpace($rescanStderrPath) -and (Test-Path -LiteralPath $rescanStderrPath)) { Get-Content -LiteralPath $rescanStderrPath -Raw } else { [string](Get-OptionalProperty $rescan "error" "") }
-    $rescanNoEvidence = ([int](Get-OptionalProperty $rescanStats "metadata_files" 0) -eq 0 -and [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0)
+    $rescanNoEvidence = [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0
     $rescanCompilerError = $rescanStderrText -match '(?i)(internal compiler error|rustc.*panic|compiler unexpectedly|could not compile|cannot find target)'
     $rescanDefects = New-Object System.Collections.Generic.List[object]
-    if ([bool](Get-OptionalProperty $rescan "timed_out" $false) -or [string]$rescan.status -ne "completed" -or $rescanNoEvidence -or $rescanCompilerError) {
+    if ([bool](Get-OptionalProperty $rescan "timed_out" $false) -or [string]$rescan.status -ne "completed" -or $rescanCompilerError) {
         $blocker = Get-ExecutionBlocker -Text $rescanStderrText
         $fileRecord.status = if ([bool](Get-OptionalProperty $rescan "timed_out" $false)) { "timeout" } else { "blocked" }
         $fileRecord.wave_status = $fileRecord.status; $fileRecord.needs_rerun = $true
@@ -1694,7 +1778,7 @@ foreach ($fileRecord in @($RescanFiles.ToArray())) {
     } elseif (($null -eq $score) -or ([double]$score -le $Threshold) -or $fileRecord.no_coverage -gt 0) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
-        [void]$rescanDefects.Add([ordered]@{ type = if ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" })
+        [void]$rescanDefects.Add([ordered]@{ type = if ($rescanNoEvidence) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" })
     } else {
         $fileRecord.status = "completed"; $fileRecord.wave_status = "completed"; $fileRecord.test_update_status = "completed"
         $fileRecord.blocker_code = $null; $fileRecord.blocker_family = $null; $fileRecord.blocker_reason = $null; $fileRecord.next_action = $null
