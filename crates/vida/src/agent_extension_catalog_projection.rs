@@ -97,4 +97,37 @@ mod tests {
         assert_eq!(projection.all_project_flow_map.len(), 2);
         assert!(projection.all_project_flow_map.contains_key("standard"));
     }
+
+    #[test]
+    fn projection_treats_empty_enabled_lists_as_all_and_ignores_unknown_ids() {
+        let roles = registry("roles", "role_id", &["worker", "reviewer"]);
+        let empty = build_agent_extension_catalog_projection(
+            &roles,
+            &registry("skills", "skill_id", &[]),
+            &registry("profiles", "profile_id", &[]),
+            &registry("flow_sets", "flow_id", &[]),
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+
+        assert_eq!(empty.project_roles.len(), 2);
+        assert!(empty.project_role_map.contains_key("worker"));
+        assert!(empty.project_role_map.contains_key("reviewer"));
+
+        let unknown = build_agent_extension_catalog_projection(
+            &roles,
+            &registry("skills", "skill_id", &[]),
+            &registry("profiles", "profile_id", &[]),
+            &registry("flow_sets", "flow_id", &[]),
+            &["missing".to_string()],
+            &[],
+            &[],
+            &[],
+        );
+
+        assert!(unknown.project_roles.is_empty());
+        assert!(unknown.project_role_map.is_empty());
+    }
 }

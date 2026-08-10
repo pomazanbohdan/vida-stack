@@ -86,4 +86,13 @@ mod tests {
         );
         assert!(repo_runtime_root().join("Cargo.toml").is_file());
     }
+
+    #[test]
+    fn block_on_state_store_preserves_state_store_error_text() {
+        let error =
+            block_on_state_store(async { Err::<(), _>(crate::StateStoreError::MissingMetadata) })
+                .expect_err("state-store errors should propagate to the shell helper");
+
+        assert_eq!(error, "storage metadata record is missing");
+    }
 }

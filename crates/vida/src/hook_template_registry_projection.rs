@@ -65,6 +65,7 @@ pub(crate) fn build_hook_template_registry_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, time::SystemTime};
 
     #[test]
     fn missing_hook_registry_path_preserves_configured_ids_and_strict_blocker() {
@@ -82,5 +83,42 @@ mod tests {
         let strict = build_hook_template_registry_projection(&config, root, true);
         assert_eq!(strict.validation_errors.len(), 1);
         assert!(strict.validation_errors[0].contains("registry path is required"));
+    }
+
+    #[test]
+    fn configured_hook_registry_loads_rows_and_defaults_enabled_ids() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-hook-registry-projection-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("config")).expect("create registry directory");
+        fs::write(
+            root.join("config/hooks.yaml"),
+            "version: 1\nhook_templates:\n  - template_id: preflight\n    name: Preflight\n",
+        )
+        .expect("write hook registry");
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            "agent_extensions:\n  registries:\n    hook_templates: config/hooks.yaml\n",
+        )
+        .expect("config fixture should parse");
+
+        let projection = build_hook_template_registry_projection(&config, &root, true);
+
+        assert!(projection.validation_errors.is_empty());
+        assert_eq!(
+            projection.hook_templates_path.as_deref(),
+            Some("config/hooks.yaml")
+        );
+        assert_eq!(projection.enabled_hook_templates, vec!["preflight"]);
+        assert_eq!(projection.hook_templates_registry["version"], 1);
+        assert_eq!(
+            projection.hook_templates_registry["hook_templates"][0]["template_id"],
+            "preflight"
+        );
+        fs::remove_dir_all(&root).expect("remove registry directory");
     }
 }

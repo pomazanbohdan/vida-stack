@@ -92,4 +92,21 @@ mod tests {
         assert!(!looks_like_host_runtime_source_root(&missing_runtime));
         std::fs::remove_dir_all(&root).expect("remove test root");
     }
+
+    #[test]
+    fn configured_host_runtime_roots_ignores_blank_and_deduplicates_entries() {
+        let root = unique_test_root();
+        std::fs::create_dir_all(&root).expect("create test root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            "host_environment:\n  systems:\n    blank:\n      runtime_root: '   '\n    zeta:\n      runtime_root: runtime/shared\n    alpha:\n      runtime_root: runtime/shared\n",
+        )
+        .expect("write runtime registry");
+
+        assert_eq!(
+            configured_host_runtime_roots(&root),
+            vec!["runtime/shared".to_string()]
+        );
+        std::fs::remove_dir_all(&root).expect("remove test root");
+    }
 }

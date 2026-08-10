@@ -85,4 +85,21 @@ mod tests {
 
         assert_eq!(backend_admissibility_key_for_task_class("unknown"), None);
     }
+
+    #[test]
+    fn backend_admissibility_preserves_direct_classes_and_rejects_blank_values() {
+        for (input, expected) in [
+            (TASK_CLASS_IMPLEMENTATION, TASK_CLASS_IMPLEMENTATION),
+            (TASK_CLASS_VERIFICATION, TASK_CLASS_VERIFICATION),
+            (TASK_CLASS_ARCHITECTURE, TASK_CLASS_ARCHITECTURE),
+            (TASK_CLASS_SPECIFICATION, TASK_CLASS_SPECIFICATION),
+            (TASK_CLASS_COACH, TASK_CLASS_COACH),
+        ] {
+            assert_eq!(
+                backend_admissibility_key_for_task_class(input),
+                Some(expected)
+            );
+        }
+        assert_eq!(backend_admissibility_key_for_task_class("   "), None);
+    }
 }

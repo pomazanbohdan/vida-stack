@@ -48,6 +48,7 @@ mod tests {
 
     use super::HostBridgeError;
     use crate::adapter_contract::HostBridgeAdapterContractError;
+    use runtime_path_policy::PathPolicyError;
 
     #[test]
     fn host_bridge_error_display_preserves_variant_context() {
@@ -107,5 +108,14 @@ mod tests {
         let adapter =
             HostBridgeError::AdapterContract(HostBridgeAdapterContractError::MissingDisposePolicy);
         assert!(adapter.source().is_some());
+    }
+
+    #[test]
+    fn host_bridge_error_transparently_wraps_path_policy_failures() {
+        let error = HostBridgeError::from(PathPolicyError::StateRootNotDirectory {
+            path: PathBuf::from("state"),
+        });
+
+        assert_eq!(error.to_string(), "state root `state` is not a directory");
     }
 }

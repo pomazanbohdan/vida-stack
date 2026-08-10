@@ -81,6 +81,8 @@ mod tests {
             Some(" placeholder "),
             "placeholder"
         ));
+        assert!(is_missing_or_placeholder(Some(""), "placeholder"));
+        assert!(!is_missing_or_placeholder(Some("other"), "placeholder"));
         assert!(!is_missing_or_placeholder(Some("real"), "placeholder"));
     }
 
