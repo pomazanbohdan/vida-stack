@@ -203,6 +203,38 @@ mod tests {
     }
 
     #[test]
+    fn task_create_semantics_accepts_exact_matches_and_reports_single_field_drift() {
+        let existing = TaskExecutionSemanticsInput {
+            execution_mode: Some("parallel_safe"),
+            order_bucket: Some("feature-x"),
+            parallel_group: Some("dev-pack"),
+            conflict_domain: Some("task-ensure-semantics"),
+        };
+        assert!(!task_create_semantics_mismatch(existing, existing));
+        for requested in [
+            TaskExecutionSemanticsInput {
+                execution_mode: Some("serial"),
+                ..existing
+            },
+            TaskExecutionSemanticsInput {
+                order_bucket: Some("feature-y"),
+                ..existing
+            },
+            TaskExecutionSemanticsInput {
+                parallel_group: Some("other-pack"),
+                ..existing
+            },
+            TaskExecutionSemanticsInput {
+                conflict_domain: Some("other-domain"),
+                ..existing
+            },
+        ] {
+            assert!(task_create_semantics_requested(requested));
+            assert!(task_create_semantics_mismatch(existing, requested));
+        }
+    }
+
+    #[test]
     fn ensure_existing_task_rejects_first_contract_mismatch() {
         let actual_labels = vec!["other".to_string()];
         let expected_labels = vec!["tracked-pack".to_string()];
@@ -259,5 +291,38 @@ mod tests {
             reason,
             "existing task 'task-ensure' missing required labels: two"
         );
+    }
+
+    #[test]
+    fn ensure_existing_task_reports_each_scalar_contract_drift() {
+        let labels = vec!["tracked".to_string()];
+        let actual = ExistingTaskActual {
+            task_id: "task-ensure",
+            title: "Title",
+            display_id: Some("VH-1"),
+            issue_type: "task",
+            status: "open",
+            parent_id: Some("parent"),
+            labels: &labels,
+        };
+        let expected = ExistingTaskExpectation {
+            title: "Title",
+            display_id: Some("VH-1"),
+            issue_type: "task",
+            status: "open",
+            parent_id: Some("parent"),
+            labels: &labels,
+        };
+        assert!(ensure_existing_task_mismatch_reason(actual, expected).is_none());
+        for (expected, fragment) in [
+            (ExistingTaskExpectation { display_id: Some("VH-2"), ..expected }, "display_id mismatch"),
+            (ExistingTaskExpectation { issue_type: "bug", ..expected }, "issue_type mismatch"),
+            (ExistingTaskExpectation { status: "closed", ..expected }, "status mismatch"),
+            (ExistingTaskExpectation { parent_id: Some("other"), ..expected }, "parent_id mismatch"),
+        ] {
+            let reason = ensure_existing_task_mismatch_reason(actual, expected)
+                .expect("scalar drift should produce a reason");
+            assert!(reason.contains(fragment), "unexpected reason: {reason}");
+        }
     }
 }
