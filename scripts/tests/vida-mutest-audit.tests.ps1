@@ -481,6 +481,18 @@ Add-Case "launcher_environment_and_target_contract" {
     }
 }
 
+Add-Case "default_windows_native_lib_discovery_contract" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    $nativeBlockStart = $source.IndexOf('if (-not $RefreshIndex -and -not [string]::IsNullOrWhiteSpace($MutestNativeLibPath))')
+    $nativeBlockEnd = $source.IndexOf('if ($RefreshIndex -and', $nativeBlockStart)
+    Assert-True ($nativeBlockStart -ge 0 -and $nativeBlockEnd -gt $nativeBlockStart) "native library resolution block is missing"
+    $nativeBlock = $source.Substring($nativeBlockStart, $nativeBlockEnd - $nativeBlockStart)
+    Assert-True ($nativeBlock.Contains('elseif (-not $RefreshIndex -and [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)')) "default Windows path does not resolve native libraries"
+    Assert-True ($nativeBlock.Contains('$MutestNativeLibPathAbsolute = Find-MutestNativeLibPath')) "default Windows path does not discover windows.lib"
+    Assert-True ($source.Contains('$environment["LIB"]')) "worker environment does not propagate the native LIB path"
+    Assert-True ($source.Contains('$environment["RUSTFLAGS"]')) "worker environment does not propagate the native RUSTFLAGS path"
+}
+
 Add-Case "csv_selector_contract" {
     $plan = Invoke-Plan -Package "docflow-markdown" -FilesCsv "crates/docflow-markdown/src/lib.rs"
     Assert-True ($plan.file_scan.candidate_files -eq 1) "CSV file selector did not produce one candidate"

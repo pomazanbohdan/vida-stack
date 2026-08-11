@@ -454,6 +454,8 @@ function Get-MutestEnvironment {
     param([string]$TempRoot = "")
     $environment = @{}
     if (-not [string]::IsNullOrWhiteSpace($MutestNativeLibPathAbsolute)) {
+        $existingLib = [Environment]::GetEnvironmentVariable("LIB", "Process")
+        $environment["LIB"] = if ([string]::IsNullOrWhiteSpace($existingLib)) { $MutestNativeLibPathAbsolute } else { "$MutestNativeLibPathAbsolute;$existingLib" }
         $existingFlags = [Environment]::GetEnvironmentVariable("RUSTFLAGS", "Process")
         $nativeFlag = "-L native=$MutestNativeLibPathAbsolute"
         $environment["RUSTFLAGS"] = if ([string]::IsNullOrWhiteSpace($existingFlags)) { $nativeFlag } else { "$existingFlags $nativeFlag" }
@@ -1423,10 +1425,10 @@ if (-not $RefreshIndex -and -not [string]::IsNullOrWhiteSpace($MutestNativeLibPa
         throw "MutestNativeLibPath does not exist: $nativeCandidate"
     }
     $MutestNativeLibPathAbsolute = $nativeCandidate
-} elseif (-not [string]::IsNullOrWhiteSpace($MutestCargoPathAbsolute) -and [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+} elseif (-not $RefreshIndex -and [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     $MutestNativeLibPathAbsolute = Find-MutestNativeLibPath
     if ([string]::IsNullOrWhiteSpace($MutestNativeLibPathAbsolute)) {
-        throw "Custom MutestCargoPath on Windows requires MutestNativeLibPath (directory containing windows.lib)."
+        throw "Windows mutest execution requires MutestNativeLibPath or an auto-discovered directory containing windows.lib."
     }
 }
 if ($RefreshIndex -and ($PlanOnly -or $Resume -or $FullRescan -or $AutoUpdateTests)) {
