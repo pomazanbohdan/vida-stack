@@ -165,4 +165,78 @@ mod tests {
         assert!(downstream_handoff_ready_from_completion_evidence(&evidence));
         assert_eq!(normalize_run_graph_node("work-pool"), "work_pool");
     }
+
+    #[test]
+    fn blocked_source_lane_requires_distinct_source_and_preserves_bridge_pending() {
+        let packet = RunGraphDownstreamPacketEvidence {
+            source_dispatch_target: "analysis".to_string(),
+            source_dispatch_status: "executed".to_string(),
+            source_blocker_code: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_review".to_string()],
+        };
+
+        let pending = blocked_source_lane_from_packet_evidence(
+            "developer",
+            "bridge_request_pending",
+            packet.clone(),
+        )
+        .expect("pending bridge request should preserve blocked source evidence");
+        assert_eq!(pending.dispatch_target, "analysis");
+        assert_eq!(pending.blocker_code, None);
+
+        assert!(
+            blocked_source_lane_from_packet_evidence("analysis", "blocked", packet.clone())
+                .is_none(),
+            "same source and receipt target must not self-report as blocked"
+        );
+
+        let mut empty_source = packet;
+        empty_source.source_dispatch_target = "  ".to_string();
+        assert!(
+            blocked_source_lane_from_packet_evidence("developer", "blocked", empty_source)
+                .is_none(),
+            "empty source target must fail closed"
+        );
+    }
+
+    #[test]
+    fn downstream_handoff_requires_executed_clean_ready_target() {
+        let mut evidence = RunGraphCompletionEvidence {
+            dispatch_target: "developer".to_string(),
+            dispatch_status: "executed".to_string(),
+            blocker_code: None,
+            rework: None,
+            source_lane: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_target: Some("tester".to_string()),
+            downstream_dispatch_blockers: Vec::new(),
+        };
+        assert!(downstream_handoff_ready_from_completion_evidence(&evidence));
+
+        evidence.dispatch_status = "blocked".to_string();
+        assert!(!downstream_handoff_ready_from_completion_evidence(
+            &evidence
+        ));
+        evidence.dispatch_status = "executed".to_string();
+        evidence.blocker_code = Some("review_required".to_string());
+        assert!(!downstream_handoff_ready_from_completion_evidence(
+            &evidence
+        ));
+        evidence.blocker_code = None;
+        evidence.downstream_dispatch_ready = false;
+        assert!(!downstream_handoff_ready_from_completion_evidence(
+            &evidence
+        ));
+        evidence.downstream_dispatch_ready = true;
+        evidence.downstream_dispatch_target = Some("  ".to_string());
+        assert!(!downstream_handoff_ready_from_completion_evidence(
+            &evidence
+        ));
+        evidence.downstream_dispatch_target = Some("tester".to_string());
+        evidence.downstream_dispatch_blockers = vec!["pending_review".to_string()];
+        assert!(!downstream_handoff_ready_from_completion_evidence(
+            &evidence
+        ));
+    }
 }

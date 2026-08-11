@@ -134,10 +134,12 @@ mod tests {
             payload["operator_contracts"]["artifact_refs"],
             payload["artifact_refs"]
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .expect("next action should be text")
-            .contains("vida taskflow packet repair"));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("next action should be text")
+                .contains("vida taskflow packet repair")
+        );
     }
 
     #[test]
@@ -181,5 +183,86 @@ mod tests {
         assert_eq!(output["shared_fields"]["status"], output["status"]);
         assert_eq!(output["operator_contracts"]["status"], output["status"]);
         assert_eq!(output["source_run_id"], "run-1");
+    }
+
+    #[test]
+    fn toon_text_omits_optional_projection_and_next_action_when_absent() {
+        let output = toon_text(
+            "vida taskflow consume continue",
+            "pass",
+            "run-1",
+            "packet.json",
+            "snapshot.json",
+            None,
+            None,
+        );
+
+        assert!(output.starts_with("vida taskflow consume continue"));
+        assert!(output.contains("status: pass"));
+        assert!(output.contains("source_run"));
+        assert!(output.contains("run-1"));
+        assert!(!output.contains("projection:"));
+        assert!(!output.contains("next_action:"));
+    }
+
+    #[test]
+    fn projection_validation_reports_shared_status_drift() {
+        let payload = build_operator_projection_payload(
+            "vida taskflow consume continue",
+            vec!["dispatch_packet_contract_invalid".to_string()],
+            vec!["repair packet".to_string()],
+            serde_json::json!({"snapshot": "snapshot.json"}),
+            serde_json::json!({"source_run_id": "run-1"}),
+            "test parity",
+        )
+        .expect("projection should build");
+        let mut drifted = payload;
+        drifted["shared_fields"]["status"] = serde_json::json!("pass");
+
+        let error = validate_operator_projection_payload(&drifted, "test parity")
+            .expect_err("status drift should fail closed");
+        assert!(error.contains("Failed to preserve test parity operator-contract parity"));
+    }
+
+    #[test]
+    fn projection_writer_persists_valid_payload_and_rejects_invalid_path() {
+        let payload = build_operator_projection_payload(
+            "vida taskflow consume continue",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({"snapshot": "snapshot.json"}),
+            serde_json::json!({"source_run_id": "run-1"}),
+            "test writer",
+        )
+        .expect("projection should build");
+        let harness = crate::temp_state::TempStateHarness::new()
+            .expect("temp state harness should initialize");
+        let output_path = harness.path().join("projection.json");
+        write_operator_projection_payload(
+            &output_path.to_string_lossy(),
+            &payload,
+            "projection",
+            "projection",
+            "test writer",
+        )
+        .expect("valid projection should write");
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&output_path).expect("projection file should exist"),
+        )
+        .expect("written projection should be JSON");
+        assert_eq!(written["source_run_id"], "run-1");
+
+        let error = write_operator_projection_payload(
+            &harness
+                .path()
+                .join("missing/dir/projection.json")
+                .to_string_lossy(),
+            &payload,
+            "projection",
+            "projection",
+            "test writer",
+        )
+        .expect_err("missing parent directory should fail closed");
+        assert!(error.contains("Failed to write projection"));
     }
 }

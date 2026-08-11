@@ -149,9 +149,11 @@ mod tests {
                     "--json".to_string()
                 ]
             );
-            assert!(resolution
-                .deprecation_notice
-                .contains(LEGACY_ROOT_ALIAS_RECEIPT_CODE));
+            assert!(
+                resolution
+                    .deprecation_notice
+                    .contains(LEGACY_ROOT_ALIAS_RECEIPT_CODE)
+            );
             assert!(resolution.deprecation_notice.contains(spec.alias));
             assert!(resolution.deprecation_notice.contains(&format!(
                 "vida {} {}",
@@ -172,5 +174,37 @@ mod tests {
 
         assert_eq!(error.blocker_code, "ambiguous_legacy_root_alias");
         assert!(error.message.contains("vida taskflow consume"));
+    }
+
+    #[test]
+    fn unknown_root_alias_fails_closed_with_usage_exit_code() {
+        let error = resolve_legacy_root_alias("unknown", ProxyArgs { args: Vec::new() })
+            .expect_err("unknown root alias should not dispatch");
+
+        assert_eq!(error.blocker_code, "unknown_legacy_root_alias");
+        assert_eq!(error.exit_code, ExitCode::from(2));
+        assert!(
+            error
+                .message
+                .contains("Unknown legacy root alias `unknown`")
+        );
+    }
+
+    #[test]
+    fn every_retained_alias_rejects_nested_legacy_alias_tokens() {
+        for outer in retained_root_aliases() {
+            for nested in retained_root_aliases() {
+                let error = resolve_legacy_root_alias(
+                    outer.alias,
+                    ProxyArgs {
+                        args: vec![nested.alias.to_string()],
+                    },
+                )
+                .expect_err("nested legacy alias should fail closed");
+
+                assert_eq!(error.blocker_code, "ambiguous_legacy_root_alias");
+                assert!(error.message.contains(nested.alias));
+            }
+        }
     }
 }

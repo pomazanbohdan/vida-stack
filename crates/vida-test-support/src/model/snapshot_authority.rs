@@ -186,3 +186,76 @@ fn ids_for_mask(universe: &[&str], mask: u8) -> Vec<String> {
         .filter_map(|(index, id)| ((mask & (1 << index)) != 0).then(|| (*id).to_string()))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        JUNE_2026_INVARIANT, SnapshotAuthorityInput, SnapshotReadAuthority,
+        bounded_snapshot_authority_state_space, decide_snapshot_read_authority,
+        masked_snapshot_authority_state, model_check_snapshot_authority,
+        snapshot_authority_review_artifact,
+    };
+
+    #[test]
+    fn fresh_richer_snapshot_becomes_authoritative_and_reports_recovered_ids() {
+        let input = SnapshotAuthorityInput::from_ids(
+            ["epic-root", "task-a"],
+            ["epic-root", "task-a", "task-b"],
+            true,
+        );
+
+        let decision = decide_snapshot_read_authority(&input);
+
+        assert_eq!(decision.authority, SnapshotReadAuthority::FreshSnapshot);
+        assert_eq!(decision.invariant, JUNE_2026_INVARIANT);
+        assert_eq!(
+            decision.reason,
+            "fresh_snapshot_contains_live_rows_and_recovers_missing_live_rows"
+        );
+        assert_eq!(decision.recovered_snapshot_only_ids, vec!["task-b"]);
+    }
+
+    #[test]
+    fn live_store_remains_authoritative_for_stale_or_non_richer_snapshots() {
+        for input in [
+            masked_snapshot_authority_state(0b011, 0b011, true),
+            masked_snapshot_authority_state(0b011, 0b001, true),
+            masked_snapshot_authority_state(0b011, 0b111, false),
+        ] {
+            let decision = decide_snapshot_read_authority(&input);
+            assert_eq!(decision.authority, SnapshotReadAuthority::LiveStore);
+            assert_eq!(
+                decision.reason,
+                "live_store_remains_authoritative_without_fresh_richer_snapshot"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_model_check_covers_all_masks_without_counterexamples() {
+        assert_eq!(bounded_snapshot_authority_state_space().len(), 128);
+
+        let report = model_check_snapshot_authority();
+
+        assert_eq!(report.invariant, JUNE_2026_INVARIANT);
+        assert_eq!(report.bounded_state_count, 128);
+        assert!(report.counterexamples.is_empty());
+    }
+
+    #[test]
+    fn review_artifact_exposes_switch_rule_and_regression_seed() {
+        let artifact = snapshot_authority_review_artifact();
+
+        assert_eq!(artifact["invariant"], JUNE_2026_INVARIANT);
+        assert_eq!(artifact["bounded_state_count"], 128);
+        assert_eq!(artifact["counterexample_count"], 0);
+        assert_eq!(
+            artifact["required_authority_switch"]["authority"],
+            "fresh_snapshot"
+        );
+        assert_eq!(
+            artifact["june_2026_regression_seed"]["expected_authority"],
+            "fresh_snapshot"
+        );
+    }
+}

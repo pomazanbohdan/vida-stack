@@ -4,7 +4,7 @@ pub(crate) use crate::release1_contracts::{
     BlockerCode, CompatibilityBoundary, CompatibilityClass,
 };
 
-use crate::contract_profile_registry::{selected_contract_profile_id, ContractProfileId};
+use crate::contract_profile_registry::{ContractProfileId, selected_contract_profile_id};
 use crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC;
 
 pub(crate) fn blocker_code(code: BlockerCode) -> Option<String> {
@@ -186,5 +186,97 @@ mod tests {
             classify_compatibility_boundary("compatible"),
             CompatibilityBoundary::Compatible
         );
+    }
+
+    #[test]
+    fn blocker_adapters_preserve_canonical_codes_and_deduplicate_entries() {
+        assert_eq!(
+            blocker_code(BlockerCode::MissingPacket),
+            Some("missing_packet".to_string())
+        );
+        assert_eq!(
+            blocker_code_str(BlockerCode::MissingPacket),
+            "missing_packet"
+        );
+        assert_eq!(
+            canonical_blocker_codes(&[
+                "missing_packet".to_string(),
+                " unknown ".to_string(),
+                "missing_packet".to_string(),
+            ]),
+            vec!["missing_packet".to_string()]
+        );
+        assert_eq!(
+            canonical_blocker_code_list(["open_delegated_cycle", "open_delegated_cycle"]),
+            vec!["open_delegated_cycle".to_string()]
+        );
+    }
+
+    #[test]
+    fn policy_gate_adapter_maps_missing_receipts_and_runtime_readiness() {
+        assert_eq!(
+            evaluate_policy_gate_protocol_binding("retrieval_evidence", None, false),
+            Some("missing_protocol_binding_receipt".to_string())
+        );
+        assert_eq!(
+            evaluate_policy_gate_protocol_binding("retrieval_evidence", Some("pb-1"), false),
+            Some("protocol_binding_not_runtime_ready".to_string())
+        );
+        assert_eq!(
+            evaluate_policy_gate_protocol_binding("retrieval_evidence", Some("pb-1"), true),
+            None
+        );
+        assert_eq!(
+            evaluate_policy_gate_protocol_binding("unknown_gate", Some("pb-1"), true),
+            Some("unsupported_blocker_code".to_string())
+        );
+    }
+
+    #[test]
+    fn operator_envelope_adapter_preserves_mirrors_and_detects_parity_drift() {
+        let payload = render_operator_contract_envelope(
+            "blocked",
+            vec!["missing_packet".to_string()],
+            vec!["inspect packet".to_string()],
+            serde_json::json!({"path": "packet.json"}),
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(operator_contract_status_is_blocked(&payload["status"]));
+
+        let mirrors = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["missing_packet"],
+            "next_actions": ["inspect packet"],
+        });
+        let mut mirrored = payload.clone();
+        mirrored["shared_fields"] = mirrors.clone();
+        mirrored["operator_contracts"] = mirrors;
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&mirrored),
+            None
+        );
+
+        let mut drifted = mirrored;
+        drifted["status"] = serde_json::json!("pass");
+        assert!(shared_operator_output_contract_parity_error(&drifted).is_some());
+        assert!(!operator_contract_status_is_blocked(&drifted["status"]));
+    }
+
+    #[test]
+    fn approval_and_gate_adapters_fail_closed_for_unknown_values() {
+        assert_eq!(canonical_approval_status_str("approved"), Some("approved"));
+        assert_eq!(canonical_approval_status_str("not-a-status"), None);
+        assert_eq!(canonical_gate_level_str("block"), Some("block"));
+        assert_eq!(canonical_gate_level_str("not-a-level"), None);
+        assert!(
+            operator_contracts_consistency_error(
+                "blocked",
+                &["missing_packet".into()],
+                &["inspect".into()]
+            )
+            .is_none()
+        );
+        assert!(operator_contracts_consistency_error("unknown", &[], &[]).is_some());
     }
 }

@@ -179,4 +179,94 @@ model = "gpt"
 
         assert_eq!(sections["agents.worker"]["model"], "gpt");
     }
+
+    #[test]
+    fn non_empty_yaml_string_rejects_blank_values_but_preserves_content() {
+        let config: serde_yaml::Value =
+            serde_yaml::from_str("name: '  project  '\nblank: '  '\nmissing: null\n")
+                .expect("config should parse");
+
+        assert_eq!(
+            super::non_empty_yaml_string(&config, &["name"]),
+            Some("  project  ".to_string())
+        );
+        assert_eq!(super::non_empty_yaml_string(&config, &["blank"]), None);
+        assert_eq!(super::non_empty_yaml_string(&config, &["missing"]), None);
+    }
+
+    #[test]
+    fn registry_rows_by_key_applies_optional_enabled_filter() {
+        let registry: serde_yaml::Value = serde_yaml::from_str(
+            "roles:\n  - role_id: alpha\n    label: Alpha\n  - role_id: beta\n    label: Beta\n",
+        )
+        .expect("registry should parse");
+
+        let all = super::registry_rows_by_key(&registry, "roles", "role_id", &[]);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0]["role_id"], "alpha");
+        assert_eq!(all[1]["role_id"], "beta");
+
+        let enabled =
+            super::registry_rows_by_key(&registry, "roles", "role_id", &["beta".to_string()]);
+        assert_eq!(
+            enabled,
+            vec![serde_json::json!({"role_id": "beta", "label": "Beta"})]
+        );
+        assert!(super::registry_rows_by_key(&registry, "missing", "role_id", &[]).is_empty());
+    }
+
+    #[test]
+    fn effective_registry_ids_prefer_explicit_config_and_fallback_to_registry() {
+        let registry: serde_yaml::Value =
+            serde_yaml::from_str("roles:\n  - role_id: alpha\n  - role_id: beta\n")
+                .expect("registry should parse");
+        let explicit: serde_yaml::Value =
+            serde_yaml::from_str("agent_extensions:\n  enabled_roles:\n    - beta\n")
+                .expect("config should parse");
+        let absent = serde_yaml::Value::Null;
+
+        assert_eq!(
+            super::effective_enabled_registry_ids(
+                &explicit,
+                &["agent_extensions", "enabled_roles"],
+                &registry,
+                "roles",
+                "role_id",
+            ),
+            vec!["beta"]
+        );
+        assert_eq!(
+            super::effective_enabled_registry_ids(
+                &absent,
+                &["agent_extensions", "enabled_roles"],
+                &registry,
+                "roles",
+                "role_id",
+            ),
+            vec!["alpha", "beta"]
+        );
+    }
+
+    #[test]
+    fn registry_maps_and_id_sets_ignore_rows_without_string_ids() {
+        let rows = vec![
+            serde_json::json!({"role_id": "alpha", "value": 1}),
+            serde_json::json!({"value": 2}),
+            serde_json::json!({"role_id": "beta", "value": 3}),
+        ];
+        let map = super::registry_row_map_by_id(&rows, "role_id");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["alpha"]["value"], 1);
+        assert_eq!(map["beta"]["value"], 3);
+
+        let registry: serde_yaml::Value =
+            serde_yaml::from_str("roles:\n  - role_id: alpha\n  - value: 2\n  - role_id: beta\n")
+                .expect("registry should parse");
+        assert_eq!(
+            super::registry_ids_by_key(&registry, "roles", "role_id"),
+            ["alpha".to_string(), "beta".to_string()]
+                .into_iter()
+                .collect()
+        );
+    }
 }

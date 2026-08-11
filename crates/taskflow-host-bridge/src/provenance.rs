@@ -175,4 +175,52 @@ mod tests {
                 .contains(&"request_status_not_admissible".to_string())
         );
     }
+
+    #[test]
+    fn provenance_accepts_each_admissible_request_status_with_matching_identity() {
+        for status in ["pending", "pass", "retryable_blocked"] {
+            let mut request = minimal_request();
+            request.status = status.to_string();
+            let decision = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
+                request,
+                expected_run_id: Some("run-1".to_string()),
+                expected_task_id: Some("task-1".to_string()),
+                expected_dispatch_target: Some("developer".to_string()),
+            });
+
+            assert!(decision.accepted, "status `{status}` should be admissible");
+            assert!(decision.blocker_codes.is_empty());
+            assert_eq!(
+                decision.reason,
+                "host bridge request provenance matches the declared dispatch identity"
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_reports_each_expected_identity_mismatch() {
+        for (field, blocker_code) in [
+            ("run_id", "run_id_mismatch"),
+            ("task_id", "task_id_mismatch"),
+            ("dispatch_target", "dispatch_target_mismatch"),
+        ] {
+            let mut input = HostBridgeProvenanceInput {
+                request: minimal_request(),
+                expected_run_id: None,
+                expected_task_id: None,
+                expected_dispatch_target: None,
+            };
+            match field {
+                "run_id" => input.expected_run_id = Some("other-run".to_string()),
+                "task_id" => input.expected_task_id = Some("other-task".to_string()),
+                "dispatch_target" => input.expected_dispatch_target = Some("tester".to_string()),
+                _ => unreachable!(),
+            }
+
+            let decision = validate_host_bridge_request_provenance(&input);
+
+            assert!(!decision.accepted);
+            assert_eq!(decision.blocker_codes, vec![blocker_code.to_string()]);
+        }
+    }
 }
