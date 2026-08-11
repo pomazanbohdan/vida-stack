@@ -52,27 +52,29 @@ class EnforceFreshSubagentsTests(unittest.TestCase):
         self.assertNotIn("updatedInput", hook_output)
 
     def test_trusted_spawn_agent_forces_fresh_context(self) -> None:
-        output = run_hook(
-            {
-                "tool_name": "spawn_agent",
-                "tool_input": {
-                    "task_name": "bounded_task",
-                    "message": "Do bounded work.",
-                    "fork_turns": "all",
-                },
-            }
-        )
+        for tool_name in ("spawn_agent", "multi_agent_v1.spawn_agent"):
+            with self.subTest(tool_name=tool_name):
+                output = run_hook(
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": {
+                            "task_name": "bounded_task",
+                            "message": "Do bounded work.",
+                            "fork_turns": "all",
+                        },
+                    }
+                )
 
-        hook_output = output["hookSpecificOutput"]
-        self.assertEqual(hook_output["permissionDecision"], "allow")
-        self.assertEqual(
-            hook_output["updatedInput"],
-            {
-                "task_name": "bounded_task",
-                "message": "Do bounded work.",
-                "fork_turns": "none",
-            },
-        )
+                hook_output = output["hookSpecificOutput"]
+                self.assertEqual(hook_output["permissionDecision"], "allow")
+                self.assertEqual(
+                    hook_output["updatedInput"],
+                    {
+                        "task_name": "bounded_task",
+                        "message": "Do bounded work.",
+                        "fork_turns": "none",
+                    },
+                )
 
 
 if __name__ == "__main__":
