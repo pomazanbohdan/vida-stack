@@ -147,7 +147,7 @@ pub struct RunGraphDispatchReceipt {
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
     pub selected_backend: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub policy_bundle_ref: Option<RunGraphPolicyPin>,
     pub recorded_at: String,
 }
@@ -1169,6 +1169,11 @@ mod tests {
         assert_eq!(
             projected.downstream_dispatch_blockers,
             ["missing_owned_write_scope"]
+        );
+        let serialized = serde_json::to_value(&projected).expect("dispatch receipt serializes");
+        assert_eq!(
+            serialized.get("policy_bundle_ref"),
+            Some(&serde_json::Value::Null)
         );
     }
 }
