@@ -132,10 +132,41 @@ mod tests {
     }
 
     #[test]
+    fn provenance_rejects_receipt_mode_mismatch_with_fail_closed_reason() {
+        let mut request = minimal_request();
+        request.receipt_mode = "other".to_string();
+
+        let decision = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
+            request,
+            expected_run_id: Some("run-1".to_string()),
+            expected_task_id: Some("task-1".to_string()),
+            expected_dispatch_target: Some("developer".to_string()),
+        });
+
+        assert!(!decision.accepted);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["receipt_mode_not_host_bridge_receipt"]
+        );
+        assert_eq!(
+            decision.reason,
+            "host bridge request provenance rejected fail-closed"
+        );
+    }
+
+    #[test]
     fn provenance_public_blocker_mapping_is_shared() {
         assert_eq!(
             host_bridge_provenance_public_blocker_code("request_status_not_admissible"),
             "host_bridge_request_not_pending"
+        );
+        assert_eq!(
+            host_bridge_provenance_public_blocker_code("dispatch_transport_not_host_tool_bridge"),
+            "host_bridge_request_wrong_transport"
+        );
+        assert_eq!(
+            host_bridge_provenance_public_blocker_code("receipt_mode_not_host_bridge_receipt"),
+            "host_bridge_receipt_mode_mismatch"
         );
         assert_eq!(
             host_bridge_provenance_public_blocker_code("dispatch_target_mismatch"),
@@ -144,6 +175,10 @@ mod tests {
         assert_eq!(
             host_bridge_provenance_public_blocker_code("authoritative_state_store_locked"),
             "authoritative_state_store_locked"
+        );
+        assert_eq!(
+            host_bridge_provenance_public_blocker_code("authoritative_state_store_open_failed"),
+            "authoritative_state_store_open_failed"
         );
     }
 

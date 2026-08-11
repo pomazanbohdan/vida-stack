@@ -165,7 +165,7 @@ fn human_output(payload: Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{capabilities_payload, provider_check_payload, run_blocked_payload};
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     #[test]
     fn capabilities_payload_advertises_fail_closed_coder_surface() {
@@ -196,11 +196,18 @@ mod tests {
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["provider"], "codex");
         assert_eq!(payload["executes_provider"], false);
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should be an array")
-            .iter()
-            .any(|code| code.as_str().unwrap_or_default().starts_with("coder_")));
+        let expected_blocker = if cfg!(feature = "coder") {
+            "coder_provider_execution_not_implemented"
+        } else {
+            "coder_feature_disabled"
+        };
+        let expected_action = if cfg!(feature = "coder") {
+            "Implement the coder provider adapter before enabling `vida coder run`."
+        } else {
+            "Build with `--features coder` after the provider adapter exists."
+        };
+        assert_eq!(payload["blocker_codes"][0], expected_blocker);
+        assert_eq!(payload["next_actions"][0], expected_action);
     }
 
     #[test]
@@ -240,5 +247,27 @@ mod tests {
             "- Keep `vida coder provider-check --provider codex` as the preflight gate."
         ));
         assert!(!output.contains("--json"));
+
+        let provider_output = super::human_output(provider_check_payload("codex"));
+        assert!(provider_output.contains("provider: codex"));
+        assert!(provider_output.contains(&format!("feature_enabled: {}", cfg!(feature = "coder"))));
+        assert!(provider_output.contains("blocker_codes[1]:"));
+        assert!(provider_output.contains("- coder_"));
+    }
+
+    #[test]
+    fn human_output_omits_empty_blocker_and_action_sections() {
+        let payload = json!({
+            "surface": "vida coder",
+            "status": "available",
+            "blocker_codes": [],
+            "next_actions": []
+        });
+
+        let output = super::human_output(payload);
+
+        assert!(output.starts_with("vida coder\n"));
+        assert!(!output.contains("blocker_codes["));
+        assert!(!output.contains("next_actions["));
     }
 }
