@@ -1329,4 +1329,118 @@ mod tests {
         assert_eq!(admission.verdict, "pass");
         assert!(admission.blocker_codes.is_empty());
     }
+
+    #[test]
+    fn implementation_scope_guards_fail_closed_individually() {
+        let cases: [(&str, fn(&mut Value)); 3] = [
+            ("empty_owned_paths", |request: &mut Value| {
+                request["implementation_isolation"]["owned_paths"] = json!([]);
+            }),
+            ("canonical_worktree_writes", |request: &mut Value| {
+                request["implementation_isolation"]["canonical_worktree_writes_allowed"] =
+                    json!(true);
+            }),
+            ("scope_policy", |request: &mut Value| {
+                request["implementation_isolation"]["scope_policy"] = json!({
+                    "changed_files_must_be_subset_of_owned_paths": false
+                });
+            }),
+        ];
+
+        for (name, mutate) in cases {
+            let mut request = implementation_request();
+            mutate(&mut request);
+            let admission = admit_host_bridge_implementation_attempt(&request, None);
+            assert_eq!(
+                admission.decision, "terminal_blocker",
+                "scope guard `{name}` should block"
+            );
+            assert!(
+                admission
+                    .blocker_codes
+                    .contains(&super::BLOCKER_ATTEMPT_SCOPE_INCOMPLETE.to_string()),
+                "scope guard `{name}` produced {:?}",
+                admission.blocker_codes
+            );
+            assert!(!admission.fingerprint.is_empty());
+        }
+    }
+
+    #[test]
+    fn implementation_artifact_guards_cover_empty_scope_outside_paths_and_missing_proof() {
+        let request = implementation_request();
+
+        let empty = admit_host_bridge_implementation_attempt(&request, Some(&json!([])));
+        assert!(empty
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string()));
+
+        let outside = admit_host_bridge_implementation_attempt(
+            &request,
+            Some(&json!([{
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["crates/other/src/lib.rs"]
+            }])),
+        );
+        assert!(outside
+            .blocker_codes
+            .contains(&super::BLOCKER_ATTEMPT_SCOPE_GUARD.to_string()));
+
+        let missing_proof = admit_host_bridge_implementation_attempt(
+            &request,
+            Some(&json!([{
+                "artifact_kind": "isolated_worktree_manifest",
+                "changed_files": ["crates/vida/src/lib.rs"]
+            }])),
+        );
+        assert!(missing_proof
+            .blocker_codes
+            .contains(&super::BLOCKER_ATTEMPT_CANONICAL_EVIDENCE.to_string()));
+    }
+
+    #[test]
+    fn nested_retry_context_and_receipt_mismatch_block_repeated_capability_attempts() {
+        let mut request = implementation_request();
+        request["capability_blockers"] = json!(["host_tool_capability_missing"]);
+        request["retry_context"] = json!({"retry_count": 1});
+        let fingerprint = fingerprint(&request, &["host_tool_capability_missing".to_string()]);
+        request["retry_context"]["previous_fingerprint"] = json!(fingerprint);
+        request["retry_receipt_id"] = json!("receipt-expected");
+        request["retry_receipt"] = json!({
+            "receipt_backed": true,
+            "receipt_id": "receipt-other",
+            "run_id": "run-1",
+            "task_id": "run-1",
+            "dispatch_target": "coder",
+            "backend_id": "internal_subagents",
+            "carrier_id": "coder"
+        });
+
+        let admission = admit_host_bridge_implementation_attempt(&request, None);
+
+        assert_eq!(admission.decision, "terminal_blocker");
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string()));
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string()));
+    }
+
+    #[test]
+    fn cheapest_eligible_carrier_uses_aliases_and_skips_blocked_rows() {
+        let mut request = implementation_request();
+        request["capability_blockers"] = json!(["host_tool_capability_missing"]);
+        request["eligible_carriers"] = json!([
+            {"id": "blocked", "cost": 1, "status": "blocked"},
+            {"id": "fallback", "rate": 2},
+            {"carrier_id": "expensive", "normalized_cost_units": 5}
+        ]);
+
+        let admission = admit_host_bridge_implementation_attempt(&request, None);
+
+        assert_eq!(admission.decision, "reroute_once");
+        assert_eq!(admission.reroute_carrier_id.as_deref(), Some("fallback"));
+        assert!(admission.reroute_allowed);
+    }
 }

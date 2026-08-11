@@ -1766,4 +1766,148 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn completion_evidence_preserves_provenance_receipt_and_artifact_blockers() {
+        let evidence = materialize_host_bridge_completion_evidence(&HostBridgeCompletionInput {
+            request: minimal_request(),
+            provenance: HostBridgeProvenanceDecision {
+                accepted: false,
+                blocker_codes: vec!["provenance_rejected".to_string()],
+                reason: "provenance mismatch".to_string(),
+            },
+            receipt_binding: DispatchReceiptBindingDecision {
+                accepted: false,
+                blocker_codes: vec!["receipt_missing".to_string()],
+                reason: "receipt missing".to_string(),
+            },
+            artifact_refs: vec![PathBuf::from("artifacts/proof.json")],
+        });
+
+        assert_eq!(evidence.status, "blocked");
+        assert!(!evidence.completion_ready);
+        assert_eq!(
+            evidence.blocker_codes,
+            vec!["provenance_rejected".to_string(), "receipt_missing".to_string()]
+        );
+        assert_eq!(evidence.artifact_refs, vec![PathBuf::from("artifacts/proof.json")]);
+        assert_eq!(evidence.request_id, "req-1");
+        assert_eq!(evidence.run_id, "run-1");
+        assert_eq!(evidence.dispatch_target, "developer");
+    }
+
+    #[test]
+    fn completion_verdict_and_request_status_cover_empty_retryable_and_terminal_rows() {
+        let pass = host_bridge_completion_verdict(&[]);
+        assert_eq!(pass.status, "pass");
+        assert_eq!(pass.execution_state, "executed");
+        assert_eq!(pass.completion_verdict, "pass");
+        assert!(pass.completion_ready);
+        assert_eq!(host_bridge_request_status_after_completion(&[]), "pass");
+
+        let retryable = vec!["host_agent_execution_failed".to_string()];
+        assert_eq!(
+            host_bridge_request_status_after_completion(&retryable),
+            "retryable_blocked"
+        );
+        assert_eq!(
+            host_bridge_request_status_after_completion(&[
+                "host_agent_execution_failed".to_string(),
+                "host_tool_capability_missing".to_string(),
+            ]),
+            "retryable_blocked"
+        );
+        assert_eq!(
+            host_bridge_request_status_after_completion(&[
+                "host_agent_execution_failed".to_string(),
+                "unknown_blocker".to_string(),
+            ]),
+            "blocked"
+        );
+    }
+
+    #[test]
+    fn completion_identity_accepts_semantic_receipt_path_and_rejects_invalid_route() {
+        let mut request = serde_json::json!({
+            "request_id": "req-semantic",
+            "run_id": "run-semantic",
+            "dispatch_target": "developer",
+            "packet_path": "runtime-consumption/dispatch-packet.json"
+        });
+        let mut result = serde_json::json!({
+            "request_id": "req-semantic",
+            "run_id": "run-semantic",
+            "dispatch_target": "developer",
+            "dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
+            "completion_receipt_id": "completion-semantic"
+        });
+        let mut receipt = serde_json::json!({
+            "request_id": "req-semantic",
+            "run_id": "run-semantic",
+            "dispatch_target": "developer",
+            "dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
+            "completion_receipt_id": "completion-semantic",
+            "receipt_backed": true
+        });
+        augment_dispatch_identity(&mut request, &mut result);
+        augment_dispatch_identity(&mut request, &mut receipt);
+
+        result["status"] = serde_json::json!("pass");
+        result["execution_state"] = serde_json::json!("executed");
+        result["artifact_kind"] = serde_json::json!("host_tool_bridge_result");
+        result["execution_evidence"] = serde_json::json!({
+            "receipt_backed": true,
+            "receipt_id": "completion-semantic"
+        });
+        result["allowed_next_node"] = serde_json::json!("closure");
+
+        assert!(host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-semantic",
+            "developer",
+            "runtime-consumption/dispatch-packet.json"
+        ));
+        assert!(host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            None,
+            "run-semantic",
+            "developer",
+            "runtime-consumption/dispatch-packet.json"
+        ));
+
+        let mut invalid_route = result.clone();
+        invalid_route["allowed_next_node"] = serde_json::json!("next");
+        assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
+            &request,
+            &invalid_route
+        ));
+    }
+
+    #[test]
+    fn implementation_artifact_requirement_matrix_covers_task_class_and_rows() {
+        let mut request = serde_json::json!({
+            "dispatch_target": "reviewer",
+            "task_class": "quality_gate",
+            "implementation_artifacts": []
+        });
+        assert!(!host_bridge_request_effectively_requires_implementation_artifacts(
+            &request,
+            "reviewer"
+        ));
+
+        request["implementation_artifacts"] = serde_json::json!([{
+            "artifact_path": "artifacts/patch.json"
+        }]);
+        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
+            &request,
+            "reviewer"
+        ));
+        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
+            &request,
+            "developer"
+        ));
+    }
 }

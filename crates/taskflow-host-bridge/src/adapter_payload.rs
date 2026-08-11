@@ -679,4 +679,83 @@ mod tests {
         assert_eq!(payload["host_bridge"]["dispatch_transport"], "filesystem");
         assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }
+
+    #[test]
+    fn malformed_typed_request_preserves_raw_identity_fallbacks() {
+        let mut request = request();
+        request
+            .as_object_mut()
+            .expect("request object")
+            .remove("run_id");
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["host_bridge"]["task_id"], "task-1");
+        assert_eq!(payload["host_bridge"]["attempt_id"], "attempt-1");
+        assert_eq!(payload["host_bridge"]["packet_id"], "packet-1");
+        assert_eq!(payload["host_bridge"]["durable_job"]["request_id"], "req-1");
+        assert_eq!(payload["host_bridge"]["dispatch_target"], "implementer");
+        assert_eq!(payload["host_bridge"]["packet_path"], "packet.json");
+        assert_eq!(payload["host_bridge"]["backend_id"], "internal_subagents");
+        assert_eq!(payload["host_bridge"]["carrier_id"], "junior");
+        assert_eq!(payload["host_bridge"]["adapter_kind"], "codex_host_tools");
+        assert_eq!(
+            payload["host_bridge"]["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
+        assert_eq!(
+            payload["host_bridge"]["dispatch_transport"],
+            "host_tool_bridge"
+        );
+        assert_eq!(payload["host_bridge"]["invocation_mode"], "");
+        assert_eq!(payload["host_bridge"]["adapter_contract_source"], "");
+        assert_eq!(payload["host_bridge"]["result_path"], "result.json");
+        assert_eq!(payload["host_bridge"]["receipt_path"], "receipt.json");
+    }
+
+    #[test]
+    fn blocked_operator_fields_preserve_status_and_blocker_contracts() {
+        let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+            "blocked",
+            vec!["host_bridge_request_wrong_transport".to_string()],
+            vec!["repair the request".to_string()],
+            vec!["repair the request".to_string()],
+            json!({"request_path": "request.json"}),
+        );
+
+        assert_eq!(shared_fields["status"], "blocked");
+        assert_eq!(
+            shared_fields["blocker_codes"],
+            json!(["host_bridge_request_wrong_transport"])
+        );
+        assert_eq!(shared_fields["next_actions"], json!(["repair the request"]));
+        assert_eq!(operator_contracts["status"], "blocked");
+        assert_eq!(
+            operator_contracts["blocker_codes"],
+            json!(["host_bridge_request_wrong_transport"])
+        );
+    }
+
+    #[test]
+    fn implementation_artifacts_suppress_attach_and_keep_completion_action() {
+        let mut request = request();
+        request["dispatch_target"] = json!("implementer");
+        request["task_class"] = json!("implementation");
+        request["implementation_artifacts"] = json!([{
+            "artifact_path": "artifacts/patch.json",
+            "changed_files": ["crates/taskflow-host-bridge/src/lib.rs"]
+        }]);
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["host_bridge"]["implementation_artifacts_present"], true);
+        assert_eq!(payload["host_bridge"]["artifact_attach_required"], false);
+        assert_eq!(payload["host_bridge"]["artifact_attach_command"], Value::Null);
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            json!(["vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"])
+        );
+    }
 }

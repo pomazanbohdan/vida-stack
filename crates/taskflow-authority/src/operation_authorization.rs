@@ -572,4 +572,114 @@ mod tests {
         });
         assert!(permitted.allowed, "{permitted:?}");
     }
+
+    fn task_apply_input() -> OperationAuthorizationInput {
+        let operation =
+            operation_spec(operations::TASK_APPLY).expect("task apply operation should exist");
+        OperationAuthorizationInput {
+            session_id: "session-ldr-012".to_string(),
+            project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            client_kind: VidaClientKind::HostAgent,
+            claim_kind: operation.required_claim.clone(),
+            capability: VidaCapabilityScope::TaskApply,
+            operation,
+            resource_project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            owned_path: Some("crates/taskflow-authority".to_string()),
+            owned_write_scopes: vec!["crates/taskflow-authority".to_string()],
+            idempotency_key_present: true,
+            apply_token_present: true,
+        }
+    }
+
+    #[test]
+    fn authorization_guards_fail_closed_in_registry_order() {
+        let mut denied = task_apply_input();
+        denied.client_kind = VidaClientKind::Cli;
+        assert_eq!(
+            authorize_operation(&denied).blocker_codes,
+            vec!["operation_client_kind_denied"]
+        );
+
+        let mut denied = task_apply_input();
+        denied.capability = VidaCapabilityScope::ReadStatus;
+        assert_eq!(
+            authorize_operation(&denied).blocker_codes,
+            vec!["operation_capability_denied"]
+        );
+
+        let mut denied = task_apply_input();
+        denied.idempotency_key_present = false;
+        assert_eq!(
+            authorize_operation(&denied).blocker_codes,
+            vec!["operation_idempotency_key_required"]
+        );
+    }
+
+    #[test]
+    fn write_detection_requires_posture_claim_or_replay_protection() {
+        let mut operation = task_apply_input().operation;
+        operation.posture = VidaOperationPosture::ReadOnly;
+        operation.required_claim = VidaClaimKind::SharedRead;
+        operation.requires_idempotency_key = false;
+        assert!(!writes_owned_path(&operation));
+
+        operation.requires_idempotency_key = true;
+        assert!(writes_owned_path(&operation));
+
+        operation.requires_idempotency_key = false;
+        operation.required_claim = VidaClaimKind::ExclusiveWrite;
+        assert!(writes_owned_path(&operation));
+
+        operation.required_claim = VidaClaimKind::Admin;
+        assert!(writes_owned_path(&operation));
+
+        operation.required_claim = VidaClaimKind::SharedRead;
+        operation.posture = VidaOperationPosture::Admin;
+        assert!(writes_owned_path(&operation));
+    }
+
+    #[test]
+    fn project_projections_preserve_scope_and_resource_fallbacks() {
+        let mut input = task_apply_input();
+        assert_eq!(project_id(&input), "project-ldr-012");
+        assert_eq!(resource_project_id(&input), "project-ldr-012");
+
+        input.resource_project_id = Some(VidaProjectId("resource-project".to_string()));
+        assert_eq!(resource_project_id(&input), "resource-project");
+
+        input.operation.scope = VidaOperationScope::Project;
+        input.project_id = None;
+        input.resource_project_id = None;
+        assert_eq!(project_id(&input), "");
+        assert_eq!(resource_project_id(&input), "");
+
+        input.operation.scope = VidaOperationScope::Service;
+        assert_eq!(project_id(&input), "service");
+        assert_eq!(resource_project_id(&input), "service");
+    }
+
+    #[test]
+    fn safe_relative_components_rejects_empty_root_and_parent_paths() {
+        assert!(safe_relative_components("").is_none());
+        assert!(safe_relative_components(".").is_none());
+        assert_eq!(
+            safe_relative_components("./crates/taskflow-authority").unwrap(),
+            vec!["crates", "taskflow-authority"]
+        );
+        assert!(safe_relative_components("../crates").is_none());
+        assert!(safe_relative_components("/absolute/path").is_none());
+    }
+
+    #[test]
+    fn client_kind_projection_covers_all_known_carriers() {
+        assert_eq!(client_kind(&VidaClientKind::Cli), "cli");
+        assert_eq!(client_kind(&VidaClientKind::Tui), "tui");
+        assert_eq!(client_kind(&VidaClientKind::Service), "service");
+        assert_eq!(client_kind(&VidaClientKind::Dashboard), "dashboard");
+        assert_eq!(client_kind(&VidaClientKind::HostAgent), "host_agent");
+        assert_eq!(
+            client_kind(&VidaClientKind::Other("custom".to_string())),
+            "other:custom"
+        );
+    }
 }
