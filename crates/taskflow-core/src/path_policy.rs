@@ -33,11 +33,9 @@ pub fn normalize_repo_relative_path(path: &str) -> Result<String, RepoPathError>
         .components()
         .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir));
     let looks_like_windows_drive = normalized.as_bytes().get(1).copied() == Some(b':');
-    if path.is_absolute()
-        || has_absolute_component
-        || looks_like_windows_drive
-        || normalized.starts_with('/')
-    {
+    // Separator normalization makes RootDir the canonical leading-root check;
+    // the drive marker covers Windows drive-relative paths on every host.
+    if has_absolute_component || looks_like_windows_drive {
         return Err(RepoPathError::Absolute);
     }
 

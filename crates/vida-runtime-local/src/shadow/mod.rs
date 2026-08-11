@@ -41,7 +41,32 @@ pub fn run_shadow_verification_report() -> ShadowVerificationReport {
         reason: "new runtime response carries the RuntimeEngine boundary marker while preserving pass status",
         approved: true,
     }];
-    let unexplained_difference_count = comparisons
+    build_shadow_verification_report(comparisons, intended_difference_ledger)
+}
+
+fn build_shadow_verification_report(
+    comparisons: Vec<ShadowComparison>,
+    intended_difference_ledger: Vec<IntendedDifference>,
+) -> ShadowVerificationReport {
+    let unexplained_difference_count = count_unexplained_differences(
+        &comparisons,
+        &intended_difference_ledger,
+    );
+    ShadowVerificationReport {
+        comparisons,
+        intended_difference_ledger,
+        unexplained_difference_count,
+        authoritative_write_count: 0,
+        external_effect_count: 0,
+        parity_gate: "pass",
+    }
+}
+
+fn count_unexplained_differences(
+    comparisons: &[ShadowComparison],
+    intended_difference_ledger: &[IntendedDifference],
+) -> usize {
+    comparisons
         .iter()
         .filter(|comparison| {
             comparison.difference_id.is_some()
@@ -51,16 +76,7 @@ pub fn run_shadow_verification_report() -> ShadowVerificationReport {
                         && entry.command_id == comparison.command_id
                 })
         })
-        .count();
-
-    ShadowVerificationReport {
-        comparisons,
-        intended_difference_ledger,
-        unexplained_difference_count,
-        authoritative_write_count: 0,
-        external_effect_count: 0,
-        parity_gate: "pass",
-    }
+        .count()
 }
 
 pub fn shadow_report_json() -> serde_json::Value {
@@ -191,5 +207,44 @@ mod tests {
         assert_eq!(boundary.new_result["engine_boundary"], "runtime_engine");
         assert!(ledger_entry.approved);
         assert_eq!(report.unexplained_difference_count, 0);
+    }
+
+    #[test]
+    fn shadow_difference_count_requires_matching_approved_ledger_entry() {
+        let comparison = ShadowComparison {
+            command_id: "cmd-test-001",
+            operation_family: "test",
+            legacy_result: serde_json::Value::Null,
+            new_result: serde_json::Value::Null,
+            difference_id: Some("diff-test-001"),
+        };
+        let approved_entry = IntendedDifference {
+            difference_id: "diff-test-001",
+            command_id: "cmd-test-001",
+            reason: "test contract",
+            approved: true,
+        };
+
+        assert_eq!(
+            build_shadow_verification_report(vec![comparison.clone()], vec![])
+                .unexplained_difference_count,
+            1
+        );
+        assert_eq!(
+            build_shadow_verification_report(
+                vec![comparison.clone()],
+                vec![IntendedDifference {
+                    command_id: "cmd-other-001",
+                    ..approved_entry.clone()
+                }]
+            )
+            .unexplained_difference_count,
+            1
+        );
+        assert_eq!(
+            build_shadow_verification_report(vec![comparison], vec![approved_entry])
+                .unexplained_difference_count,
+            0
+        );
     }
 }
