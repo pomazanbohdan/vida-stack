@@ -146,6 +146,15 @@ mod tests {
             canonical_task_blocker_code(" Selected-Lane:task=VH-42 "),
             Some("selected_lane:task=VH-42".to_string())
         );
+        assert_eq!(
+            canonical_task_blocker_code("Runtime Blocked"),
+            Some("runtime_blocked".to_string())
+        );
+        assert_eq!(canonical_task_blocker_code(" --- "), None);
+        assert_eq!(
+            canonical_task_blocker_code("a--b"),
+            Some("a_b".to_string())
+        );
     }
 
     #[test]
@@ -185,5 +194,15 @@ task_block:\n  recorded_at_unix_nanos: 42\n  reason: bridge unavailable\n  evide
             note,
             "task_block:\n  recorded_at_unix_nanos: 42\n  reason: bridge unavailable\n  evidence:\n    - receipt-a\n    - receipt-b"
         );
+
+        let without_evidence = append_task_block_note_with_timestamp(
+            None,
+            "bridge unavailable",
+            &[],
+            &[],
+            &[],
+            42,
+        );
+        assert!(!without_evidence.contains("evidence:"));
     }
 }

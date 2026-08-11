@@ -134,6 +134,8 @@ mod tests {
         });
 
         let plain = render_docflow_closeout_verdict("closeout", &verdict, "toon", false);
+        assert!(plain.contains("  changed_docs:\n"));
+        assert!(plain.contains("  next_actions:\n"));
         assert!(plain.contains("    - docs/a.md"));
         assert!(plain.contains("    - docs/b.md"));
 
@@ -155,6 +157,8 @@ mod tests {
         assert_eq!(error_payload["task_close_allowed"], false);
         assert_eq!(error_payload["blocker_codes"][0], "docflow_closeout_failed");
         assert_eq!(error_payload["task_id"], "task-42");
+        assert_eq!(error_payload["command"], "closeout");
+        assert_eq!(error_payload["error"], "missing root");
     }
 
     #[test]
