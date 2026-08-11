@@ -31,24 +31,17 @@ pub fn read_json_value_file(
     file: &ExistingRegularFile,
     max_bytes: u64,
 ) -> Result<serde_json::Value, PathPolicyError> {
-    let metadata = std::fs::metadata(file.path()).map_err(|source| PathPolicyError::Metadata {
+    std::fs::metadata(file.path()).map_err(|source| PathPolicyError::Metadata {
         kind: file.kind(),
         path: file.path().to_path_buf(),
         source,
     })?;
-    if metadata.len() > max_bytes {
-        return Err(PathPolicyError::TooLarge {
-            kind: file.kind(),
-            path: file.path().to_path_buf(),
-            max_bytes,
-        });
-    }
     let mut handle = std::fs::File::open(file.path()).map_err(|source| PathPolicyError::Read {
         kind: file.kind(),
         path: file.path().to_path_buf(),
         source,
     })?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut bytes = Vec::new();
     handle
         .by_ref()
         .take(max_bytes.saturating_add(1))
@@ -135,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn read_json_file_enforces_size_limit() {
+    fn read_json_file_enforces_post_read_size_limit() {
         let root = std::env::temp_dir().join(format!(
             "runtime-path-policy-json-limit-{}",
             std::process::id()
