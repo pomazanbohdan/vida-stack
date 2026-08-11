@@ -220,4 +220,43 @@ mod tests {
             vec!["role_step_allowed_next_node_not_sequential"]
         );
     }
+
+    #[test]
+    fn maps_unresolved_no_next_and_terminal_states_to_fail_closed_blockers() {
+        let flow = flow();
+        let mut blocked = TaskRoleStepState::from_first_step(&flow).unwrap();
+        blocked.complete().unwrap();
+        blocked.blockers.push("missing_proof".to_string());
+
+        let verdict = authorize_allowed_next_node(&blocked, &flow, "developer", "hash-1")
+            .expect("blocker verdict should be returned");
+        assert!(!verdict.allowed);
+        assert_eq!(verdict.blocker_codes, vec!["role_step_unresolved_blockers"]);
+
+        let mut terminal = TaskRoleStepState::from_first_step(&flow).unwrap();
+        terminal.status = TaskRoleStepStatus::FlowVersionDrift;
+        let verdict = authorize_allowed_next_node(&terminal, &flow, "developer", "hash-1")
+            .expect("terminal verdict should be returned");
+        assert!(!verdict.allowed);
+        assert_eq!(verdict.blocker_codes, vec!["role_step_terminal_state"]);
+
+        let one_step_flow = RoleStepFlowDefinition {
+            flow_id: "single".to_string(),
+            schema_hash: "hash-1".to_string(),
+            steps: vec![RoleStepDefinition {
+                role_id: "analyst".to_string(),
+                runtime_role: "implementation".to_string(),
+                task_class: "analysis".to_string(),
+                lifecycle_stage: "analysis".to_string(),
+                proof_gate: None,
+                closes_workflow: false,
+            }],
+        };
+        let mut completed = TaskRoleStepState::from_first_step(&one_step_flow).unwrap();
+        completed.complete().unwrap();
+        let verdict = authorize_allowed_next_node(&completed, &one_step_flow, "unused", "hash-1")
+            .expect("no-next-step verdict should be returned");
+        assert!(!verdict.allowed);
+        assert_eq!(verdict.blocker_codes, vec!["role_step_no_next_step"]);
+    }
 }

@@ -221,6 +221,10 @@ mod tests {
 
             assert!(!decision.accepted);
             assert_eq!(decision.blocker_codes, vec![blocker_code.to_string()]);
+            assert_eq!(
+                decision.reason,
+                "host bridge request provenance rejected fail-closed"
+            );
         }
     }
 }

@@ -233,6 +233,12 @@ mod tests {
         assert!(output.contains("status: blocked"));
         assert!(output.contains("blocker_codes[1]:"));
         assert!(output.contains("next_actions[2]:"));
+        assert!(output.contains(
+            "- Implement and validate a provider adapter before allowing `vida coder run` to execute provider code."
+        ));
+        assert!(output.contains(
+            "- Keep `vida coder provider-check --provider codex` as the preflight gate."
+        ));
         assert!(!output.contains("--json"));
     }
 }
