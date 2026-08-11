@@ -579,6 +579,10 @@ pub(crate) fn try_print_taskflow_consume_nested_help(args: &[String]) -> bool {
     }
 }
 
+fn consume_dispatch_is_disabled(subcommand: Option<&str>, dispatch_enabled: bool) -> bool {
+    matches!(subcommand, Some("final" | "continue" | "advance")) && !dispatch_enabled
+}
+
 pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
     if try_print_taskflow_consume_nested_help(args) {
         return ExitCode::SUCCESS;
@@ -588,14 +592,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
     let proxy_state_root = super::taskflow_task_bridge::proxy_state_dir();
     let dispatch_enabled =
         crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(&proxy_state_root);
-    let allow_external_state_final_blocked_payload = consume_subcommand == Some("final")
-        && super::taskflow_task_bridge::infer_project_root_from_state_root(&proxy_state_root)
-            .is_none()
-        && crate::resolve_runtime_project_root().is_ok();
-    if matches!(consume_subcommand, Some("final" | "continue" | "advance"))
-        && !dispatch_enabled
-        && !allow_external_state_final_blocked_payload
-    {
+    if consume_dispatch_is_disabled(consume_subcommand, dispatch_enabled) {
         crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
             "vida taskflow consume",
             crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,
@@ -2540,12 +2537,22 @@ mod tests {
     use super::{
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
         build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
-        consume_final_command_usage, fail_fast_state_store_open_with_timeout,
-        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
-        should_record_blocked_dispatch_receipt, try_print_taskflow_consume_nested_help,
-        ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate,
+        consume_dispatch_is_disabled, consume_final_command_usage,
+        fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
+        parse_taskflow_consume_final_args, should_record_blocked_dispatch_receipt,
+        try_print_taskflow_consume_nested_help, ApprovalDelegationEvidenceGate, ConsumeFinalMode,
+        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
     };
+
+    #[test]
+    fn execution_capable_consume_subcommands_fail_closed_when_dispatch_is_disabled() {
+        for subcommand in ["final", "continue", "advance"] {
+            assert!(consume_dispatch_is_disabled(Some(subcommand), false));
+            assert!(!consume_dispatch_is_disabled(Some(subcommand), true));
+        }
+        assert!(!consume_dispatch_is_disabled(None, false));
+        assert!(!consume_dispatch_is_disabled(Some("bundle"), false));
+    }
 
     fn merge_receipt_test_plan(base: &mut serde_json::Value, overlay: &serde_json::Value) {
         let (Some(base_object), Some(overlay_object)) = (base.as_object_mut(), overlay.as_object())
