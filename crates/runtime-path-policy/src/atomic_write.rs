@@ -1428,6 +1428,121 @@ mod tests {
         assert!(!outside_destination.exists());
     }
 
+    #[test]
+    fn atomic_replace_validates_single_component_and_parent_kinds() {
+        let error_path = Path::new("result.bin");
+        for invalid in [
+            Path::new(""),
+            Path::new("."),
+            Path::new("nested/result.bin"),
+            Path::new("../result.bin"),
+        ] {
+            assert!(matches!(
+                validate_single_component(invalid, ArtifactPathKind::GenericJson, error_path),
+                Err(PathPolicyError::Write { .. })
+            ));
+        }
+        validate_single_component(
+            Path::new("result.bin"),
+            ArtifactPathKind::GenericJson,
+            error_path,
+        )
+        .unwrap();
+
+        let root = temp_root("parent-kind");
+        let file_parent = root.join("not-a-directory");
+        std::fs::write(&file_parent, b"file").unwrap();
+        assert!(matches!(
+            validate_atomic_replace_parent(&file_parent, ArtifactPathKind::GenericJson),
+            Err(PathPolicyError::NotRegularFile { path, .. }) if path == file_parent
+        ));
+    }
+
+    #[test]
+    fn atomic_replace_rejects_directory_destination_without_side_effects() {
+        let root = temp_root("directory-destination");
+        let destination = root.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+
+        let error = atomic_replace_bounded(&destination, b"payload").unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::NotRegularFile { path, .. } if path == destination));
+        assert!(destination.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_replace_from_file_rejects_missing_source_without_touching_destination() {
+        let root = temp_root("missing-source");
+        let source = root.join("missing.bin");
+        let destination = root.join("result.bin");
+        std::fs::write(&destination, b"unchanged").unwrap();
+
+        let error = atomic_replace_bounded_from_file(
+            &destination,
+            &source,
+            AtomicReplaceLimit::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PathPolicyError::Metadata { path, .. } if path == source));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"unchanged");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_replace_source_metadata_enforces_file_kind_and_limit() {
+        let root = temp_root("source-metadata");
+        let parent = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        std::fs::write(root.join("source.bin"), b"source").unwrap();
+        let metadata = parent.symlink_metadata("source.bin").unwrap();
+
+        validate_atomic_replace_source_metadata(
+            &metadata,
+            ArtifactPathKind::GenericJson,
+            Path::new("source.bin"),
+            AtomicReplaceLimit::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_atomic_replace_source_metadata(
+                &metadata,
+                ArtifactPathKind::GenericJson,
+                Path::new("source.bin"),
+                AtomicReplaceLimit::new(2),
+            ),
+            Err(PathPolicyError::TooLarge { max_bytes: 2, .. })
+        ));
+
+        parent.create_dir("source-dir").unwrap();
+        let directory = parent.symlink_metadata("source-dir").unwrap();
+        assert!(matches!(
+            validate_atomic_replace_source_metadata(
+                &directory,
+                ArtifactPathKind::GenericJson,
+                Path::new("source-dir"),
+                AtomicReplaceLimit::default(),
+            ),
+            Err(PathPolicyError::NotRegularFile { .. })
+        ));
+    }
+
+    #[test]
+    fn atomic_replace_empty_reader_commits_empty_destination() {
+        let root = temp_root("empty-reader");
+        let destination = root.join("result.bin");
+
+        atomic_replace_bounded_from_reader(
+            &destination,
+            Cursor::new(Vec::<u8>::new()),
+            AtomicReplaceLimit::default(),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), Vec::<u8>::new());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
     #[cfg(windows)]
     #[test]
     fn atomic_replace_bounded_rejects_reparse_parent_without_writing_target() {

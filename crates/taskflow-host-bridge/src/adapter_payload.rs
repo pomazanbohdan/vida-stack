@@ -758,4 +758,109 @@ mod tests {
             json!(["vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"])
         );
     }
+
+    #[test]
+    fn valid_payload_preserves_identity_and_durable_job_contract() {
+        let payload = payload_for(&request());
+        let host_bridge = &payload["host_bridge"];
+
+        for (field, expected) in [
+            ("run_id", json!("run-1")),
+            ("task_id", json!("task-1")),
+            ("attempt_id", json!("attempt-1")),
+            ("packet_id", json!("packet-1")),
+            ("dispatch_target", json!("implementer")),
+            ("packet_path", json!("packet.json")),
+            ("backend_id", json!("internal_subagents")),
+            ("carrier_id", json!("junior")),
+            ("dispatch_transport", json!("host_tool_bridge")),
+            ("adapter_kind", json!("codex_host_tools")),
+            ("adapter_capability_id", json!("codex.multi_agent_v1")),
+            ("invocation_mode", json!("parent_host_tool_api")),
+            ("adapter_contract_source", json!("configured_registry")),
+            ("result_path", json!("result.json")),
+            ("receipt_path", json!("receipt.json")),
+            (
+                "receipt_id",
+                json!("run-1-implementer-host-bridge-receipt"),
+            ),
+        ] {
+            assert_eq!(host_bridge[field], expected, "identity field `{field}`");
+        }
+        assert_eq!(host_bridge["request_status"], "pending");
+        assert_eq!(host_bridge["host_tool_calls"].as_array().unwrap().len(), 3);
+        assert_eq!(host_bridge["durable_job"]["request_id"], "req-1");
+        assert_eq!(host_bridge["durable_job"]["idempotency_key"], "req-1");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"],
+            json!({
+                "request_path": "request.json",
+                "packet_path": "packet.json",
+                "result_path": "result.json",
+                "receipt_path": "receipt.json",
+                "implementation_artifacts_present": false
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_payload_uses_fail_closed_defaults_and_receipt_fallback() {
+        let mut request = request();
+        request.as_object_mut().unwrap().remove("run_id");
+
+        let payload = payload_for(&request);
+        let host_bridge = &payload["host_bridge"];
+
+        assert_eq!(host_bridge["request_status"], "unknown");
+        assert_eq!(host_bridge["receipt_id"], "host-bridge-receipt");
+        assert_eq!(host_bridge["invocation_mode"], "");
+        assert_eq!(host_bridge["adapter_contract_source"], "");
+        assert_eq!(host_bridge["adapter_operations"], Value::Null);
+        assert_eq!(
+            host_bridge["required_result_fields"],
+            json!([
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ])
+        );
+        assert_eq!(host_bridge["durable_job"]["request_id"], "req-1");
+    }
+
+    #[test]
+    fn nested_transport_and_completed_status_emit_request_blockers() {
+        let mut transport_mismatch = request();
+        transport_mismatch["adapter_operations"]["dispatch_transport"] =
+            json!("different_transport");
+        transport_mismatch["dispatch_transport"] = json!("different_transport");
+        let mismatch_payload = payload_for(&transport_mismatch);
+        assert_eq!(mismatch_payload["status"], "blocked");
+        assert!(
+            mismatch_payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_bridge_request_wrong_transport")
+        );
+        assert_eq!(mismatch_payload["host_bridge"]["host_tool_calls"], json!([]));
+
+        let mut completed = request();
+        completed["status"] = json!("completed");
+        let completed_payload = payload_for(&completed);
+        assert_eq!(completed_payload["status"], "blocked");
+        assert!(
+            completed_payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
+        assert_eq!(
+            completed_payload["host_bridge"]["adapter_capacity"]["status"],
+            "not_checked_due_request_blockers"
+        );
+    }
 }
