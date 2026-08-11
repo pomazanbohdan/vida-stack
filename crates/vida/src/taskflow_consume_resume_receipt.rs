@@ -130,8 +130,10 @@ pub(crate) fn next_actions(
 
 #[cfg(test)]
 mod tests {
-    use super::{blocker_codes, next_actions};
-    use crate::state_store::RunGraphDispatchReceipt;
+    use super::{
+        blocker_codes, next_actions, ready_handoff_status_supersedes_blocked_dispatch_receipt,
+    };
+    use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus};
 
     fn receipt() -> RunGraphDispatchReceipt {
         RunGraphDispatchReceipt {
@@ -205,5 +207,45 @@ mod tests {
         assert!(actions.iter().any(|action| action.contains(
             "record the missing clean review evidence before activating the downstream verification lane"
         )));
+    }
+
+    #[test]
+    fn ready_handoff_requires_matching_status_and_exception_receipt_evidence() {
+        let mut receipt = receipt();
+        assert!(!ready_handoff_status_supersedes_blocked_dispatch_receipt(
+            None, &receipt
+        ));
+
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("receipt-0".to_string());
+        let mut status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            task_class: "test".to_string(),
+            active_node: "reviewer".to_string(),
+            next_node: Some("reviewer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "test".to_string(),
+            selected_backend: "internal".to_string(),
+            lane_id: "lane-1".to_string(),
+            lifecycle_stage: "dispatch".to_string(),
+            policy_gate: "open".to_string(),
+            handoff_state: "ready".to_string(),
+            context_state: "open".to_string(),
+            checkpoint_kind: "run".to_string(),
+            resume_target: "dispatch.reviewer".to_string(),
+            recovery_ready: true,
+        };
+
+        assert!(ready_handoff_status_supersedes_blocked_dispatch_receipt(
+            Some(&status),
+            &receipt,
+        ));
+        status.run_id = "other-run".to_string();
+        assert!(!ready_handoff_status_supersedes_blocked_dispatch_receipt(
+            Some(&status),
+            &receipt,
+        ));
     }
 }

@@ -496,6 +496,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(safe.path(), file.canonicalize().unwrap());
+        assert_eq!(safe.kind(), ArtifactPathKind::HostBridgeRequest);
+    }
+
+    #[test]
+    fn artifact_path_kind_display_labels_are_stable() {
+        let cases = [
+            (ArtifactPathKind::HostBridgeRequest, "host bridge request"),
+            (ArtifactPathKind::HostBridgePacket, "host bridge packet"),
+            (ArtifactPathKind::HostBridgeResult, "host bridge result"),
+            (ArtifactPathKind::HostBridgeReceipt, "host bridge receipt"),
+            (ArtifactPathKind::DispatchPacket, "dispatch packet"),
+            (ArtifactPathKind::DispatchResult, "dispatch result"),
+            (ArtifactPathKind::RuntimeSnapshot, "runtime snapshot"),
+            (
+                ArtifactPathKind::TaskAttemptArtifact,
+                "task attempt artifact",
+            ),
+            (ArtifactPathKind::DocflowChangedPath, "docflow changed path"),
+            (
+                ArtifactPathKind::RequirementSourceFile,
+                "requirement source file",
+            ),
+            (ArtifactPathKind::GenericJson, "generic json"),
+        ];
+
+        for (kind, label) in cases {
+            assert_eq!(kind.to_string(), label);
+        }
     }
 
     #[cfg(windows)]

@@ -150,7 +150,18 @@ mod tests {
                 .unwrap();
 
         let err = read_json_file::<Payload>(&file, 4).unwrap_err();
-        assert!(matches!(err, PathPolicyError::TooLarge { .. }));
+        match err {
+            PathPolicyError::TooLarge {
+                kind,
+                path: error_path,
+                max_bytes,
+            } => {
+                assert_eq!(kind, ArtifactPathKind::GenericJson);
+                assert_eq!(error_path, file.path());
+                assert_eq!(max_bytes, 4);
+            }
+            other => panic!("expected size error, got {other:?}"),
+        }
     }
 
     #[test]

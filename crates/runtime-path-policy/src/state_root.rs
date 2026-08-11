@@ -192,6 +192,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(root_dir);
     }
 
+    #[test]
+    fn open_preserves_raw_and_canonical_path_accessors() {
+        let root_dir = temp_root("accessors");
+        let expected_canonical = root_dir.canonicalize().unwrap();
+        let state_root = StateRoot::open(&root_dir).unwrap();
+
+        assert_eq!(state_root.raw(), root_dir.as_path());
+        assert_eq!(state_root.canonical(), expected_canonical.as_path());
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
     #[cfg(windows)]
     #[test]
     fn resolve_raw_preserves_windows_rooted_paths_without_a_drive_prefix() {
