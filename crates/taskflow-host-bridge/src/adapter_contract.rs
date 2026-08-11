@@ -310,6 +310,57 @@ mod tests {
     }
 
     #[test]
+    fn registry_wrapper_prefers_host_tool_bridge_and_falls_back_to_adapter_registry() {
+        let mut preferred = registry();
+        preferred["adapter_kind"] = "preferred_adapter".into();
+        let mut fallback = registry();
+        fallback["adapter_kind"] = "fallback_adapter".into();
+
+        let wrapped = serde_json::json!({
+            "host_tool_bridge": preferred,
+            "adapter_registry": fallback.clone(),
+        });
+        let contract = HostBridgeAdapterOperations::from_registry_value(&wrapped).unwrap();
+        assert_eq!(contract.adapter_kind, "preferred_adapter");
+
+        let fallback_wrapper = serde_json::json!({"adapter_registry": fallback});
+        let contract = HostBridgeAdapterOperations::from_registry_value(&fallback_wrapper).unwrap();
+        assert_eq!(contract.adapter_kind, "fallback_adapter");
+    }
+
+    #[test]
+    fn canonical_operations_precede_aliases_and_preserve_alias_order() {
+        let mut canonical = registry();
+        canonical["spawn"] = "top_level_spawn_alias".into();
+        canonical["spawn_tool"] = "later_spawn_alias".into();
+        let contract = HostBridgeAdapterOperations::from_registry_value(&canonical).unwrap();
+        assert_eq!(contract.operations["spawn"], "host.spawn");
+
+        let mut missing_wait = registry();
+        missing_wait["operations"].as_object_mut().unwrap().remove("wait");
+        missing_wait["operations"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dispose");
+        missing_wait["dispose_policy"] = "unavailable".into();
+        missing_wait["wait_tool"] = "alias.wait".into();
+        let contract = HostBridgeAdapterOperations::from_registry_value(&missing_wait).unwrap();
+        assert_eq!(contract.operation_sequence(), ["host.spawn", "alias.wait"]);
+
+        let mut aliases = registry();
+        let operations = aliases["operations"].as_object_mut().unwrap();
+        operations.remove("spawn");
+        operations.remove("wait");
+        operations.remove("dispose");
+        aliases["dispose_policy"] = "unavailable".into();
+        aliases["spawn"] = "first.spawn".into();
+        aliases["spawn_tool"] = "second.spawn".into();
+        aliases["wait"] = "first.wait".into();
+        let contract = HostBridgeAdapterOperations::from_registry_value(&aliases).unwrap();
+        assert_eq!(contract.operations["spawn"], "first.spawn");
+    }
+
+    #[test]
     fn request_aliases_do_not_bypass_canonical_operations_contract() {
         let mut request = registry();
         request["adapter_operations"] = serde_json::json!({
