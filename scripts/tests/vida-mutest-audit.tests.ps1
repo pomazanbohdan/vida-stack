@@ -501,6 +501,14 @@ Add-Case "csv_selector_contract" {
 
     $modulePlan = Invoke-Plan -Package "taskflow-authority" -FilesCsv "crates/taskflow-authority/src/authority_chain.rs"
     Assert-True ($modulePlan.commands[0].args -contains "--lib") "library module selector did not select --lib"
+
+    $libPlan = Invoke-Plan -Package "vida" -FilesCsv "crates/vida/src/lib.rs"
+    Assert-True ($libPlan.commands[0].args -contains "--lib") "library root selector did not select --lib"
+
+    $binPlan = Invoke-Plan -Package "vida" -FilesCsv "crates/vida/src/main.rs"
+    Assert-True ($binPlan.commands[0].args -contains "--bin") "binary root selector did not select --bin"
+    $binIndex = [Array]::IndexOf([object[]]$binPlan.commands[0].args, "--bin")
+    Assert-True ($binIndex -ge 0 -and [string]$binPlan.commands[0].args[$binIndex + 1] -eq "vida") "binary root selector chose the wrong binary"
 }
 
 Add-Case "defect_protocol_and_test_update_contract" {

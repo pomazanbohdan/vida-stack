@@ -206,6 +206,10 @@ function Get-CargoTargetArguments {
         $binName = $Matches[1].Replace('/', '-').Replace('\\', '-')
         return @("--bin", $binName)
     }
+    if ($normalized -match '^crates/([^/]+)/src/main\.rs$') {
+        return @("--bin", $Matches[1])
+    }
+    if ($normalized -match '^crates/[^/]+/src/lib\.rs$') { return @("--lib") }
     if ($normalized -match '^crates/[^/]+/src/.+\.rs$') { return @("--lib") }
     return @("--all-targets")
 }
