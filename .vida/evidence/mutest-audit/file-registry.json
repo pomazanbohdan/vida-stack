@@ -1,19 +1,19 @@
 {
   "schema_version": 3,
   "index_role": "mutation_wave_orchestrator",
-  "registry_revision": 947,
-  "updated_at": "2026-08-11T10:36:08.8267109Z",
+  "registry_revision": 951,
+  "updated_at": "2026-08-11T10:43:47.5336669Z",
   "repo_root": "C:\\project\\vida-stack",
-  "run_id": "mutest-20260811-132424-f790df51",
-  "last_wave_id": "wave-mutest-20260811-132424-f790df51",
+  "run_id": "mutest-20260811-134050-4eac4904",
+  "last_wave_id": "wave-mutest-20260811-134050-4eac4904",
   "snapshot_mode": "working_tree",
-  "snapshot_index_tree": "ac54ad3d6d41d51b066584d6d90a985444211d41",
-  "config_hash": "9e88aab6413327f8eba90e4c3ef6649292ceadc4f544d8c0312c5833bb46aed6",
+  "snapshot_index_tree": "e38eab6900b3c8d4d173415d1c2d3edddbbba911",
+  "config_hash": "47e9e4923886112c682905bdf367a770a1250332b33f524addcbdab97b6c2cf9",
   "threshold_percent": 90.0,
-  "full_rescan": true,
+  "full_rescan": false,
   "diff_scan": {
-    "candidates": 10,
-    "queued": 10,
+    "candidates": 1,
+    "queued": 1,
     "resumed": 1,
     "deleted": 0,
     "queue_policy": "one-file-workers-new-or-hash-changed-or-pending-flags"
@@ -1643,6 +1643,26 @@
       },
       "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-132424-f790df51",
       "registry_revision": 946
+    },
+    {
+      "wave_id": "wave-mutest-20260811-134050-4eac4904",
+      "run_id": "mutest-20260811-134050-4eac4904",
+      "started_at": "2026-08-11T10:40:52.0272681Z",
+      "completed_at": "2026-08-11T10:43:45.4673400Z",
+      "status": "completed_with_followups",
+      "counts": {
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "blocked": 1,
+        "timeout": 0,
+        "needs_tests": 0,
+        "needs_rerun": 1,
+        "needs_rescan": 0,
+        "deleted_from_snapshot": 0
+      },
+      "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-134050-4eac4904",
+      "registry_revision": 950
     }
   ],
   "files": [
@@ -12936,7 +12956,7 @@
       "scan_count": 7,
       "last_wave_id": "wave-mutest-20260811-132424-f790df51",
       "wave_status": "blocked",
-      "wave_updated_at": "2026-08-11T10:36:06.2139850Z",
+      "wave_updated_at": "2026-08-11T10:36:06.213985Z",
       "wave_count": 7,
       "test_update_status": "not_requested",
       "updated_at": "2026-08-11T10:36:06.2100893Z"
@@ -14848,7 +14868,10 @@
       "package": "vida",
       "hash": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439",
       "content_hash_sha256": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439",
-      "status": "timeout",
+      "loc": 159,
+      "loc_total": 174,
+      "loc_hash": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439",
+      "status": "blocked",
       "queue_reason": "needs_rerun",
       "mutation_score": null,
       "mutation_score_ratio": null,
@@ -14859,42 +14882,43 @@
       "compile_error": 0,
       "defects": [
         {
-          "defect_key": "mut-043d3d3e54af3e61624d29af10408a57db19d96ba4f58ebc95083d697f7b3f5b",
-          "type": "mutation_timeout",
+          "defect_key": "mut-9558f7d7414587ca4b281e646a803ddfc695428f629e2ee40790508f1eedb876",
+          "type": "mutation_compiler_error",
+          "blocker_code": "mutest_driver_target_metadata",
+          "blocker_family": "mutest_tool",
+          "blocker_reason": "mutest-driver target lookup did not match Cargo metadata on Windows",
           "path": "crates/vida/src/state_access.rs",
           "package": "vida",
+          "wave_id": "wave-mutest-20260811-134050-4eac4904",
           "observed_hash": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439",
           "mutation_identity": "file-level",
-          "recommendation": "inspect worker evidence, fix the execution/compiler blocker, then rerun this file",
+          "recommendation": "upgrade or rebuild mutest-rs with Windows path normalization, then rerun the file",
           "evidence_refs": [
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida/stderr.log",
-            ".vida/evidence/mutest-audit/mutest-20260809-001415-435fbc0b/packages/vida/stdout.log"
+            ".vida/evidence/mutest-audit/mutest-20260811-134050-4eac4904/packages/wave-mutest-20260811-134050-4eac4904/files/crates_vida_src_state_access.rs/stderr.log",
+            ".vida/evidence/mutest-audit/mutest-20260811-134050-4eac4904/packages/wave-mutest-20260811-134050-4eac4904/files/crates_vida_src_state_access.rs/stdout.log"
           ]
         }
       ],
-      "recommendations": [],
+      "recommendations": null,
       "needs_tests": false,
       "needs_rerun": true,
       "needs_rescan": false,
+      "blocker_code": "mutest_driver_target_metadata",
+      "blocker_family": "mutest_tool",
+      "blocker_reason": "mutest-driver target lookup did not match Cargo metadata on Windows",
+      "next_action": "upgrade or rebuild mutest-rs with Windows path normalization, then rerun the file",
       "last_scan_hash": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439",
-      "last_scan_run_id": "mutest-20260809-001415-435fbc0b",
-      "snapshot_index_tree": "64f814408bd7edca56c106bcdf7d6fa328988dd5",
-      "config_hash": "779d709bf9801b148d96d7cad1ff7918d4fc415b06fd46556d4cd77904c5dc29",
+      "last_scan_run_id": "mutest-20260811-134050-4eac4904",
+      "snapshot_index_tree": "e38eab6900b3c8d4d173415d1c2d3edddbbba911",
+      "config_hash": "47e9e4923886112c682905bdf367a770a1250332b33f524addcbdab97b6c2cf9",
       "resume_source": "queued",
-      "scan_count": 2,
+      "scan_count": 3,
+      "last_wave_id": "wave-mutest-20260811-134050-4eac4904",
+      "wave_status": "blocked",
+      "wave_updated_at": "2026-08-11T10:43:45.4380014Z",
+      "wave_count": 3,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-10T12:32:23.3266093Z",
-      "last_wave_id": "",
-      "wave_status": "timeout",
-      "wave_updated_at": "2026-08-10T12:32:23.3266147Z",
-      "wave_count": 2,
-      "blocker_code": null,
-      "blocker_family": null,
-      "blocker_reason": null,
-      "next_action": null,
-      "loc": 159,
-      "loc_total": 174,
-      "loc_hash": "1b68adb4f66fd37d3bb64281d60e2be88b32d090bae0f38051c60abb1b206439"
+      "updated_at": "2026-08-11T10:43:45.4192932Z"
     },
     {
       "path": "crates/vida/src/state_store_boot_summary.rs",
@@ -16144,7 +16168,7 @@
       "wave_updated_at": "2026-08-11T10:36:06.2227443Z",
       "wave_count": 7,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-11T10:36:06.2185130Z"
+      "updated_at": "2026-08-11T10:36:06.218513Z"
     },
     {
       "path": "crates/vida/src/status_surface_host_cli_system.rs",
@@ -18938,11 +18962,11 @@
     "crates/vida/src/zombie_d_gate.rs"
   ],
   "needs_rescan": [],
-  "last_scan_run_id": "mutest-20260811-132424-f790df51",
-  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-132424-f790df51\\defect-remediation.json",
+  "last_scan_run_id": "mutest-20260811-134050-4eac4904",
+  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-134050-4eac4904\\defect-remediation.json",
   "summary": {
-    "run_id": "mutest-20260811-132424-f790df51",
-    "wave_id": "wave-mutest-20260811-132424-f790df51",
+    "run_id": "mutest-20260811-134050-4eac4904",
+    "wave_id": "wave-mutest-20260811-134050-4eac4904",
     "status": "completed_with_followups",
     "mutation_score": null,
     "generated": 0,
@@ -18954,28 +18978,28 @@
     "files_total": 331,
     "files_completed": 46,
     "files_needs_tests": 1,
-    "files_blocked": 173,
-    "files_timeout": 111,
+    "files_blocked": 174,
+    "files_timeout": 110,
     "files_needs_rerun": 284,
     "files_needs_rescan": 0,
-    "defects": 10,
+    "defects": 1,
     "defect_counts": {
       "survived_mutants": 0,
-      "mutation_compiler_error": 9,
+      "mutation_compiler_error": 1,
       "mutation_timeout": 0,
-      "mutation_no_evidence": 1,
+      "mutation_no_evidence": 0,
       "no_coverage": 0
     },
     "active_defects": 255,
     "active_defect_counts": {
-      "mutation_compiler_error": 143,
+      "mutation_compiler_error": 144,
       "mutation_no_evidence": 1,
-      "mutation_timeout": 111
+      "mutation_timeout": 110
     },
     "active_defect_paths": 255,
-    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-132424-f790df51",
-    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-132424-f790df51\\parallel-report.json",
-    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-132424-f790df51\\defect-remediation.json"
+    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-134050-4eac4904",
+    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-134050-4eac4904\\parallel-report.json",
+    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260811-134050-4eac4904\\defect-remediation.json"
   },
   "loc_policy": {
     "loc": "non_empty_source_lines",
