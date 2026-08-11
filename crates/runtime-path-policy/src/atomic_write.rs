@@ -1559,6 +1559,13 @@ mod tests {
             Err(PathPolicyError::TooLarge { path, max_bytes: 2, .. })
                 if path == Path::new("source.bin")
         ));
+        assert!(validate_atomic_replace_source_metadata(
+            &metadata,
+            ArtifactPathKind::GenericJson,
+            Path::new("source.bin"),
+            AtomicReplaceLimit::new(6),
+        )
+        .is_ok());
 
         parent.create_dir("source-dir").unwrap();
         let directory = parent.symlink_metadata("source-dir").unwrap();
