@@ -112,10 +112,12 @@ mod tests {
         assert!(operations.contains(&operations::REPAIR_APPLY));
         assert!(operations.contains(&operations::SERVICE_LIFECYCLE_APPLY));
         assert!(operations.contains(&operations::WIZARD_SESSION_APPLY));
-        assert!(report
-            .receipts
-            .iter()
-            .all(|receipt| receipt.route == "VidaCommandPipeline"));
+        assert!(
+            report
+                .receipts
+                .iter()
+                .all(|receipt| receipt.route == "VidaCommandPipeline")
+        );
     }
 
     #[test]
@@ -137,5 +139,20 @@ mod tests {
         assert_eq!(report.dual_authority_count, 0);
         assert_eq!(report.missing_parity_count, 0);
         assert_eq!(report.rollback_gap_count, 0);
+    }
+
+    #[test]
+    fn post_cutover_health_report_counts_parity_and_rollback_gaps() {
+        let mut slices = planned_cutover_slices();
+        slices[1].parity_passed = false;
+        slices[2].rollback_preserves_events = false;
+
+        let report = cutover_health_report(&slices);
+
+        assert!(!report.cutover_ready);
+        assert_eq!(report.dual_authority_count, 0);
+        assert_eq!(report.missing_parity_count, 1);
+        assert_eq!(report.rollback_gap_count, 1);
+        assert_eq!(report.receipts.len(), slices.len());
     }
 }

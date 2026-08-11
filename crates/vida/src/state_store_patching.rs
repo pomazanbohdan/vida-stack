@@ -162,3 +162,197 @@ pub(super) fn validate_patch_bindings(
 pub(super) fn collect_patch_ids(patches: &[InstructionDiffPatchRow]) -> Vec<String> {
     patches.iter().map(|patch| patch.patch_id.clone()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        InstructionArtifactRow, InstructionDiffPatchRow, InstructionPatchOperation,
+        StateStoreError, apply_patch_operation, collect_patch_ids, join_lines, split_lines,
+        validate_patch_bindings, validate_patch_conflicts,
+    };
+
+    fn operation(
+        op: &str,
+        target_mode: &str,
+        target: &str,
+        with_lines: &[&str],
+    ) -> InstructionPatchOperation {
+        InstructionPatchOperation {
+            op: op.to_string(),
+            target_mode: target_mode.to_string(),
+            target: target.to_string(),
+            with_lines: with_lines.iter().map(|line| (*line).to_string()).collect(),
+        }
+    }
+
+    fn patch(
+        patch_id: &str,
+        precedence: u32,
+        target_version: u32,
+        target_hash: &str,
+        operations: Vec<InstructionPatchOperation>,
+    ) -> InstructionDiffPatchRow {
+        InstructionDiffPatchRow {
+            patch_id: patch_id.to_string(),
+            target_artifact_id: "artifact".to_string(),
+            target_artifact_version: target_version,
+            target_artifact_hash: target_hash.to_string(),
+            patch_precedence: precedence,
+            active: true,
+            operations,
+        }
+    }
+
+    #[test]
+    fn line_split_and_join_define_the_persisted_trailing_newline_contract() {
+        assert_eq!(split_lines("first\nsecond\n"), vec!["first", "second"]);
+        assert!(split_lines("").is_empty());
+        assert_eq!(
+            join_lines(&["first".into(), "second".into()]),
+            "first\nsecond\n"
+        );
+        assert_eq!(join_lines(&[]), "");
+    }
+
+    #[test]
+    fn patch_operations_cover_anchor_modes_and_fail_closed_unknown_inputs() {
+        let mut lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        apply_patch_operation(
+            &mut lines,
+            &operation("replace_range", "exact_text", "b", &["B"]),
+        )
+        .expect("replace_range should succeed");
+        apply_patch_operation(
+            &mut lines,
+            &operation("replace_with_many", "line_span", "1", &["A1", "A2"]),
+        )
+        .expect("replace_with_many should support line spans");
+        apply_patch_operation(
+            &mut lines,
+            &operation("insert_before", "exact_text", "c", &["before"]),
+        )
+        .expect("insert_before should succeed");
+        apply_patch_operation(
+            &mut lines,
+            &operation("insert_after", "exact_text", "c", &["after"]),
+        )
+        .expect("insert_after should succeed");
+        apply_patch_operation(
+            &mut lines,
+            &operation("append_block", "exact_text", "c", &["tail"]),
+        )
+        .expect("append_block should resolve an existing anchor");
+        apply_patch_operation(
+            &mut lines,
+            &operation("delete_range", "exact_text", "before", &[]),
+        )
+        .expect("delete_range should remove the selected line");
+        assert_eq!(lines, vec!["A1", "A2", "B", "c", "after", "tail"]);
+
+        let error = apply_patch_operation(
+            &mut lines,
+            &operation("unsupported", "exact_text", "A1", &[]),
+        )
+        .expect_err("unknown patch operation should fail closed");
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+    }
+
+    #[test]
+    fn anchor_hash_and_line_span_reject_malformed_or_missing_targets() {
+        let mut lines = vec!["alpha".to_string()];
+        let hash = blake3::hash(b"alpha").to_hex().to_string();
+        apply_patch_operation(
+            &mut lines,
+            &operation(
+                "insert_after",
+                "anchor_hash",
+                &format!("blake3:{hash}"),
+                &["beta"],
+            ),
+        )
+        .expect("matching anchor hash should resolve");
+
+        for (target_mode, target) in [
+            ("line_span", "0"),
+            ("line_span", "not-a-number"),
+            ("line_span", "99"),
+            ("anchor_hash", "sha256:wrong"),
+            ("anchor_hash", "blake3:missing"),
+            ("exact_text", "missing"),
+            ("unknown", "alpha"),
+        ] {
+            let error = apply_patch_operation(
+                &mut lines,
+                &operation("delete_range", target_mode, target, &[]),
+            )
+            .expect_err("invalid target should fail closed");
+            assert!(matches!(
+                error,
+                StateStoreError::InvalidPatchOperation { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn conflict_and_binding_validation_preserve_patch_identity_constraints() {
+        let conflicting = vec![
+            patch(
+                "first",
+                1,
+                3,
+                "hash",
+                vec![operation("replace_range", "exact_text", "line", &["a"])],
+            ),
+            patch(
+                "second",
+                1,
+                3,
+                "hash",
+                vec![operation("delete_range", "exact_text", "line", &[])],
+            ),
+        ];
+        let conflict = validate_patch_conflicts(&conflicting)
+            .expect_err("equal-precedence edits to one anchor must conflict");
+        assert!(matches!(conflict, StateStoreError::PatchConflict { .. }));
+        let higher_precedence = vec![
+            conflicting[0].clone(),
+            patch(
+                "second-higher",
+                2,
+                3,
+                "hash",
+                vec![operation("delete_range", "exact_text", "line", &[])],
+            ),
+        ];
+        validate_patch_conflicts(&higher_precedence)
+            .expect("different precedence edits should remain ordered");
+
+        let base = InstructionArtifactRow {
+            artifact_id: "artifact".to_string(),
+            version: 3,
+            source_hash: "hash".to_string(),
+            body: "body".to_string(),
+        };
+        validate_patch_bindings(&base, &[conflicting[0].clone()])
+            .expect("matching version and source hash should bind");
+        let invalid = patch("wrong", 1, 2, "other", Vec::new());
+        let error = validate_patch_bindings(&base, &[invalid])
+            .expect_err("version/hash drift must fail closed");
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+        let invalid_hash = patch("wrong-hash", 1, 3, "other", Vec::new());
+        let hash_error = validate_patch_bindings(&base, &[invalid_hash])
+            .expect_err("source hash drift must fail closed");
+        assert!(matches!(
+            hash_error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+
+        assert_eq!(collect_patch_ids(&conflicting), vec!["first", "second"]);
+    }
+}

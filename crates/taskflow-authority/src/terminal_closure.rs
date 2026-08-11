@@ -140,4 +140,78 @@ mod tests {
             Some(&clean_receipt())
         ));
     }
+
+    #[test]
+    fn terminal_missing_task_closure_accepts_empty_active_node_with_clean_receipt() {
+        let mut status = terminal_status();
+        status.active_node = "  ";
+        let mut receipt = clean_receipt();
+        receipt.dispatch_target = "developer";
+
+        assert!(terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &status,
+            Some(&receipt)
+        ));
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_rejects_non_executed_dispatch_status() {
+        let mut receipt = clean_receipt();
+        receipt.dispatch_status = "planned";
+
+        assert!(!terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &terminal_status(),
+            Some(&receipt)
+        ));
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_rejects_incomplete_lane_status() {
+        let mut receipt = clean_receipt();
+        receipt.lane_status = "lane_active";
+
+        assert!(!terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &terminal_status(),
+            Some(&receipt)
+        ));
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_rejects_non_closure_node_with_mismatched_target() {
+        let mut status = terminal_status();
+        status.active_node = "developer";
+        let mut receipt = clean_receipt();
+        receipt.dispatch_target = "reviewer";
+
+        assert!(!terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &status,
+            Some(&receipt)
+        ));
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_accepts_matching_target_for_non_closure_node() {
+        let mut status = terminal_status();
+        status.active_node = "developer";
+        let mut receipt = clean_receipt();
+        receipt.dispatch_target = "developer";
+
+        assert!(terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &status,
+            Some(&receipt)
+        ));
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_trims_whitespace_before_empty_node_check() {
+        let mut status = terminal_status();
+        status.active_node = " \t ";
+        let mut receipt = clean_receipt();
+        receipt.dispatch_target = "developer";
+
+        assert!(terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &status,
+            Some(&receipt)
+        ));
+    }
 }

@@ -155,3 +155,88 @@ pub(crate) fn resolve_feature_design_template_source(root: &Path) -> Result<Path
         )
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        first_existing_path, resolve_init_agents_source, resolve_init_config_template_source,
+        resolve_init_sidecar_source, taskflow_binary_candidates_for_root,
+    };
+    use crate::temp_state::TempStateHarness;
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn first_existing_path_returns_the_first_existing_candidate() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let first = harness.path().join("first");
+        let second = harness.path().join("second");
+        fs::write(&second, "second").expect("second candidate should be writable");
+
+        assert_eq!(first_existing_path(&[first, second.clone()]), Some(second));
+        assert_eq!(first_existing_path(&[PathBuf::from("missing")]), None);
+    }
+
+    #[test]
+    fn bootstrap_source_resolvers_use_project_fallbacks_and_report_missing_inputs() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::write(root.join("AGENTS.md"), "agents").expect("agents fallback should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "sidecar")
+            .expect("sidecar fallback should exist");
+        let config_fallback = root.join("docs/framework/templates");
+        fs::create_dir_all(&config_fallback).expect("config fallback directory should exist");
+        fs::write(config_fallback.join("vida.config.yaml.template"), "config")
+            .expect("config fallback should exist");
+
+        assert_eq!(
+            resolve_init_agents_source(root).expect("agents fallback should resolve"),
+            root.join("AGENTS.md")
+        );
+        assert_eq!(
+            resolve_init_sidecar_source(root).expect("sidecar fallback should resolve"),
+            root.join("AGENTS.sidecar.md")
+        );
+        assert_eq!(
+            resolve_init_config_template_source(root).expect("config fallback should resolve"),
+            config_fallback.join("vida.config.yaml.template")
+        );
+
+        fs::remove_file(root.join("AGENTS.md")).expect("agents fallback should be removable");
+        let error = resolve_init_agents_source(root).expect_err("missing agents should block");
+        assert!(error.contains("install/assets/AGENTS.scaffold.md"));
+        assert!(error.contains("AGENTS.md"));
+    }
+
+    #[test]
+    fn taskflow_binary_candidates_include_files_and_runtime_source_directories() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::create_dir_all(root.join("bin")).expect("bin directory should exist");
+        fs::write(root.join("bin/taskflow-helper"), "binary")
+            .expect("taskflow helper should exist");
+        fs::write(root.join("bin/other"), "other").expect("other file should exist");
+        fs::create_dir_all(root.join("taskflow-runtime/src/vida"))
+            .expect("runtime source directory should exist");
+        fs::create_dir_all(root.join("not-taskflow/src/vida"))
+            .expect("unrelated source directory should exist");
+
+        let candidates = taskflow_binary_candidates_for_root(root);
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path == &root.join("bin/taskflow-helper"))
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path == &root.join("taskflow-runtime/src/vida"))
+        );
+        assert!(!candidates.iter().any(|path| path.ends_with("bin/other")));
+        assert!(
+            !candidates
+                .iter()
+                .any(|path| path.ends_with("not-taskflow/src/vida"))
+        );
+    }
+}

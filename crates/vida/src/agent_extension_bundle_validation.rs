@@ -157,3 +157,146 @@ pub(crate) fn extend_agent_extension_bundle_validation_errors(
 
     let _ = input.project_skills;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AgentExtensionBundleValidationInput, extend_agent_extension_bundle_validation_errors,
+    };
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn validation_reports_unresolved_relationships_and_enabled_registry_gaps() {
+        let enabled_framework_roles = vec!["framework.base".to_string()];
+        let project_roles = vec![json!({"role_id": "project.role", "base_role": "missing.base"})];
+        let project_skills = Vec::new();
+        let project_profiles =
+            vec![json!({"profile_id": "project.profile", "role_ref": "project.role"})];
+        let project_flows =
+            vec![json!({"flow_id": "project.flow", "role_chain": ["missing.role"]})];
+        let project_role_map = HashMap::new();
+        let project_skill_map = HashMap::new();
+        let enabled_project_roles = vec!["project.role".to_string()];
+        let enabled_project_skills = vec!["project.skill".to_string()];
+        let enabled_project_profiles = vec!["project.profile".to_string()];
+        let enabled_project_flows = vec!["project.flow".to_string()];
+        let role_ids = HashSet::new();
+        let skill_ids = HashSet::new();
+        let profile_ids = HashSet::new();
+        let flow_ids = HashSet::new();
+        let input = AgentExtensionBundleValidationInput {
+            require_profile_resolution: true,
+            require_flow_resolution: true,
+            require_framework_role_compatibility: true,
+            require_skill_role_compatibility: true,
+            enabled_framework_roles: &enabled_framework_roles,
+            project_roles: &project_roles,
+            project_skills: &project_skills,
+            project_profiles: &project_profiles,
+            project_flows: &project_flows,
+            project_role_map: &project_role_map,
+            project_skill_map: &project_skill_map,
+            enabled_project_roles: &enabled_project_roles,
+            enabled_project_skills: &enabled_project_skills,
+            enabled_project_profiles: &enabled_project_profiles,
+            enabled_project_flows: &enabled_project_flows,
+            role_ids: &role_ids,
+            skill_ids: &skill_ids,
+            profile_ids: &profile_ids,
+            flow_ids: &flow_ids,
+        };
+        let mut errors = Vec::new();
+
+        extend_agent_extension_bundle_validation_errors(&mut errors, input);
+
+        assert!(errors.iter().any(|error| {
+            error.contains("project role `project.role`") && error.contains("missing.base")
+        }));
+        assert!(errors.iter().any(|error| {
+            error.contains("project profile `project.profile`") && error.contains("project.role")
+        }));
+        assert!(errors.iter().any(|error| {
+            error.contains("project flow `project.flow`") && error.contains("missing.role")
+        }));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("roles registry is missing enabled role ids"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("skills registry is missing enabled skill ids"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("profiles registry is missing enabled profile ids"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("flows registry is missing enabled flow ids"))
+        );
+    }
+
+    #[test]
+    fn validation_rejects_incompatible_skills_but_accepts_compatible_profiles() {
+        let enabled_framework_roles = vec!["framework.base".to_string()];
+        let project_roles = Vec::new();
+        let project_skills = Vec::new();
+        let project_profiles = vec![json!({
+            "profile_id": "project.profile",
+            "role_ref": "project.role",
+            "skill_refs": ["project.skill"]
+        })];
+        let project_flows = Vec::new();
+        let project_role_map = HashMap::from([(
+            "project.role".to_string(),
+            json!({"base_role": "framework.base"}),
+        )]);
+        let project_skill_map = HashMap::from([(
+            "project.skill".to_string(),
+            json!({"compatible_base_roles": ["other.base"]}),
+        )]);
+        let enabled_project_roles = Vec::new();
+        let enabled_project_skills = Vec::new();
+        let enabled_project_profiles = Vec::new();
+        let enabled_project_flows = Vec::new();
+        let role_ids = HashSet::new();
+        let skill_ids = HashSet::new();
+        let profile_ids = HashSet::new();
+        let flow_ids = HashSet::new();
+        let input = AgentExtensionBundleValidationInput {
+            require_profile_resolution: true,
+            require_flow_resolution: false,
+            require_framework_role_compatibility: false,
+            require_skill_role_compatibility: true,
+            enabled_framework_roles: &enabled_framework_roles,
+            project_roles: &project_roles,
+            project_skills: &project_skills,
+            project_profiles: &project_profiles,
+            project_flows: &project_flows,
+            project_role_map: &project_role_map,
+            project_skill_map: &project_skill_map,
+            enabled_project_roles: &enabled_project_roles,
+            enabled_project_skills: &enabled_project_skills,
+            enabled_project_profiles: &enabled_project_profiles,
+            enabled_project_flows: &enabled_project_flows,
+            role_ids: &role_ids,
+            skill_ids: &skill_ids,
+            profile_ids: &profile_ids,
+            flow_ids: &flow_ids,
+        };
+        let mut errors = Vec::new();
+
+        extend_agent_extension_bundle_validation_errors(&mut errors, input);
+
+        assert!(errors.iter().any(|error| {
+            error.contains("project profile `project.profile`")
+                && error.contains("incompatible skill `project.skill`")
+        }));
+        assert!(!errors.iter().any(|error| error.contains("unresolved role")));
+    }
+}

@@ -61,10 +61,12 @@ pub(crate) fn blocker_codes(
     }
     let normalized = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
     if normalized.is_empty() && blocked_evidence_present {
-        vec![crate::contract_profile_adapter::blocker_code_str(
-            crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
-        )
-        .to_string()]
+        vec![
+            crate::contract_profile_adapter::blocker_code_str(
+                crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+            )
+            .to_string(),
+        ]
     } else {
         normalized
     }
@@ -124,4 +126,84 @@ pub(crate) fn next_actions(
     }
     crate::release1_operator_output::canonical_next_action_entries(&serde_json::json!(next_actions))
         .unwrap_or_else(|| next_actions.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{blocker_codes, next_actions};
+    use crate::state_store::RunGraphDispatchReceipt;
+
+    fn receipt() -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "developer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_routed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            policy_bundle_ref: None,
+            recorded_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn blocker_codes_normalize_blocked_receipt_and_ignore_blank_downstream_entries() {
+        let mut receipt = receipt();
+        receipt.dispatch_status = "failed".to_string();
+        receipt.blocker_code = Some("configured_backend_dispatch_failed".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec![
+            "pending_review_clean_evidence".to_string(),
+            "  ".to_string(),
+        ];
+
+        let codes = blocker_codes(&receipt);
+
+        assert!(codes.contains(&"pending_review_clean_evidence".to_string()));
+        assert!(
+            codes.contains(
+                &crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string()
+            )
+        );
+        assert!(!codes.iter().any(|code| code.trim().is_empty()));
+    }
+
+    #[test]
+    fn next_actions_preserve_recovery_and_clean_review_guidance() {
+        let mut receipt = receipt();
+        receipt.dispatch_status = "executed".to_string();
+        let actions = next_actions(&receipt, &["pending_review_clean_evidence".to_string()]);
+
+        assert_eq!(
+            actions[0],
+            "inspect the latest recovery projection with `vida taskflow recovery latest`."
+        );
+        assert!(actions.iter().any(|action| action.contains(
+            "record the missing clean review evidence before activating the downstream verification lane"
+        )));
+    }
 }

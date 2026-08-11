@@ -129,6 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn changelog_mixed_whitespace_uses_the_empty_input_contract() {
+        let rendered = append_changelog_row(" \t\n \t", "{\"b\":2}");
+        assert_eq!(rendered, "{\"b\":2}\n");
+    }
+
+    #[test]
+    fn split_without_footer_keeps_the_trimmed_body() {
+        let artifact = split_footer("body with trailing spaces  \n")
+            .expect("body without footer should split successfully");
+        assert_eq!(artifact.body, "body with trailing spaces");
+        assert_eq!(artifact.footer, None);
+    }
+
+    #[test]
     fn extracts_commonmark_link_targets() {
         let links = extract_link_targets(
             "Inline [doc](docs/a.md#section), image ![alt](assets/pic.md), and [ref][r].\n\n[r]: docs/ref.md\n",

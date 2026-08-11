@@ -162,3 +162,113 @@ fn looks_like_project_root(path: &Path) -> bool {
         && path.join(".vida/db").is_dir()
         && path.join(".vida/project").is_dir()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        command_needs_project_root, exit_code_from_status, find_project_root,
+        looks_like_project_root,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("taskflow-cli-contract-{nonce}"));
+        fs::create_dir_all(root.join(".vida/config")).expect("config directory should exist");
+        fs::create_dir_all(root.join(".vida/db")).expect("db directory should exist");
+        fs::create_dir_all(root.join(".vida/project")).expect("project directory should exist");
+        fs::write(root.join("AGENTS.md"), "agents").expect("agents marker should exist");
+        fs::write(root.join("vida.config.yaml"), "{}").expect("config marker should exist");
+        root
+    }
+
+    #[test]
+    fn project_root_requirement_distinguishes_help_from_runtime_commands() {
+        assert!(!command_needs_project_root(&[]));
+        assert!(!command_needs_project_root(&[
+            "help".into(),
+            "topic".into()
+        ]));
+        assert!(!command_needs_project_root(&["--help".into()]));
+        assert!(!command_needs_project_root(&["-h".into()]));
+        assert!(command_needs_project_root(&[
+            "consume".into(),
+            "agent-system".into()
+        ]));
+    }
+
+    #[test]
+    fn exit_code_mapping_preserves_valid_codes_and_blocks_invalid_statuses() {
+        assert_eq!(
+            exit_code_from_status(Some(0)),
+            std::process::ExitCode::SUCCESS
+        );
+        assert_eq!(
+            exit_code_from_status(Some(255)),
+            std::process::ExitCode::from(255)
+        );
+        assert_eq!(
+            exit_code_from_status(Some(-1)),
+            std::process::ExitCode::from(1)
+        );
+        assert_eq!(
+            exit_code_from_status(Some(256)),
+            std::process::ExitCode::from(1)
+        );
+        assert_eq!(exit_code_from_status(None), std::process::ExitCode::from(1));
+    }
+
+    #[test]
+    fn project_root_detection_requires_all_activation_markers_and_walks_ancestors() {
+        let root = test_root();
+        let nested = root.join("nested/work");
+        fs::create_dir_all(&nested).expect("nested project path should exist");
+
+        assert!(looks_like_project_root(&root));
+        assert_eq!(find_project_root(&nested), Some(root.clone()));
+
+        fs::remove_dir_all(root.join(".vida/project")).expect("project marker should be removable");
+        assert!(!looks_like_project_root(&root));
+        assert_eq!(find_project_root(&nested), None);
+        fs::remove_dir_all(root).expect("test root should be removed");
+    }
+
+    #[test]
+    fn project_root_detection_rejects_each_missing_activation_marker() {
+        let root = test_root();
+        let markers = [
+            ("AGENTS.md", false),
+            ("vida.config.yaml", false),
+            (".vida/config", true),
+            (".vida/db", true),
+            (".vida/project", true),
+        ];
+
+        for (relative, is_directory) in markers {
+            let marker = root.join(relative);
+            if is_directory {
+                fs::remove_dir_all(&marker).expect("directory marker should be removable");
+            } else {
+                fs::remove_file(&marker).expect("file marker should be removable");
+            }
+            assert!(
+                !looks_like_project_root(&root),
+                "missing marker should block project-root detection: {}",
+                marker.display()
+            );
+            if is_directory {
+                fs::create_dir_all(&marker).expect("directory marker should be restorable");
+            } else {
+                fs::write(&marker, "marker").expect("file marker should be restorable");
+            }
+        }
+
+        assert!(looks_like_project_root(&root));
+        fs::remove_dir_all(root).expect("test root should be removed");
+    }
+}
