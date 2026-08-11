@@ -1305,6 +1305,11 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
         let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
         assert!(permissions.readonly());
+        assert!(!parent_dir
+            .symlink_metadata(&temp_name)
+            .unwrap()
+            .permissions()
+            .readonly());
         failure.temp.cleanup(&parent_dir);
         assert!(
             parent_dir
@@ -1313,6 +1318,46 @@ mod tests {
         );
         permissions.set_readonly(false);
         std::fs::set_permissions(&destination, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replace_file_windows_rejects_embedded_nul_before_ffi() {
+        let root = temp_root("windows-nul-path");
+        let temporary = root.join("temporary.bin");
+        std::fs::write(&temporary, b"temporary").unwrap();
+        let destination = root.join("result\0.bin");
+
+        let error = replace_file_windows(&temporary, &destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("empty or contains NUL"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rollback_windows_readonly_replace_preserves_original_error_when_destination_missing() {
+        let root = temp_root("windows-readonly-restore-missing");
+        let parent_dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        let temporary = root.join("temporary.bin");
+        let absolute_destination = root.join("missing.bin");
+        std::fs::write(&temporary, b"temporary").unwrap();
+
+        let error = rollback_windows_readonly_replace(
+            &parent_dir,
+            Path::new("missing.bin"),
+            &temporary,
+            &absolute_destination,
+            io::Error::new(io::ErrorKind::Other, "original rollback error"),
+        );
+
+        assert_eq!(error.to_string(), "original rollback error");
+        assert!(!std::fs::metadata(&temporary)
+            .unwrap()
+            .permissions()
+            .readonly());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(windows)]
@@ -1439,7 +1484,7 @@ mod tests {
         ] {
             assert!(matches!(
                 validate_single_component(invalid, ArtifactPathKind::GenericJson, error_path),
-                Err(PathPolicyError::Write { .. })
+                Err(PathPolicyError::Write { path, .. }) if path == error_path
             ));
         }
         validate_single_component(
@@ -1511,7 +1556,8 @@ mod tests {
                 Path::new("source.bin"),
                 AtomicReplaceLimit::new(2),
             ),
-            Err(PathPolicyError::TooLarge { max_bytes: 2, .. })
+            Err(PathPolicyError::TooLarge { path, max_bytes: 2, .. })
+                if path == Path::new("source.bin")
         ));
 
         parent.create_dir("source-dir").unwrap();
@@ -1523,7 +1569,8 @@ mod tests {
                 Path::new("source-dir"),
                 AtomicReplaceLimit::default(),
             ),
-            Err(PathPolicyError::NotRegularFile { .. })
+            Err(PathPolicyError::NotRegularFile { path, .. })
+                if path == Path::new("source-dir")
         ));
     }
 
