@@ -365,6 +365,22 @@ mod tests {
     }
 
     #[test]
+    fn task_lifecycle_reparent_without_parent_only_touches_child() {
+        let input = TaskLifecycleInput::new("child", TaskLifecycleEvent::Reparent);
+
+        let decision = decide_task_lifecycle(input);
+
+        assert!(decision.admitted);
+        assert_eq!(decision.touched_task_ids, vec!["child"]);
+        assert_eq!(
+            decision.effects,
+            vec![TaskLifecycleEffect::TouchTask {
+                task_id: "child".to_string()
+            }]
+        );
+    }
+
+    #[test]
     fn task_lifecycle_returns_graph_issues_without_db_or_filesystem() {
         let mut input = TaskLifecycleInput::new("task-1", TaskLifecycleEvent::Close);
         input.graph_issues = vec![TaskGraphIssue {
