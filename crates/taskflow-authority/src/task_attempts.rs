@@ -413,4 +413,15 @@ mod tests {
         );
         assert_eq!(decision.latest_attempt_id.as_deref(), Some("attempt-b"));
     }
+
+    #[test]
+    fn task_attempt_status_normalizer_accepts_all_current_statuses_and_rejects_empty() {
+        for status in super::TASK_ATTEMPT_STATUSES {
+            assert_eq!(
+                normalize_task_attempt_status(status),
+                Ok((*status).to_string())
+            );
+        }
+        assert!(normalize_task_attempt_status("  ").is_err());
+    }
 }

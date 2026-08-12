@@ -451,7 +451,7 @@ pub fn analyze_directed_dependencies<'a>(
 mod tests {
     use super::{
         TaskGraphDependencyRow, TaskGraphIssue, TaskGraphRow, analyze_directed_dependencies,
-        validate_task_graph_rows, validate_task_graph_rows_for_mutation,
+        validate_task_graph_rows, validate_task_graph_rows_for_mutation, TaskGraphView,
     };
     use std::collections::BTreeSet;
 
@@ -578,6 +578,18 @@ mod tests {
         assert!(issues
             .iter()
             .all(|issue| issue.issue_id == "touched" || issue.depends_on_id.as_deref() == Some("touched")));
+    }
+
+    #[test]
+    fn task_graph_view_sorts_rows_and_indexes_parent_children() {
+        let mut child = row("child", "open", "task");
+        child.dependencies = vec![parent_child("child", "parent")];
+        let view = TaskGraphView::from_rows([child, row("parent", "open", "epic")]);
+
+        assert_eq!(view.rows().iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["child", "parent"]);
+        assert!(view.contains_task("parent"));
+        assert_eq!(view.task("missing"), None);
+        assert_eq!(view.children_for("parent"), Some(&vec!["child".to_string()]));
     }
 
     #[test]

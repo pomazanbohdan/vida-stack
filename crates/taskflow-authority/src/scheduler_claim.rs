@@ -470,6 +470,25 @@ mod tests {
         assert!(!super::claim_is_expired(&claim, "2026-06-21T00:00:00Z"));
     }
 
+    #[test]
+    fn claim_modes_allow_shared_readers_but_block_exclusive_writers() {
+        let active = claim("claim-1", "shared", None, "task-1", "run-1", "domain-a");
+        let mut request = claim_request("claim-2", "shared", None, "task-2", "run-2", "domain-b");
+        request.owned_paths = vec!["crates/other/src/lib.rs".to_string()];
+        assert!(decide_orchestrator_claim_conflict(&request, &active).is_none());
+
+        request.lease_mode = "exclusive".to_string();
+        request.conflict_domain = Some("domain-a".to_string());
+        assert_eq!(
+            decide_orchestrator_claim_conflict(&request, &active)
+                .map(|decision| decision.blocker_code),
+            Some("orchestrator_claim_conflict_conflict_domain".to_string())
+        );
+        assert!(super::claim_is_active("active"));
+        assert!(super::claim_is_active("renewed"));
+        assert!(!super::claim_is_active("released"));
+    }
+
     fn claim_request(
         claim_id: &str,
         lease_mode: &str,
