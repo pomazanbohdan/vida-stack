@@ -61,17 +61,17 @@ pub struct DomainConformanceScenarioResult {
 
 #[must_use]
 pub fn verify_domain_conformance() -> DomainConformanceReport {
-    let mut scenario_results = Vec::new();
-
-    scenario_results.push(case_task_lifecycle_close_ok());
-    scenario_results.push(case_task_lifecycle_child_guard());
-    scenario_results.push(case_task_lifecycle_change());
-    scenario_results.push(case_run_graph_terminal());
-    scenario_results.push(case_run_graph_takeover());
-    scenario_results.push(case_run_graph_lane_guard());
-    scenario_results.push(case_run_graph_handoff());
-    scenario_results.push(case_continuation_cycle());
-    scenario_results.push(case_continuation_idle());
+    let scenario_results = vec![
+        case_task_lifecycle_close_ok(),
+        case_task_lifecycle_child_guard(),
+        case_task_lifecycle_change(),
+        case_run_graph_terminal(),
+        case_run_graph_takeover(),
+        case_run_graph_lane_guard(),
+        case_run_graph_handoff(),
+        case_continuation_cycle(),
+        case_continuation_idle(),
+    ];
 
     DomainConformanceReport {
         schema_version: DOMAIN_CONFORMANCE_SCHEMA_VERSION,
@@ -368,9 +368,11 @@ mod tests {
                 "continuation.idle_pause_boundary",
             ]
         );
-        assert!(report
-            .scenario_results
-            .iter()
-            .all(|scenario| scenario.passed && !scenario.detail.trim().is_empty()));
+        assert!(
+            report
+                .scenario_results
+                .iter()
+                .all(|scenario| scenario.passed && !scenario.detail.trim().is_empty())
+        );
     }
 }

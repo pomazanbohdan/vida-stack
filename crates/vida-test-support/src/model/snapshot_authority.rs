@@ -183,7 +183,8 @@ fn ids_for_mask(universe: &[&str], mask: u8) -> Vec<String> {
     universe
         .iter()
         .enumerate()
-        .filter_map(|(index, id)| ((mask & (1 << index)) != 0).then(|| (*id).to_string()))
+        .filter(|(index, _)| (mask & (1 << index)) != 0)
+        .map(|(_, id)| (*id).to_string())
         .collect()
 }
 

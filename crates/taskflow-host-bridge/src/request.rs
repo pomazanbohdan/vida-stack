@@ -433,10 +433,10 @@ pub fn host_bridge_proof_artifact_path_array(value: &Value, field: &str) -> Vec<
 
 pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
     let mut owned_paths = host_bridge_path_array(request, "owned_paths");
-    if owned_paths.is_empty() {
-        if let Some(implementation_isolation) = request.get("implementation_isolation") {
-            owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
-        }
+    if owned_paths.is_empty()
+        && let Some(implementation_isolation) = request.get("implementation_isolation")
+    {
+        owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
     }
     owned_paths
 }

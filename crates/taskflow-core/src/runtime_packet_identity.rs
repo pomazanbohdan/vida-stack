@@ -23,14 +23,15 @@ pub fn normalize_persisted_runtime_path(path: &str) -> PathBuf {
     {
         if let Some(rest) = trimmed.strip_prefix("/mnt/") {
             let mut parts = rest.splitn(2, '/');
-            if let (Some(drive), Some(tail)) = (parts.next(), parts.next()) {
-                if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() {
-                    let mut normalized = String::new();
-                    normalized.push_str(&drive.to_ascii_uppercase());
-                    normalized.push_str(":\\");
-                    normalized.push_str(&tail.replace('/', "\\"));
-                    return PathBuf::from(normalized);
-                }
+            if let (Some(drive), Some(tail)) = (parts.next(), parts.next())
+                && drive.len() == 1
+                && drive.as_bytes()[0].is_ascii_alphabetic()
+            {
+                let mut normalized = String::new();
+                normalized.push_str(&drive.to_ascii_uppercase());
+                normalized.push_str(":\\");
+                normalized.push_str(&tail.replace('/', "\\"));
+                return PathBuf::from(normalized);
             }
         }
     }
@@ -84,21 +85,20 @@ pub fn validate_runtime_packet_receipt_identity(
         .receipt_dispatch_packet_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        && !runtime_packet_paths_equivalent(expected_dispatch_packet_path, identity.packet_path)
     {
-        if !runtime_packet_paths_equivalent(expected_dispatch_packet_path, identity.packet_path) {
-            let expected_downstream_packet_path = identity
-                .receipt_downstream_dispatch_packet_path
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            if !expected_downstream_packet_path
-                .map(|path| runtime_packet_paths_equivalent(path, identity.packet_path))
-                .unwrap_or(false)
-            {
-                return Err(format!(
-                    "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{}`",
-                    identity.packet_path
-                ));
-            }
+        let expected_downstream_packet_path = identity
+            .receipt_downstream_dispatch_packet_path
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if !expected_downstream_packet_path
+            .map(|path| runtime_packet_paths_equivalent(path, identity.packet_path))
+            .unwrap_or(false)
+        {
+            return Err(format!(
+                "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{}`",
+                identity.packet_path
+            ));
         }
     }
     Ok(())

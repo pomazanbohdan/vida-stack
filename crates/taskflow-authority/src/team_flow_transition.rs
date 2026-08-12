@@ -212,43 +212,39 @@ impl TeamFlowSnapshot {
             &["selected_flow_set", "selected_flow_id"],
             "selected_flow_set",
             "config",
-        )? {
-            if selected_flow != flow_ref {
-                return Err(TeamFlowSnapshotError::FlowIdentityMismatch {
-                    expected: flow_ref.clone(),
-                    actual: selected_flow,
-                });
-            }
+        )? && selected_flow != flow_ref
+        {
+            return Err(TeamFlowSnapshotError::FlowIdentityMismatch {
+                expected: flow_ref.clone(),
+                actual: selected_flow,
+            });
         }
         if let Some(config_value) =
             strict_string_aliases(config, &["config_id", "id"], "config_id", "config")?
+            && config_value != config_id
         {
-            if config_value != config_id {
-                return Err(TeamFlowSnapshotError::ConfigIdentityMismatch {
-                    expected: config_id,
-                    actual: config_value,
-                });
-            }
+            return Err(TeamFlowSnapshotError::ConfigIdentityMismatch {
+                expected: config_id,
+                actual: config_value,
+            });
         }
         if let Some(profile_value) =
             strict_string_aliases(config, &["profile", "profile_id"], "profile", "config")?
+            && profile_value != profile
         {
-            if profile_value != profile {
-                return Err(TeamFlowSnapshotError::ProfileMismatch {
-                    expected: profile,
-                    actual: profile_value,
-                });
-            }
+            return Err(TeamFlowSnapshotError::ProfileMismatch {
+                expected: profile,
+                actual: profile_value,
+            });
         }
         if let Some(registry_value) =
             strict_string_aliases(config, &["registry_hash"], "registry_hash", "config")?
+            && registry_value != registry_hash
         {
-            if registry_value != registry_hash {
-                return Err(TeamFlowSnapshotError::ConfigIdentityMismatch {
-                    expected: registry_hash,
-                    actual: registry_value,
-                });
-            }
+            return Err(TeamFlowSnapshotError::ConfigIdentityMismatch {
+                expected: registry_hash,
+                actual: registry_value,
+            });
         }
         let steps = configured_steps(flow)?;
         if steps.is_empty() {
@@ -621,10 +617,10 @@ fn missing_evidence(requirements: &[String], evidence: &[String]) -> Vec<String>
     }
     let mut missing = Vec::new();
     for required in requirements {
-        if let Some(required) = nonempty(required) {
-            if !actual.contains(&required) {
-                missing.push(required);
-            }
+        if let Some(required) = nonempty(required)
+            && !actual.contains(&required)
+        {
+            missing.push(required);
         }
     }
     missing
@@ -739,13 +735,13 @@ fn validate_edges(nodes: &[TeamFlowNode]) -> Result<(), TeamFlowSnapshotError> {
                 field: "next_node",
             });
         }
-        if let Some(target) = node.next_node.as_deref() {
-            if !ids.contains(target) {
-                return Err(TeamFlowSnapshotError::InvalidEdge {
-                    node: node.node_id.clone(),
-                    target: target.to_string(),
-                });
-            }
+        if let Some(target) = node.next_node.as_deref()
+            && !ids.contains(target)
+        {
+            return Err(TeamFlowSnapshotError::InvalidEdge {
+                node: node.node_id.clone(),
+                target: target.to_string(),
+            });
         }
         for target in &node.rework_targets {
             if !ids.contains(target.as_str()) {
@@ -1365,13 +1361,13 @@ fn strict_command_catalog_entry<'a>(
                 node: node.to_string(),
                 command_ref: command_ref.to_string(),
             })?;
-        if let Some(key) = key {
-            if key != entry_id {
-                return Err(TeamFlowSnapshotError::ConflictingAliases {
-                    field: "command_catalog.command_id",
-                    values: vec![key.to_string(), entry_id],
-                });
-            }
+        if let Some(key) = key
+            && key != entry_id
+        {
+            return Err(TeamFlowSnapshotError::ConflictingAliases {
+                field: "command_catalog.command_id",
+                values: vec![key.to_string(), entry_id],
+            });
         }
         strict_string_aliases(entry, &["surface"], "surface", node)?.ok_or_else(|| {
             TeamFlowSnapshotError::UnresolvedCommandReference {
@@ -1458,12 +1454,12 @@ fn approval_policy_catalog(
             .and_then(|dev_team| dev_team.get("authority_catalog"))
             .and_then(Value::as_object),
     }
-        .and_then(|catalog| catalog.get(field))
-        .and_then(Value::as_array)
-        .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
-            node: node.to_string(),
-            field,
-        })?;
+    .and_then(|catalog| catalog.get(field))
+    .and_then(Value::as_array)
+    .ok_or_else(|| TeamFlowSnapshotError::InvalidApprovalContract {
+        node: node.to_string(),
+        field,
+    })?;
     let mut result = BTreeSet::new();
     for value in values {
         let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) else {
@@ -1522,16 +1518,15 @@ fn validate_approval_contract(
     } else {
         None
     };
-    if let Some(mode) = mode.as_deref() {
-        if !mode_catalog
+    if let Some(mode) = mode.as_deref()
+        && !mode_catalog
             .as_ref()
             .is_some_and(|catalog| catalog.contains(mode))
-        {
-            return Err(TeamFlowSnapshotError::InvalidApprovalContract {
-                node: node.to_string(),
-                field: "approval_policy.mode",
-            });
-        }
+    {
+        return Err(TeamFlowSnapshotError::InvalidApprovalContract {
+            node: node.to_string(),
+            field: "approval_policy.mode",
+        });
     }
     let prompt = strict_string_aliases(
         policy,
@@ -1918,7 +1913,7 @@ fn validate_projection_metadata(
         || diagnostics
             .get("fallback_fields")
             .and_then(Value::as_array)
-            .map_or(true, |fields| !fields.is_empty())
+            .is_none_or(|fields| !fields.is_empty())
     {
         return Err(TeamFlowSnapshotError::InvalidApprovalContract {
             node: node.to_string(),
@@ -3337,12 +3332,7 @@ mod tests {
 
             let mut current_receipt = receipt(&snapshot, "node-a", "pass");
             current_receipt.evidence = vec!["proof-node-a".to_string()];
-            let verdict = admit_transition(
-                &snapshot,
-                "node-a",
-                Some(&current_receipt),
-                "node-c",
-            );
+            let verdict = admit_transition(&snapshot, "node-a", Some(&current_receipt), "node-c");
             assert!(verdict.allowed, "{label}: {verdict:?}");
             assert_eq!(verdict.next_node.as_deref(), Some("node-c"), "{label}");
         }

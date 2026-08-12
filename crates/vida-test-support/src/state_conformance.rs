@@ -168,6 +168,11 @@ pub fn run_state_adapter_conformance<F: StateAdapterFactory>(
     let mut checkpoint_recovered = false;
     if factory.supports_restart_recovery() {
         drop(journal);
+        let checkpoint_after_restart = if factory.supports_checkpoint_recovery() {
+            Some(factory.reopened_checkpoint(&expected_checkpoint.projection_id)?)
+        } else {
+            None
+        };
         let mut reopened = factory.reopen()?;
         if reopened.load_stream(&stream_id).len() != 3
             || reopened.read_global_after(None, 10).len() != 3
@@ -187,8 +192,7 @@ pub fn run_state_adapter_conformance<F: StateAdapterFactory>(
             ));
         }
         if factory.supports_checkpoint_recovery()
-            && factory.reopened_checkpoint(&expected_checkpoint.projection_id)?
-                != Some(expected_checkpoint.clone())
+            && checkpoint_after_restart != Some(Some(expected_checkpoint.clone()))
         {
             return Err(storage(
                 "restart did not recover the durable projection checkpoint",

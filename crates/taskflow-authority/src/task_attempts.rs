@@ -181,12 +181,10 @@ pub fn summarize_task_stage_attempts(
     });
     let latest_consolidation_receipt_id = latest
         .and_then(|attempt| attempt.consolidation_receipt_id.clone())
-        .or_else(|| {
-            if attempts.is_empty() {
-                stage_latest_consolidation_receipt_id
-            } else {
-                None
-            }
+        .or(if attempts.is_empty() {
+            stage_latest_consolidation_receipt_id
+        } else {
+            None
         });
     TaskStageSummaryDecision {
         attempt_count: attempts.len(),

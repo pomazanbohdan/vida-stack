@@ -117,20 +117,19 @@ pub fn host_bridge_changed_files_from_artifact(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if changed_files.is_empty() {
-        if let Some(files) = artifact_json
+    if changed_files.is_empty()
+        && let Some(files) = artifact_json
             .and_then(|artifact| artifact.get("changed_files"))
             .and_then(serde_json::Value::as_array)
-        {
-            changed_files.extend(
-                files
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-            );
-        }
+    {
+        changed_files.extend(
+            files
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        );
     }
     changed_files.sort();
     changed_files.dedup();

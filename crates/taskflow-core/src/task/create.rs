@@ -315,10 +315,34 @@ mod tests {
         };
         assert!(ensure_existing_task_mismatch_reason(actual, expected).is_none());
         for (expected, fragment) in [
-            (ExistingTaskExpectation { display_id: Some("VH-2"), ..expected }, "display_id mismatch"),
-            (ExistingTaskExpectation { issue_type: "bug", ..expected }, "issue_type mismatch"),
-            (ExistingTaskExpectation { status: "closed", ..expected }, "status mismatch"),
-            (ExistingTaskExpectation { parent_id: Some("other"), ..expected }, "parent_id mismatch"),
+            (
+                ExistingTaskExpectation {
+                    display_id: Some("VH-2"),
+                    ..expected
+                },
+                "display_id mismatch",
+            ),
+            (
+                ExistingTaskExpectation {
+                    issue_type: "bug",
+                    ..expected
+                },
+                "issue_type mismatch",
+            ),
+            (
+                ExistingTaskExpectation {
+                    status: "closed",
+                    ..expected
+                },
+                "status mismatch",
+            ),
+            (
+                ExistingTaskExpectation {
+                    parent_id: Some("other"),
+                    ..expected
+                },
+                "parent_id mismatch",
+            ),
         ] {
             let reason = ensure_existing_task_mismatch_reason(actual, expected)
                 .expect("scalar drift should produce a reason");

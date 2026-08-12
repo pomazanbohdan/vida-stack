@@ -44,12 +44,8 @@ pub fn compare_management_dispatch_projection(
         required_counter(management, "external_effect_count");
     let (dispatch_effects, dispatch_effects_complete) =
         required_counter(dispatch, "external_effect_count");
-    let authoritative_write_count = management_writes
-        .checked_add(dispatch_writes)
-        .unwrap_or(u64::MAX);
-    let external_effect_count = management_effects
-        .checked_add(dispatch_effects)
-        .unwrap_or(u64::MAX);
+    let authoritative_write_count = management_writes.saturating_add(dispatch_writes);
+    let external_effect_count = management_effects.saturating_add(dispatch_effects);
     let metadata_complete = management_writes_complete
         && dispatch_writes_complete
         && management_effects_complete
@@ -200,10 +196,12 @@ mod tests {
         let dispatch = serde_json::json!({"state":"completed","external_effect_count":0,"authoritative_write_count":0});
         let comparison = compare_management_dispatch_projection(&management, &dispatch, &[]);
         assert_eq!(comparison.parity_gate, "blocked");
-        assert!(comparison
-            .differences
-            .iter()
-            .any(|difference| !difference.allowed));
+        assert!(
+            comparison
+                .differences
+                .iter()
+                .any(|difference| !difference.allowed)
+        );
         assert_eq!(comparison.external_effect_count, 1);
     }
 

@@ -450,8 +450,9 @@ pub fn analyze_directed_dependencies<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        TaskGraphDependencyRow, TaskGraphIssue, TaskGraphRow, analyze_directed_dependencies,
-        validate_task_graph_rows, validate_task_graph_rows_for_mutation, TaskGraphView,
+        TaskGraphDependencyRow, TaskGraphIssue, TaskGraphRow, TaskGraphView,
+        analyze_directed_dependencies, validate_task_graph_rows,
+        validate_task_graph_rows_for_mutation,
     };
     use std::collections::BTreeSet;
 
@@ -574,10 +575,13 @@ mod tests {
             &touched,
         );
 
-        assert!(issues.iter().any(|issue| issue.issue_type == "self_dependency"));
-        assert!(issues
-            .iter()
-            .all(|issue| issue.issue_id == "touched" || issue.depends_on_id.as_deref() == Some("touched")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.issue_type == "self_dependency")
+        );
+        assert!(issues.iter().all(|issue| issue.issue_id == "touched"
+            || issue.depends_on_id.as_deref() == Some("touched")));
     }
 
     #[test]
@@ -586,10 +590,19 @@ mod tests {
         child.dependencies = vec![parent_child("child", "parent")];
         let view = TaskGraphView::from_rows([child, row("parent", "open", "epic")]);
 
-        assert_eq!(view.rows().iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["child", "parent"]);
+        assert_eq!(
+            view.rows()
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["child", "parent"]
+        );
         assert!(view.contains_task("parent"));
         assert_eq!(view.task("missing"), None);
-        assert_eq!(view.children_for("parent"), Some(&vec!["child".to_string()]));
+        assert_eq!(
+            view.children_for("parent"),
+            Some(&vec!["child".to_string()])
+        );
     }
 
     #[test]
@@ -599,9 +612,11 @@ mod tests {
 
         let issues = validate_task_graph_rows([row("blocker", "open", "task"), child]);
 
-        assert!(!issues
-            .iter()
-            .any(|issue| issue.issue_type == "missing_dependency_target"));
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.issue_type == "missing_dependency_target")
+        );
     }
 
     #[test]

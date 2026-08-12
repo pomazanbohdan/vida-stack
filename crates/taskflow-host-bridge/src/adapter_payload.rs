@@ -190,7 +190,6 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .map(|operations| operations.dispatch_transport.as_str());
     if dispatch_transport != Some("host_tool_bridge")
         || configured_dispatch_transport
-            .as_deref()
             .is_some_and(|configured| dispatch_transport != Some(configured))
     {
         blocker_codes.push(
@@ -750,12 +749,20 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "pass");
-        assert_eq!(payload["host_bridge"]["implementation_artifacts_present"], true);
+        assert_eq!(
+            payload["host_bridge"]["implementation_artifacts_present"],
+            true
+        );
         assert_eq!(payload["host_bridge"]["artifact_attach_required"], false);
-        assert_eq!(payload["host_bridge"]["artifact_attach_command"], Value::Null);
+        assert_eq!(
+            payload["host_bridge"]["artifact_attach_command"],
+            Value::Null
+        );
         assert_eq!(
             payload["shared_fields"]["next_actions"],
-            json!(["vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"])
+            json!([
+                "vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"
+            ])
         );
     }
 
@@ -780,10 +787,7 @@ mod tests {
             ("adapter_contract_source", json!("configured_registry")),
             ("result_path", json!("result.json")),
             ("receipt_path", json!("receipt.json")),
-            (
-                "receipt_id",
-                json!("run-1-implementer-host-bridge-receipt"),
-            ),
+            ("receipt_id", json!("run-1-implementer-host-bridge-receipt")),
         ] {
             assert_eq!(host_bridge[field], expected, "identity field `{field}`");
         }
@@ -845,7 +849,10 @@ mod tests {
                 .iter()
                 .any(|code| code == "host_bridge_request_wrong_transport")
         );
-        assert_eq!(mismatch_payload["host_bridge"]["host_tool_calls"], json!([]));
+        assert_eq!(
+            mismatch_payload["host_bridge"]["host_tool_calls"],
+            json!([])
+        );
 
         let mut completed = request();
         completed["status"] = json!("completed");

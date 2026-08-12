@@ -75,14 +75,14 @@ pub fn compile_dev_team_flow_for_work_item(
 ) -> Result<CompiledFlowDefinition, RoleStepConfigError> {
     let flows = compile_all_dev_team_flows(readiness)?;
     let lookup = normalize_key(work_item_type);
-    if !lookup.is_empty() {
-        if let Some(flow) = flows.iter().find(|flow| {
+    if !lookup.is_empty()
+        && let Some(flow) = flows.iter().find(|flow| {
             flow.work_item_bindings
                 .iter()
                 .any(|binding| normalize_key(binding) == lookup)
-        }) {
-            return Ok(flow.clone());
-        }
+        })
+    {
+        return Ok(flow.clone());
     }
     let default_id = readiness["default_flow_id"]
         .as_str()
@@ -213,11 +213,13 @@ fn role_index(
     Ok(index)
 }
 
+type CollectionEntry<'a> = (String, Option<String>, &'a serde_json::Value);
+
 fn collection_entries<'a>(
     value: &'a serde_json::Value,
     path: &str,
     label: &str,
-) -> Result<Vec<(String, Option<String>, &'a serde_json::Value)>, RoleStepConfigError> {
+) -> Result<Vec<CollectionEntry<'a>>, RoleStepConfigError> {
     match value {
         serde_json::Value::Array(values) => Ok(values
             .iter()

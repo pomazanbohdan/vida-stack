@@ -97,17 +97,17 @@ fn delegate_taskflow(args: &[String]) -> ExitCode {
 }
 
 fn resolve_vida_binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("VIDA_TASKFLOW_VIDA_BIN") {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
+    if let Some(path) = std::env::var_os("VIDA_TASKFLOW_VIDA_BIN")
+        && !path.is_empty()
+    {
+        return PathBuf::from(path);
     }
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            let candidate = parent.join(exe_name("vida"));
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        let candidate = parent.join(exe_name("vida"));
+        if candidate.exists() {
+            return candidate;
         }
     }
     PathBuf::from(exe_name("vida"))

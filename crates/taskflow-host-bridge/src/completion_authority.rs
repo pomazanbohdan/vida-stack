@@ -121,17 +121,16 @@ impl HostBridgeImplementationAttemptAdmission {
                         | BLOCKER_ATTEMPT_NO_REPEAT
                 )
             }) && retry_count == 0
+                && let Some(carrier_id) = cheapest_eligible_carrier(request)
             {
-                if let Some(carrier_id) = cheapest_eligible_carrier(request) {
-                    return Self {
-                        decision: "reroute_once".to_string(),
-                        verdict: "capability_blocked".to_string(),
-                        blocker_codes: blockers,
-                        reroute_allowed: true,
-                        reroute_carrier_id: Some(carrier_id),
-                        fingerprint: current_fingerprint,
-                    };
-                }
+                return Self {
+                    decision: "reroute_once".to_string(),
+                    verdict: "capability_blocked".to_string(),
+                    blocker_codes: blockers,
+                    reroute_allowed: true,
+                    reroute_carrier_id: Some(carrier_id),
+                    fingerprint: current_fingerprint,
+                };
             }
         }
 
@@ -558,13 +557,13 @@ pub fn decide_host_bridge_completion_authority(
 fn derive_completion_authority_outcome(
     input: &HostBridgeCompletionAuthorityInput,
 ) -> (HostBridgeCompletionOutcome, Vec<String>) {
-    let mut blockers = typed_blockers(&input);
+    let mut blockers = typed_blockers(input);
     blockers.extend(summary_blocker_codes(input.summary.as_deref()));
     dedup_blockers(&mut blockers);
-    let passed = completion_tuple_is_passed(&input);
-    let rework = completion_tuple_is_rework(&input);
-    let failed = completion_tuple_is_failed(&input);
-    let blocked = completion_tuple_is_blocked(&input) || failed;
+    let passed = completion_tuple_is_passed(input);
+    let rework = completion_tuple_is_rework(input);
+    let failed = completion_tuple_is_failed(input);
+    let blocked = completion_tuple_is_blocked(input) || failed;
 
     if passed && blocked {
         push_unique(&mut blockers, BLOCKER_OUTCOME_CONTRADICTION);
@@ -1332,7 +1331,8 @@ mod tests {
 
     #[test]
     fn implementation_scope_guards_fail_closed_individually() {
-        let cases: [(&str, fn(&mut Value)); 3] = [
+        type Mutation = fn(&mut Value);
+        let cases: [(&str, Mutation); 3] = [
             ("empty_owned_paths", |request: &mut Value| {
                 request["implementation_isolation"]["owned_paths"] = json!([]);
             }),
@@ -1371,9 +1371,11 @@ mod tests {
         let request = implementation_request();
 
         let empty = admit_host_bridge_implementation_attempt(&request, Some(&json!([])));
-        assert!(empty
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string()));
+        assert!(
+            empty
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string())
+        );
 
         let outside = admit_host_bridge_implementation_attempt(
             &request,
@@ -1382,9 +1384,11 @@ mod tests {
                 "changed_files": ["crates/other/src/lib.rs"]
             }])),
         );
-        assert!(outside
-            .blocker_codes
-            .contains(&super::BLOCKER_ATTEMPT_SCOPE_GUARD.to_string()));
+        assert!(
+            outside
+                .blocker_codes
+                .contains(&super::BLOCKER_ATTEMPT_SCOPE_GUARD.to_string())
+        );
 
         let missing_proof = admit_host_bridge_implementation_attempt(
             &request,
@@ -1393,9 +1397,11 @@ mod tests {
                 "changed_files": ["crates/vida/src/lib.rs"]
             }])),
         );
-        assert!(missing_proof
-            .blocker_codes
-            .contains(&super::BLOCKER_ATTEMPT_CANONICAL_EVIDENCE.to_string()));
+        assert!(
+            missing_proof
+                .blocker_codes
+                .contains(&super::BLOCKER_ATTEMPT_CANONICAL_EVIDENCE.to_string())
+        );
     }
 
     #[test]
@@ -1419,12 +1425,16 @@ mod tests {
         let admission = admit_host_bridge_implementation_attempt(&request, None);
 
         assert_eq!(admission.decision, "terminal_blocker");
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string()));
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string()));
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string())
+        );
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string())
+        );
     }
 
     #[test]

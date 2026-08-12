@@ -198,14 +198,14 @@ fn commit_destination(
 ) -> Result<PathBuf, PathPolicyError> {
     #[cfg(windows)]
     {
-        return parent
+        parent
             .canonicalize()
             .map(|parent| parent.join(leaf))
             .map_err(|source| PathPolicyError::Metadata {
                 kind,
                 path: destination.to_path_buf(),
                 source,
-            });
+            })
     }
     #[cfg(not(windows))]
     {
@@ -496,21 +496,18 @@ impl OwnedTempFile {
                 Some(temp_path) => {
                     debug_assert!(self.file.is_some());
                     drop(self.file.take());
-                    if restore_readonly {
-                        if let Err(source) = prepare_windows_readonly_replace(
+                    if restore_readonly
+                        && let Err(source) = prepare_windows_readonly_replace(
                             parent_dir,
                             destination,
                             temp_path,
                             absolute_destination,
-                        ) {
-                            return Err(AtomicRenameFailure { source, temp: self });
-                        }
+                        )
+                    {
+                        return Err(AtomicRenameFailure { source, temp: self });
                     }
                     if take_windows_move_failure_injection(absolute_destination) {
-                        Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "injected Windows atomic move failure",
-                        ))
+                        Err(io::Error::other("injected Windows atomic move failure"))
                     } else {
                         replace_file_windows(temp_path, absolute_destination)
                     }
@@ -520,7 +517,7 @@ impl OwnedTempFile {
                     "atomic replacement requires an absolute canonical parent",
                 )),
             };
-            return match result {
+            match result {
                 Ok(()) => Ok(()),
                 Err(source) => {
                     let source = if restore_readonly && temp_path.is_some() {
@@ -536,7 +533,7 @@ impl OwnedTempFile {
                     };
                     Err(AtomicRenameFailure { source, temp: self })
                 }
-            };
+            }
         }
 
         #[cfg(not(windows))]
@@ -657,8 +654,7 @@ fn set_windows_readonly_attribute(path: &Path, readonly: bool) -> io::Result<()>
         && path.to_string_lossy().contains("windows-attribute-failure")
         && INJECT_WINDOWS_ATTRIBUTE_FAILURE.swap(false, Ordering::SeqCst)
     {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "injected Windows attribute update failure",
         ));
     }
@@ -871,6 +867,7 @@ fn write_json<T: Serialize>(path: &NewStateOutputPath, value: &T) -> Result<(), 
 }
 
 #[cfg(test)]
+#[allow(clippy::permissions_set_readonly_false)]
 mod tests {
     use serde::Serialize;
     use std::path::PathBuf;
@@ -1206,9 +1203,6 @@ mod tests {
                 .readonly()
         );
         assert!(std::fs::metadata(&source).unwrap().permissions().readonly());
-        let mut source_permissions = std::fs::metadata(&source).unwrap().permissions();
-        source_permissions.set_readonly(false);
-        std::fs::set_permissions(&source, source_permissions).unwrap();
     }
 
     #[cfg(windows)]
@@ -1305,11 +1299,13 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
         let mut permissions = std::fs::metadata(&destination).unwrap().permissions();
         assert!(permissions.readonly());
-        assert!(!parent_dir
-            .symlink_metadata(&temp_name)
-            .unwrap()
-            .permissions()
-            .readonly());
+        assert!(
+            !parent_dir
+                .symlink_metadata(&temp_name)
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
         failure.temp.cleanup(&parent_dir);
         assert!(
             parent_dir
@@ -1349,14 +1345,16 @@ mod tests {
             Path::new("missing.bin"),
             &temporary,
             &absolute_destination,
-            io::Error::new(io::ErrorKind::Other, "original rollback error"),
+            io::Error::other("original rollback error"),
         );
 
         assert_eq!(error.to_string(), "original rollback error");
-        assert!(!std::fs::metadata(&temporary)
-            .unwrap()
-            .permissions()
-            .readonly());
+        assert!(
+            !std::fs::metadata(&temporary)
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1511,7 +1509,9 @@ mod tests {
 
         let error = atomic_replace_bounded(&destination, b"payload").unwrap_err();
 
-        assert!(matches!(error, PathPolicyError::NotRegularFile { path, .. } if path == destination));
+        assert!(
+            matches!(error, PathPolicyError::NotRegularFile { path, .. } if path == destination)
+        );
         assert!(destination.is_dir());
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     }
@@ -1523,12 +1523,9 @@ mod tests {
         let destination = root.join("result.bin");
         std::fs::write(&destination, b"unchanged").unwrap();
 
-        let error = atomic_replace_bounded_from_file(
-            &destination,
-            &source,
-            AtomicReplaceLimit::default(),
-        )
-        .unwrap_err();
+        let error =
+            atomic_replace_bounded_from_file(&destination, &source, AtomicReplaceLimit::default())
+                .unwrap_err();
 
         assert!(matches!(error, PathPolicyError::Metadata { path, .. } if path == source));
         assert_eq!(std::fs::read(&destination).unwrap(), b"unchanged");
@@ -1559,13 +1556,15 @@ mod tests {
             Err(PathPolicyError::TooLarge { path, max_bytes: 2, .. })
                 if path == Path::new("source.bin")
         ));
-        assert!(validate_atomic_replace_source_metadata(
-            &metadata,
-            ArtifactPathKind::GenericJson,
-            Path::new("source.bin"),
-            AtomicReplaceLimit::new(6),
-        )
-        .is_ok());
+        assert!(
+            validate_atomic_replace_source_metadata(
+                &metadata,
+                ArtifactPathKind::GenericJson,
+                Path::new("source.bin"),
+                AtomicReplaceLimit::new(6),
+            )
+            .is_ok()
+        );
 
         parent.create_dir("source-dir").unwrap();
         let directory = parent.symlink_metadata("source-dir").unwrap();

@@ -154,10 +154,10 @@ impl HostBridgeAdapterOperations {
                     ("invocation_mode", &contract.invocation_mode),
                     ("dispatch_transport", &contract.dispatch_transport),
                 ] {
-                    if let Some(expected) = value.get(field.0).and_then(Value::as_str) {
-                        if expected.trim() != field.1 {
-                            return Err(HostBridgeAdapterContractError::InvalidField(field.0));
-                        }
+                    if let Some(expected) = value.get(field.0).and_then(Value::as_str)
+                        && expected.trim() != field.1
+                    {
+                        return Err(HostBridgeAdapterContractError::InvalidField(field.0));
                     }
                 }
                 contract.receipt_mode = value
@@ -177,10 +177,10 @@ impl HostBridgeAdapterOperations {
             self.operations["spawn"].clone(),
             self.operations["wait"].clone(),
         ];
-        if self.dispose_policy == "configured" {
-            if let Some(dispose) = self.operations.get("dispose") {
-                sequence.push(dispose.clone());
-            }
+        if self.dispose_policy == "configured"
+            && let Some(dispose) = self.operations.get("dispose")
+        {
+            sequence.push(dispose.clone());
         }
         sequence
     }
@@ -337,7 +337,10 @@ mod tests {
         assert_eq!(contract.operations["spawn"], "host.spawn");
 
         let mut missing_wait = registry();
-        missing_wait["operations"].as_object_mut().unwrap().remove("wait");
+        missing_wait["operations"]
+            .as_object_mut()
+            .unwrap()
+            .remove("wait");
         missing_wait["operations"]
             .as_object_mut()
             .unwrap()

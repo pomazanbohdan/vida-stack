@@ -547,11 +547,7 @@ mod tests {
             } else {
                 "developer"
             };
-            let expected_next_proof = if flow_id == "runtime_defect_remediation" {
-                "implementation_receipt"
-            } else {
-                "implementation_receipt"
-            };
+            let expected_next_proof = "implementation_receipt";
             let next = state
                 .accept_next(&flow, expected_next_role, &flow.schema_hash)
                 .unwrap();

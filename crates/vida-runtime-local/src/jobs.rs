@@ -195,7 +195,10 @@ impl RetryBackoffPolicy {
         let max_attempts = if base_delay_millis == 0 {
             1
         } else {
-            max_wait_millis / base_delay_millis
+            match max_wait_millis.checked_div(base_delay_millis) {
+                Some(value) => value,
+                None => 0,
+            }
         };
         Self {
             max_attempts,
@@ -569,6 +572,7 @@ fn required_payload_str<'a>(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_worker_ack_command(
     command: &WorkerCommandSubmission,
     persisted: &RedbOutboxEffectRecord,

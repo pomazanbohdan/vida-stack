@@ -558,10 +558,7 @@ impl State<RunWorkflowMachine> for RunWorkflowState {
     }
 }
 
-impl<'sub> Superstate<RunWorkflowMachine> for RunWorkflowSuperstate
-where
-    Self: 'sub,
-{
+impl Superstate<RunWorkflowMachine> for RunWorkflowSuperstate {
     fn call_handler(
         &mut self,
         _: &mut RunWorkflowMachine,
@@ -757,15 +754,11 @@ mod tests {
         );
         assert_eq!(
             map_lifecycle_status("developer-dispatch-ready", "ready"),
-            StatusMappingDecision::State(RunWorkflowState::from_role_step(
-                RoleStep::planning()
-            ))
+            StatusMappingDecision::State(RunWorkflowState::from_role_step(RoleStep::planning()))
         );
         assert_eq!(
             map_lifecycle_status("closure-pending", "ready"),
-            StatusMappingDecision::State(RunWorkflowState::from_role_step(
-                RoleStep::closure()
-            ))
+            StatusMappingDecision::State(RunWorkflowState::from_role_step(RoleStep::closure()))
         );
         assert!(matches!(
             map_lifecycle_status("writer_active", "running"),

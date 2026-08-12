@@ -1,9 +1,9 @@
 //! Pure task update command policy helpers.
 
-pub fn task_update_semantics_arg<'a>(
-    value: Option<&'a str>,
+pub fn task_update_semantics_arg(
+    value: Option<&str>,
     clear: bool,
-) -> Result<Option<Option<&'a str>>, String> {
+) -> Result<Option<Option<&str>>, String> {
     if value.is_some() && clear {
         return Err(
             "Use either the value flag or the matching clear flag for execution semantics, not both."
@@ -17,10 +17,10 @@ pub fn task_update_semantics_arg<'a>(
     }
 }
 
-pub fn task_update_parent_arg<'a>(
-    value: Option<&'a str>,
+pub fn task_update_parent_arg(
+    value: Option<&str>,
     clear: bool,
-) -> Result<Option<Option<&'a str>>, String> {
+) -> Result<Option<Option<&str>>, String> {
     if value.is_some() && clear {
         return Err("Use either --parent-id or --clear-parent-id, not both.".to_string());
     }

@@ -63,6 +63,7 @@ fn inferred_gate_status(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_vida_gate_result_with_status(
     gate_id: &str,
     explicit_status: &str,
@@ -617,7 +618,7 @@ pub fn canonical_release1_operator_contract_status(value: &Value) -> Option<&'st
 }
 
 fn canonical_release1_blocker_candidates(value: &Value) -> Option<Vec<String>> {
-    canonical_blocker_candidates(value, |entries| canonical_default_blocker_codes(entries))
+    canonical_blocker_candidates(value, canonical_default_blocker_codes)
 }
 
 pub fn canonical_release1_blocker_code_entries(value: &Value) -> Option<Vec<String>> {
@@ -744,7 +745,7 @@ pub fn shared_operator_output_contract_parity_error(summary_json: &Value) -> Opt
     operator_output_contract_parity_error(
         &RELEASE1_OPERATOR_CONTRACT_SPEC,
         summary_json,
-        |entries| canonical_default_blocker_codes(entries),
+        canonical_default_blocker_codes,
     )
 }
 
@@ -812,8 +813,7 @@ mod tests {
         render_vida_gate_result, render_vida_gate_result_from_operator_contracts,
         render_vida_gate_result_with_status, replace_release1_operator_output_artifact_refs,
         shared_operator_has_canonical_blockers, shared_operator_has_canonical_next_actions,
-        shared_operator_has_canonical_status,
-        shared_operator_output_contract_parity_error,
+        shared_operator_has_canonical_status, shared_operator_output_contract_parity_error,
     };
     use serde_json::json;
 
@@ -1303,7 +1303,7 @@ mod tests {
     fn generic_blocker_normalization_falls_back_to_unsupported_code() {
         let normalized = normalize_blocker_codes(
             &["unknown_code".to_string()],
-            |entries| canonical_default_blocker_codes(entries),
+            canonical_default_blocker_codes,
             Some("unsupported_blocker_code".to_string()),
         );
         assert_eq!(normalized, vec!["unsupported_blocker_code".to_string()]);
@@ -1553,12 +1553,7 @@ mod tests {
     #[test]
     fn consistency_error_covers_all_status_and_array_boundaries() {
         let cases = [
-            (
-                "unknown",
-                vec![],
-                vec![],
-                "unsupported status",
-            ),
+            ("unknown", vec![], vec![], "unsupported status"),
             (
                 "pass",
                 vec!["migration_required".to_string()],
@@ -1591,12 +1586,9 @@ mod tests {
             ),
         ];
         for (status, blockers, next_actions, expected) in cases {
-            let error = release1_operator_contracts_consistency_error(
-                status,
-                &blockers,
-                &next_actions,
-            )
-            .expect("invalid contract shape should report an error");
+            let error =
+                release1_operator_contracts_consistency_error(status, &blockers, &next_actions)
+                    .expect("invalid contract shape should report an error");
             assert!(error.contains(expected), "{error}");
         }
         assert_eq!(
@@ -1714,17 +1706,22 @@ mod tests {
             &empty,
             &json!({"next_actions": ["next"]}),
         ));
-        assert!(!shared_operator_has_canonical_next_actions(&empty, &empty, &empty));
+        assert!(!shared_operator_has_canonical_next_actions(
+            &empty, &empty, &empty
+        ));
     }
 
     #[test]
     fn canonical_entry_helpers_reject_empty_non_string_and_duplicate_rows() {
         assert!(canonical_release1_blocker_code_entries(&json!([""])).is_none());
         assert!(canonical_release1_blocker_code_entries(&json!([1])).is_none());
-        assert!(canonical_release1_blocker_code_entries(
-            &json!(["migration_required", "migration_required"])
-        )
-        .is_none());
+        assert!(
+            canonical_release1_blocker_code_entries(&json!([
+                "migration_required",
+                "migration_required"
+            ]))
+            .is_none()
+        );
         assert!(canonical_next_action_entries(&json!("next")).is_none());
         assert!(canonical_next_action_entries(&json!([""])).is_none());
         assert!(canonical_next_action_entries(&json!([1])).is_none());

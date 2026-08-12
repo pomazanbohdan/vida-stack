@@ -460,8 +460,8 @@ impl RedbOperationalJournal {
             }
         }
         let mut seen_event_ids = std::collections::BTreeSet::new();
-        let mut expected_cursor = 1usize;
-        for record in &global_events {
+        for (index, record) in global_events.iter().enumerate() {
+            let expected_cursor = index + 1;
             let expected = VidaEventCursor(format!("global-{expected_cursor}"));
             if record.global_cursor != expected {
                 return Err(TaskflowStateError::Storage(format!(
@@ -475,7 +475,6 @@ impl RedbOperationalJournal {
                     record.event.event_id.0
                 )));
             }
-            expected_cursor += 1;
         }
 
         let append_idempotency: Vec<RedbAppendIdempotencyRecord> =
@@ -1970,22 +1969,25 @@ fn write_idempotency_lifecycle(
         .map(|existing| serde_json::from_slice::<JournalIdempotencyRecord>(existing.value()))
         .transpose()
         .map_err(storage_error)?;
-    if let Some(existing) = existing {
-        if existing.command_id != record.command_id {
-            let key = record.key.0.clone();
-            let lifecycle_payload = serde_json::to_vec(&JournalIdempotencyRecord {
-                key: record.key,
-                command_id: existing.command_id,
-                state: JournalIdempotencyState::Conflicted,
-                receipt_id: existing.receipt_id,
-                conflict_reason: Some("idempotency_payload_conflict: same idempotency key used by a different command".to_string()),
-            })
+    if let Some(existing) = existing
+        && existing.command_id != record.command_id
+    {
+        let key = record.key.0.clone();
+        let lifecycle_payload = serde_json::to_vec(&JournalIdempotencyRecord {
+            key: record.key,
+            command_id: existing.command_id,
+            state: JournalIdempotencyState::Conflicted,
+            receipt_id: existing.receipt_id,
+            conflict_reason: Some(
+                "idempotency_payload_conflict: same idempotency key used by a different command"
+                    .to_string(),
+            ),
+        })
+        .map_err(storage_error)?;
+        table
+            .insert(key.as_str(), lifecycle_payload.as_slice())
             .map_err(storage_error)?;
-            table
-                .insert(key.as_str(), lifecycle_payload.as_slice())
-                .map_err(storage_error)?;
-            return Err(TaskflowStateError::IdempotencyConflict(key));
-        }
+        return Err(TaskflowStateError::IdempotencyConflict(key));
     }
 
     let key = record.key.0.clone();
@@ -2050,9 +2052,9 @@ fn sha256_hex(input: &[u8]) -> String {
     let mut h = H0;
     let mut words = [0u32; 64];
     for chunk in message.chunks(64) {
-        for index in 0..16 {
+        for (index, word) in words.iter_mut().enumerate().take(16) {
             let offset = index * 4;
-            words[index] = u32::from_be_bytes([
+            *word = u32::from_be_bytes([
                 chunk[offset],
                 chunk[offset + 1],
                 chunk[offset + 2],
@@ -2273,6 +2275,22 @@ mod tests {
         fn supports_restart_recovery(&self) -> bool {
             true
         }
+
+        fn supports_checkpoint_recovery(&self) -> bool {
+            true
+        }
+
+        fn reopened_checkpoint(
+            &mut self,
+            projection_id: &VidaProjectionRef,
+        ) -> Result<Option<taskflow_contracts::VidaProjectionCheckpoint>, TaskflowStateError>
+        {
+            let path = self
+                .recovery_path
+                .as_ref()
+                .expect("checkpoint recovery requires the first committed journal");
+            RedbOperationalJournal::open(path)?.projection_checkpoint(projection_id)
+        }
     }
 
     #[test]
@@ -2284,6 +2302,7 @@ mod tests {
         assert_eq!(report.backend, "redb-compatibility");
         assert_eq!(report.checks.len(), 7);
         assert!(report.restart_recovered);
+        assert!(report.checkpoint_recovered);
         assert!(!report.partial_write_recovered);
     }
 

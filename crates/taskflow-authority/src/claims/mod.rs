@@ -9,6 +9,7 @@ pub const CLAIM_AGGREGATE_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_ACQUIRE_LEASE_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ClaimLeaseCommand {
     Acquire {
         request: OrchestratorClaimRequestInput,

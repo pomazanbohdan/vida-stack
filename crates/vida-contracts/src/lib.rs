@@ -879,6 +879,7 @@ fn project_ref_field() -> VidaOperationInputField {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn field(
     field_id: &str,
     payload_key: &str,
@@ -1473,6 +1474,7 @@ impl VidaExternalPayloadValidationError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum VidaExternalPayload {
     CommandEnvelope(VidaCommandEnvelope),
     DomainEventEnvelope(VidaDomainEventEnvelope),
@@ -3100,7 +3102,7 @@ mod tests {
     fn operation_catalog_exposes_authorization_metadata_for_external_clients() {
         for (spec, catalog) in mvp_operation_registry()
             .into_iter()
-            .zip(mvp_operation_catalog().into_iter())
+            .zip(mvp_operation_catalog())
         {
             assert_eq!(catalog.operation, spec.operation);
             assert_eq!(catalog.scope, spec.scope);

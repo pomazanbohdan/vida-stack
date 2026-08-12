@@ -21,3 +21,6 @@ proptest = "1.11.0"
 
 [target.'cfg(loom)'.dev-dependencies]
 loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(loom)"] }

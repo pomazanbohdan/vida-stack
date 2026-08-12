@@ -202,7 +202,6 @@ impl Timestamp {
     }
 }
 
-#[must_use]
 pub fn validate_task_id(id: &TaskId) -> Result<(), TaskflowCoreError> {
     TaskId::try_new(id.as_str()).map(|_| ())
 }

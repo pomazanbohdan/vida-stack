@@ -100,7 +100,6 @@ pub fn admit_task_lifecycle(
     }
 }
 
-#[must_use]
 pub fn lifecycle_status_from_str(status: &str) -> Result<TaskLifecycleStatus, String> {
     TaskLifecycleStatus::try_from(status).map_err(|error| {
         let _ = error;

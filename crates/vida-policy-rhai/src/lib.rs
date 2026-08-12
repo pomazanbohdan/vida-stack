@@ -282,7 +282,7 @@ fn dynamic_to_json(value: Dynamic, budget: &mut OutputBudget) -> Result<Value, P
         return Ok(Value::Number(value.into()));
     }
     if let Some(value) = value.clone().try_cast::<rhai::FLOAT>() {
-        let number = serde_json::Number::from_f64(value as f64)
+        let number = serde_json::Number::from_f64(value)
             .ok_or_else(|| PolicyError::UnsupportedValue("non-finite float".to_string()))?;
         budget.consume(number.to_string().len())?;
         return Ok(Value::Number(number));

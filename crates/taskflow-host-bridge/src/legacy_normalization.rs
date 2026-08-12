@@ -168,12 +168,8 @@ fn normalize_legacy_completion(
     let blocker_codes = legacy_blocker_codes(result);
     let blocker_evidence_present = legacy_blocker_evidence_present(result);
     let signals = legacy_tuple_signals(result);
-    let pass_signal = signals
-        .iter()
-        .any(|signal| *signal == LegacyTupleSignal::Pass);
-    let blocked_signal = signals
-        .iter()
-        .any(|signal| *signal == LegacyTupleSignal::Blocked)
+    let pass_signal = signals.contains(&LegacyTupleSignal::Pass);
+    let blocked_signal = signals.contains(&LegacyTupleSignal::Blocked)
         || !blocker_codes.is_empty()
         || string_field(result, "rework_target").is_some();
 

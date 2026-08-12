@@ -79,13 +79,13 @@ pub fn decide_scheduler_reservation_collision(
         if let (Some(left), Some(right)) = (
             request.conflict_domain.as_deref(),
             reservation.conflict_domain.as_deref(),
-        ) {
-            if !left.trim().is_empty() && left == right {
-                return Some(format!(
-                    "scheduler_conflict_domain_reserved:{}:{}",
-                    left, reservation.reservation_id
-                ));
-            }
+        ) && !left.trim().is_empty()
+            && left == right
+        {
+            return Some(format!(
+                "scheduler_conflict_domain_reserved:{}:{}",
+                left, reservation.reservation_id
+            ));
         }
     }
     None
@@ -98,7 +98,8 @@ pub fn normalize_scheduler_reservation_blocker_codes(blocker_codes: &[String]) -
         .iter()
         .map(|code| code.trim())
         .filter(|code| !code.is_empty())
-        .filter_map(|code| seen.insert(code.to_string()).then(|| code.to_string()))
+        .filter(|code| seen.insert((*code).to_string()))
+        .map(str::to_string)
         .collect()
 }
 
@@ -206,10 +207,10 @@ pub fn decide_orchestrator_claim_conflict(
     if !claim_modes_conflict(&request.lease_mode, &claim.lease_mode) {
         return None;
     }
-    if let (Some(req_pid), Some(claim_pid)) = (request.process_id, claim.process_id) {
-        if req_pid == claim_pid {
-            return Some(claim_conflict_payload("process", claim, None));
-        }
+    if let (Some(req_pid), Some(claim_pid)) = (request.process_id, claim.process_id)
+        && req_pid == claim_pid
+    {
+        return Some(claim_conflict_payload("process", claim, None));
     }
     if request.task_id.is_some() && request.task_id == claim.task_id {
         return Some(claim_conflict_payload("task", claim, None));
@@ -259,10 +260,10 @@ pub fn decide_orchestrator_claim_conflict(
     if let (Some(left), Some(right)) = (
         request.conflict_domain.as_deref(),
         claim.conflict_domain.as_deref(),
-    ) {
-        if !left.trim().is_empty() && left == right {
-            return Some(claim_conflict_payload("conflict_domain", claim, None));
-        }
+    ) && !left.trim().is_empty()
+        && left == right
+    {
+        return Some(claim_conflict_payload("conflict_domain", claim, None));
     }
     None
 }

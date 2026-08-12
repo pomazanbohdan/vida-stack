@@ -1,5 +1,5 @@
 use serde::Serialize;
-use taskflow_authority::claims::{decide_claim_lease, ClaimLeaseCommand};
+use taskflow_authority::claims::{ClaimLeaseCommand, decide_claim_lease};
 use taskflow_authority::scheduler_claim::{
     OrchestratorClaimActiveInput, OrchestratorClaimRequestInput,
 };
@@ -500,7 +500,7 @@ fn budget_comparison() -> BenchmarkComparison {
 
 fn elapsed_ms_ceil(started: std::time::Instant) -> u64 {
     let nanos = started.elapsed().as_nanos();
-    ((nanos + 999_999) / 1_000_000).max(1) as u64
+    nanos.div_ceil(1_000_000).max(1) as u64
 }
 
 fn benchmark_append_request(iteration: usize) -> JournalAppendRequest {
@@ -676,9 +676,11 @@ mod tests {
     fn outbox_lease_fault_is_observable_even_when_queue_is_empty() {
         let mut journal = FaultInjectingJournal::new(InMemoryOperationalJournal::default());
         journal.arm(FaultPoint::StaleLease);
-        assert!(journal
-            .claim_outbox_batch_checked("semantic-consumer", 1)
-            .is_err());
+        assert!(
+            journal
+                .claim_outbox_batch_checked("semantic-consumer", 1)
+                .is_err()
+        );
         assert_eq!(journal.last_fault(), Some(FaultPoint::StaleLease));
     }
 

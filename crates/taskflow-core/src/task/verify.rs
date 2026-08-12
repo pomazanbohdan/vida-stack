@@ -138,6 +138,7 @@ pub fn canonical_task_proof_result(value: &str) -> Option<&'static str> {
 }
 
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn append_task_proof_evidence_note_with_timestamp(
     existing_notes: Option<&str>,
     proof_target: &str,
@@ -312,7 +313,7 @@ pub fn structured_task_proof_evidence_match(
     target: &str,
 ) -> Option<TaskProofEvidenceMatch> {
     let status = structured_task_proof_evidence_status(notes, target)?;
-    (status.result == "pass").then(|| TaskProofEvidenceMatch {
+    (status.result == "pass").then_some(TaskProofEvidenceMatch {
         evidence_source: status.evidence_source,
         evidence_detail: status.evidence_detail,
         artifact_status: status.artifact_status,

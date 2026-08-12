@@ -178,16 +178,11 @@ impl Default for RunnerLimits {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 enum Presence<T> {
+    #[default]
     Missing,
     Present(T),
-}
-
-impl<T> Default for Presence<T> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 fn deserialize_presence<'de, D, T>(deserializer: D) -> Result<Presence<T>, D::Error>

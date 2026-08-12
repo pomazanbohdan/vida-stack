@@ -294,10 +294,9 @@ impl HostBridgeReceiptIdentityV1 {
             .receipt
             .get("dispatch_packet_path")
             .and_then(Value::as_str)
+            && !crate::host_bridge_packet_paths_equivalent(&self.packet_path, packet_path)
         {
-            if !crate::host_bridge_packet_paths_equivalent(&self.packet_path, packet_path) {
-                return Err("host_bridge_receipt_identity_core_mismatch:packet_path".to_string());
-            }
+            return Err("host_bridge_receipt_identity_core_mismatch:packet_path".to_string());
         }
         Ok(())
     }
@@ -583,13 +582,13 @@ pub fn validate_dispatch_receipt_binding(
     }
     let request_identity = request_identity_projection(&input.request);
     let mut receipt_identity = receipt_identity_projection(receipt);
-    if input.allow_active_packet_target_override {
-        if let Some(identity) = receipt_identity.as_object_mut() {
-            identity.insert(
-                "dispatch_target".to_string(),
-                Value::String(input.request.dispatch_target.clone()),
-            );
-        }
+    if input.allow_active_packet_target_override
+        && let Some(identity) = receipt_identity.as_object_mut()
+    {
+        identity.insert(
+            "dispatch_target".to_string(),
+            Value::String(input.request.dispatch_target.clone()),
+        );
     }
     blockers.extend(crate::host_bridge_dispatch_identity_blockers(
         &request_identity,

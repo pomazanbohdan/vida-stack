@@ -175,7 +175,10 @@ impl PolicyBundleCache {
                 ast,
             },
         );
-        Ok((self.bundles.get(&identity).expect("inserted bundle"), status))
+        Ok((
+            self.bundles.get(&identity).expect("inserted bundle"),
+            status,
+        ))
     }
 
     pub fn compile_count(&self) -> usize {

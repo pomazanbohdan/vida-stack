@@ -444,6 +444,7 @@ pub struct PinnedResumeDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)]
 pub enum PolicyDecision {
     #[serde(rename = "authority")]
     Authority(AuthorityDecision),
