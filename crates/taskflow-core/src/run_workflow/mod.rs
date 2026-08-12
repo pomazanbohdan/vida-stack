@@ -732,6 +732,16 @@ mod tests {
     }
 
     #[test]
+    fn status_mapping_rejects_empty_lifecycle_tokens_fail_closed() {
+        assert_eq!(
+            map_lifecycle_status("   ", "ready"),
+            StatusMappingDecision::Blocked {
+                blocker_code: "status_mapping_unknown"
+            }
+        );
+    }
+
+    #[test]
     fn aggregate_actions_emit_effect_intents_without_io_payloads() {
         let mut aggregate = RunWorkflowAggregate::new("run-020", "ldr-020");
         let event = aggregate.handle(RunWorkflowCommand::Start {
