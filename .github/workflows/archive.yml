@@ -70,6 +70,34 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: tools/verify-rust-toolchain/go.mod
+          cache: false
+
+      - name: Build and verify Rust toolchain Go binary
+        shell: bash
+        working-directory: tools/verify-rust-toolchain
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/verify-rust-toolchain"
+          go build -trimpath -o "$binary" .
+          if [[ -f "${binary}.exe" ]]; then
+            binary="${binary}.exe"
+          fi
+          VIDA_REPO_ROOT="$GITHUB_WORKSPACE" "$binary" --minimum-version 1.97.1 --json > "$RUNNER_TEMP/verify-rust-toolchain.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "verify-rust-toolchain.json").read_text(encoding="utf-8"))
+          assert result["status"] == "pass", result
+          assert result["required_minimum"] == "1.97.1", result
+          assert result["package_count"] > 0, result
+          PY
+
       - name: Build release artifacts
         shell: bash
         run: |

@@ -2532,6 +2532,59 @@ exit 3
         } else {
             Add-SkippedRecord "bash-rust-toolchain-parse" "bash not found; skipped Rust toolchain verifier syntax check"
         }
+
+        $goName = if ([string]::IsNullOrWhiteSpace($env:GO)) { "go" } else { $env:GO }
+        $goCommand = Get-Command $goName -ErrorAction SilentlyContinue
+        if ($null -eq $goCommand) {
+            throw "go is required for the Rust toolchain verifier build and binary proof."
+        }
+        $goModuleDir = Join-Path $RootDir "tools\verify-rust-toolchain"
+        $goBinary = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-verify-rust-toolchain-{0}.exe" -f [guid]::NewGuid().ToString("N"))
+        try {
+            Invoke-Timed "go-rust-toolchain-build" @(
+                $goCommand.Source,
+                "build",
+                "-trimpath",
+                "-o",
+                $goBinary,
+                "."
+            ) -WorkingDirectory $goModuleDir
+            Invoke-Timed "go-rust-toolchain-binary-text-smoke" @(
+                $goBinary,
+                "--root",
+                $RootDir,
+                "--minimum-version",
+                "1.97.1",
+                "--format",
+                "text",
+                "--text-style",
+                "powershell"
+            )
+            $textSmokeRecord = $Records[$Records.Count - 1]
+            $textSmokeOutput = Get-Content -LiteralPath $textSmokeRecord.artifact_refs[0] -Encoding UTF8 -Raw
+            if ($textSmokeOutput -notmatch '\[rust-toolchain\] pass:') {
+                throw "Go Rust toolchain binary text smoke did not emit a pass marker."
+            }
+            Invoke-Timed "go-rust-toolchain-binary-json-smoke" @(
+                $goBinary,
+                "--root",
+                $RootDir,
+                "--minimum-version",
+                "1.97.1",
+                "--json"
+            )
+            $jsonSmokeRecord = $Records[$Records.Count - 1]
+            try {
+                $jsonSmokeOutput = Get-Content -LiteralPath $jsonSmokeRecord.artifact_refs[0] -Encoding UTF8 -Raw | ConvertFrom-Json
+            } catch {
+                throw "Go Rust toolchain binary JSON smoke emitted invalid JSON."
+            }
+            if ($jsonSmokeOutput.status -ne "pass" -or $jsonSmokeOutput.required_minimum -ne "1.97.1" -or $jsonSmokeOutput.package_count -le 0) {
+                throw "Go Rust toolchain binary JSON smoke returned an invalid pass envelope."
+            }
+        } finally {
+            Remove-Item -LiteralPath $goBinary -Force -ErrorAction SilentlyContinue
+        }
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
         Invoke-ChangedRustfmtCheck

@@ -165,9 +165,13 @@ dependency, proof, release-install, or monorepo optimization work:
 ```
 
 The repository pin is `rust-toolchain.toml` with exact channel `1.97.1`. Every
-Cargo package inherits `rust-version = "1.97.1"`, and the project Cargo/release
-gates run `scripts/verify-rust-toolchain.ps1` or
-`scripts/verify-rust-toolchain.sh`, which fail closed on an older compiler.
+Cargo package inherits `rust-version = "1.97.1"`. The canonical verifier is
+the isolated Go module
+[`tools/verify-rust-toolchain`](../../tools/verify-rust-toolchain/main.go);
+`scripts/verify-rust-toolchain.ps1` and
+`scripts/verify-rust-toolchain.sh` remain compatibility wrappers. The
+`script-check` gate must build the module with `go build -trimpath` and run the
+produced binary in both text and JSON modes before accepting the script surface.
 
 4. `cargo`
    - canonical executable: `C:\Users\pomaz\.cargo\bin\cargo.exe`,
