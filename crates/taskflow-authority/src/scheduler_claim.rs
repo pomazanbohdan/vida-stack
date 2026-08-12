@@ -297,7 +297,7 @@ mod tests {
         OrchestratorClaimActiveInput, OrchestratorClaimRequestInput,
         SchedulerReservationActiveInput, SchedulerReservationRequestInput, claim_paths_intersect,
         decide_orchestrator_claim_conflict, decide_scheduler_reservation_collision,
-        normalize_scheduler_reservation_blocker_codes,
+        normalize_claim_path, normalize_scheduler_reservation_blocker_codes,
     };
 
     #[test]
@@ -454,6 +454,20 @@ mod tests {
             "crates/vida/src2",
             "crates/vida/src/taskflow_proxy.rs"
         ));
+    }
+
+    #[test]
+    fn claim_paths_normalize_empty_segments_and_claim_expiry() {
+        assert_eq!(
+            normalize_claim_path(" .\\crates//vida/../taskflow/src/./lib.rs "),
+            Some("crates/taskflow/src/lib.rs".to_string())
+        );
+        assert_eq!(normalize_claim_path("foo/../"), None);
+        assert_eq!(normalize_claim_path(" /./ "), None);
+
+        let claim = claim("claim-1", "exclusive", None, "task-1", "run-1", "domain-a");
+        assert!(super::claim_is_expired(&claim, "2026-06-23T00:00:00Z"));
+        assert!(!super::claim_is_expired(&claim, "2026-06-21T00:00:00Z"));
     }
 
     fn claim_request(

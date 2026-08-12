@@ -385,4 +385,32 @@ mod tests {
         let error = normalize_task_attempt_status("completed").expect_err("completed is legacy");
         assert!(error.contains("expected one of submitted, running, produced"));
     }
+
+    #[test]
+    fn task_attempt_status_normalizes_and_latest_attempt_breaks_timestamp_ties_by_id() {
+        assert_eq!(
+            normalize_task_attempt_status("  ACCEPTED ").expect("accepted status"),
+            "accepted"
+        );
+        let decision = summarize_task_stage_attempts(
+            &[
+                TaskAttemptSummaryInput {
+                    attempt_id: "attempt-a".to_string(),
+                    status: "accepted".to_string(),
+                    artifact_refs: Vec::new(),
+                    consolidation_receipt_id: None,
+                    updated_at: "2026-06-05T00:00:00Z".to_string(),
+                },
+                TaskAttemptSummaryInput {
+                    attempt_id: "attempt-b".to_string(),
+                    status: "accepted".to_string(),
+                    artifact_refs: Vec::new(),
+                    consolidation_receipt_id: None,
+                    updated_at: "2026-06-05T00:00:00Z".to_string(),
+                },
+            ],
+            None,
+        );
+        assert_eq!(decision.latest_attempt_id.as_deref(), Some("attempt-b"));
+    }
 }

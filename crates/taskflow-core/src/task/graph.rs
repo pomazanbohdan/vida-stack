@@ -451,8 +451,9 @@ pub fn analyze_directed_dependencies<'a>(
 mod tests {
     use super::{
         TaskGraphDependencyRow, TaskGraphIssue, TaskGraphRow, analyze_directed_dependencies,
-        validate_task_graph_rows,
+        validate_task_graph_rows, validate_task_graph_rows_for_mutation,
     };
+    use std::collections::BTreeSet;
 
     fn row(id: &str, status: &str, issue_type: &str) -> TaskGraphRow {
         let canonical_issue_type = issue_type.trim().to_ascii_lowercase();
@@ -551,6 +552,32 @@ mod tests {
 
         assert!(issue_types(&issues).contains(&"parent_child_cycle"));
         assert!(issue_types(&issues).contains(&"dependency_cycle"));
+    }
+
+    #[test]
+    fn task_graph_mutation_validation_keeps_new_touched_issues_only() {
+        let untouched = row("untouched", "open", "task");
+        let mut before_touched = row("touched", "open", "task");
+        before_touched.dependencies = vec![parent_child("touched", "parent")];
+        let before = vec![untouched, before_touched.clone()];
+
+        let mut after_touched = before_touched;
+        after_touched
+            .dependencies
+            .push(blocks("touched", "touched"));
+        let mut touched = BTreeSet::new();
+        touched.insert("touched".to_string());
+
+        let issues = validate_task_graph_rows_for_mutation(
+            before,
+            vec![row("untouched", "open", "task"), after_touched],
+            &touched,
+        );
+
+        assert!(issues.iter().any(|issue| issue.issue_type == "self_dependency"));
+        assert!(issues
+            .iter()
+            .all(|issue| issue.issue_id == "touched" || issue.depends_on_id.as_deref() == Some("touched")));
     }
 
     #[test]
