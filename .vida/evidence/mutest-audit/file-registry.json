@@ -1,19 +1,19 @@
 {
   "schema_version": 3,
   "index_role": "mutation_wave_orchestrator",
-  "registry_revision": 1625,
-  "updated_at": "2026-08-12T01:20:18.0772358Z",
+  "registry_revision": 1630,
+  "updated_at": "2026-08-12T01:24:30.5582319Z",
   "repo_root": "C:\\project\\vida-stack",
-  "run_id": "mutest-20260812-041646-d0177590",
-  "last_wave_id": "wave-mutest-20260812-041646-d0177590",
+  "run_id": "mutest-20260812-042337-9a3430e7",
+  "last_wave_id": "wave-mutest-20260812-042337-9a3430e7",
   "snapshot_mode": "working_tree",
-  "snapshot_index_tree": "3109fc2b770397691906790149fccab28242461a",
+  "snapshot_index_tree": "f4196b0a83963ea17e8ab305bfd558373d98e787",
   "config_hash": "129221f43ebe0a01287545fe5903ed85ba060ab42211047dc2fa5812f280eba9",
   "threshold_percent": 90.0,
   "full_rescan": true,
   "diff_scan": {
-    "candidates": 10,
-    "queued": 10,
+    "candidates": 2,
+    "queued": 2,
     "resumed": 0,
     "deleted": 0,
     "queue_policy": "one-file-workers-new-or-hash-changed-or-pending-flags"
@@ -3147,8 +3147,8 @@
     {
       "wave_id": "wave-mutest-20260812-041646-d0177590",
       "run_id": "mutest-20260812-041646-d0177590",
-      "started_at": "2026-08-12T01:16:48.3868180Z",
-      "completed_at": "2026-08-12T01:20:16.5677320Z",
+      "started_at": "2026-08-12T01:16:48.386818Z",
+      "completed_at": "2026-08-12T01:20:16.567732Z",
       "status": "completed_with_followups",
       "counts": {
         "queued": 0,
@@ -3163,6 +3163,26 @@
       },
       "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-041646-d0177590",
       "registry_revision": 1624
+    },
+    {
+      "wave_id": "wave-mutest-20260812-042337-9a3430e7",
+      "run_id": "mutest-20260812-042337-9a3430e7",
+      "started_at": "2026-08-12T01:23:39.3235720Z",
+      "completed_at": "2026-08-12T01:24:28.8066574Z",
+      "status": "completed_with_followups",
+      "counts": {
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "needs_tests": 2,
+        "needs_rerun": 0,
+        "needs_rescan": 0,
+        "deleted_from_snapshot": 0
+      },
+      "artifact_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-042337-9a3430e7",
+      "registry_revision": 1629
     }
   ],
   "files": [
@@ -3433,7 +3453,7 @@
       "wave_updated_at": "2026-08-12T01:20:16.4485256Z",
       "wave_count": 7,
       "test_update_status": "not_needed",
-      "updated_at": "2026-08-12T01:20:16.4407450Z"
+      "updated_at": "2026-08-12T01:20:16.440745Z"
     },
     {
       "path": "crates/docflow-contracts/src/lib.rs",
@@ -4925,7 +4945,7 @@
       "wave_updated_at": "2026-08-12T01:20:16.4645971Z",
       "wave_count": 11,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-12T01:20:16.4590340Z"
+      "updated_at": "2026-08-12T01:20:16.459034Z"
     },
     {
       "path": "crates/taskflow-authority/src/exception_takeover.rs",
@@ -5056,7 +5076,7 @@
       "scan_count": 9,
       "last_wave_id": "wave-mutest-20260812-041646-d0177590",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-12T01:20:16.4672460Z",
+      "wave_updated_at": "2026-08-12T01:20:16.467246Z",
       "wave_count": 9,
       "test_update_status": "not_requested",
       "updated_at": "2026-08-12T01:20:16.4648834Z"
@@ -9512,7 +9532,7 @@
           "type": "survived_mutants",
           "path": "crates/vida-pi-agent/src/lib.rs",
           "package": "vida-pi-agent",
-          "wave_id": "wave-mutest-20260812-041646-d0177590",
+          "wave_id": "wave-mutest-20260812-042337-9a3430e7",
           "observed_hash": "b624985a5ba8642bec4660274765e451579a0a6f8c8fb090840e79e2d2ccf2b2",
           "mutation_identity": "file-level",
           "score_percent": 56.757,
@@ -9534,17 +9554,17 @@
       "blocker_reason": null,
       "next_action": null,
       "last_scan_hash": "b624985a5ba8642bec4660274765e451579a0a6f8c8fb090840e79e2d2ccf2b2",
-      "last_scan_run_id": "mutest-20260812-041646-d0177590",
-      "snapshot_index_tree": "3109fc2b770397691906790149fccab28242461a",
+      "last_scan_run_id": "mutest-20260812-042337-9a3430e7",
+      "snapshot_index_tree": "f4196b0a83963ea17e8ab305bfd558373d98e787",
       "config_hash": "129221f43ebe0a01287545fe5903ed85ba060ab42211047dc2fa5812f280eba9",
       "resume_source": "queued",
-      "scan_count": 3,
-      "last_wave_id": "wave-mutest-20260812-041646-d0177590",
+      "scan_count": 4,
+      "last_wave_id": "wave-mutest-20260812-042337-9a3430e7",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-12T01:20:16.4739867Z",
-      "wave_count": 3,
+      "wave_updated_at": "2026-08-12T01:24:28.7746273Z",
+      "wave_count": 4,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-12T01:20:16.4724546Z"
+      "updated_at": "2026-08-12T01:24:28.7636562Z"
     },
     {
       "path": "crates/vida-pi-agent/src/main.rs",
@@ -9657,7 +9677,7 @@
       "wave_updated_at": "2026-08-12T01:20:16.4759935Z",
       "wave_count": 3,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-12T01:20:16.4741850Z"
+      "updated_at": "2026-08-12T01:20:16.474185Z"
     },
     {
       "path": "crates/vida-policy-rhai/src/bundle.rs",
@@ -10460,7 +10480,7 @@
           "type": "survived_mutants",
           "path": "crates/vida-test-support/src/model/snapshot_authority.rs",
           "package": "vida-test-support",
-          "wave_id": "wave-mutest-20260812-041646-d0177590",
+          "wave_id": "wave-mutest-20260812-042337-9a3430e7",
           "observed_hash": "ef60b123a0041aed9d9ee68d6550e0817ccf9f56538a948a107c39608e5a9864",
           "mutation_identity": "file-level",
           "score_percent": 88.889,
@@ -10482,17 +10502,17 @@
       "blocker_reason": null,
       "next_action": null,
       "last_scan_hash": "ef60b123a0041aed9d9ee68d6550e0817ccf9f56538a948a107c39608e5a9864",
-      "last_scan_run_id": "mutest-20260812-041646-d0177590",
-      "snapshot_index_tree": "3109fc2b770397691906790149fccab28242461a",
+      "last_scan_run_id": "mutest-20260812-042337-9a3430e7",
+      "snapshot_index_tree": "f4196b0a83963ea17e8ab305bfd558373d98e787",
       "config_hash": "129221f43ebe0a01287545fe5903ed85ba060ab42211047dc2fa5812f280eba9",
       "resume_source": "queued",
-      "scan_count": 4,
-      "last_wave_id": "wave-mutest-20260812-041646-d0177590",
+      "scan_count": 5,
+      "last_wave_id": "wave-mutest-20260812-042337-9a3430e7",
       "wave_status": "needs_tests",
-      "wave_updated_at": "2026-08-12T01:20:16.4851372Z",
-      "wave_count": 4,
+      "wave_updated_at": "2026-08-12T01:24:28.7774132Z",
+      "wave_count": 5,
       "test_update_status": "not_requested",
-      "updated_at": "2026-08-12T01:20:16.4781607Z"
+      "updated_at": "2026-08-12T01:24:28.7748127Z"
     },
     {
       "path": "crates/vida-test-support/src/shadow_diff/mod.rs",
@@ -20240,16 +20260,16 @@
     "crates/vida/src/team_flow_state_machine.rs"
   ],
   "needs_rescan": [],
-  "last_scan_run_id": "mutest-20260812-041646-d0177590",
-  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-041646-d0177590\\defect-remediation.json",
+  "last_scan_run_id": "mutest-20260812-042337-9a3430e7",
+  "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-042337-9a3430e7\\defect-remediation.json",
   "summary": {
-    "run_id": "mutest-20260812-041646-d0177590",
-    "wave_id": "wave-mutest-20260812-041646-d0177590",
+    "run_id": "mutest-20260812-042337-9a3430e7",
+    "wave_id": "wave-mutest-20260812-042337-9a3430e7",
     "status": "completed_with_followups",
-    "mutation_score": 0.7,
-    "generated": 432,
-    "evaluated": 290,
-    "killed": 203,
+    "mutation_score": 0.649194,
+    "generated": 248,
+    "evaluated": 248,
+    "killed": 161,
     "survived": 87,
     "timeout": 0,
     "compile_error": 0,
@@ -20260,12 +20280,12 @@
     "files_timeout": 0,
     "files_needs_rerun": 61,
     "files_needs_rescan": 0,
-    "defects": 9,
+    "defects": 2,
     "defect_counts": {
       "survived_mutants": 2,
-      "mutation_compiler_error": 3,
+      "mutation_compiler_error": 0,
       "mutation_timeout": 0,
-      "mutation_no_evidence": 4,
+      "mutation_no_evidence": 0,
       "no_coverage": 0
     },
     "active_defects": 227,
@@ -20275,9 +20295,9 @@
       "survived_mutants": 28
     },
     "active_defect_paths": 227,
-    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-041646-d0177590",
-    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-041646-d0177590\\parallel-report.json",
-    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-041646-d0177590\\defect-remediation.json"
+    "evidence_root": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-042337-9a3430e7",
+    "report_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-042337-9a3430e7\\parallel-report.json",
+    "defect_protocol_path": "C:\\project\\vida-stack\\.vida\\evidence\\mutest-audit\\mutest-20260812-042337-9a3430e7\\defect-remediation.json"
   },
   "loc_policy": {
     "loc": "non_empty_source_lines",
