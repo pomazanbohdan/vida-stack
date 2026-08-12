@@ -56,6 +56,13 @@ pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 
 
 The project-owned script surface is the reusable operator contract. Select the smallest mode that proves the current task:
 
+The canonical implementation and maintenance contract for reusable validators,
+Go modules, Windows environment resolution, compiled-binary proof, and
+compatibility-wrapper deletion is
+docs/process/project-script-authoring-master.md. This runbook owns the broader
+runtime-development inventory and proof-mode ladder; it does not duplicate the
+script-authoring master.
+
 | Mode | Use | Required boundary |
 | --- | --- | --- |
 | `script-check` | Docs/script changes, syntax, diff, runtime-boundary, and no-Cargo proof | Run first for this document family; preserve JSON artifact refs. |

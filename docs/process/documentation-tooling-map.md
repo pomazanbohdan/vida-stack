@@ -33,6 +33,9 @@ This map covers project-facing documentation tooling for the active `vida-stack`
    - canonical Rust, WSL semantic-tool deployment, Kani compatibility, and
      bootstrap reproduction runbook
 
+10. `docs/process/project-script-authoring-master.md`
+   - canonical script-authoring, Go-tool, environment, compiled-binary proof, wrapper-deletion, and bootstrap-registration owner
+
 ## Read / Status Commands
 
 1. `overview [--profile <name>]`
@@ -109,6 +112,9 @@ Read this map when:
 8. the task installs, upgrades, or reproduces the pinned Rust toolchain or
    semantic proof tools used by this repository.
 
+9. the task creates, migrates, deletes, or documents a project script and needs
+   the canonical Go/build/environment contract.
+
 ## Operational Rule
 
 1. perform diff edits first and run exactly one `finalize-edit` afterward for one logical document edit batch,
@@ -138,6 +144,9 @@ Read this map when:
 23. when a session creates or updates a skill-learning runtime protocol, register it in `docs/process/index.md`, `docs/project-root-map.md`, and `AGENTS.sidecar.md`, and preserve links to the original research or implementation references that motivated the protocol.
 24. when a session creates or compresses a protocol/instruction document, apply `docs/product/spec/protocol-authoring-and-token-economy-law.md`, record the token-budget posture, and update bootstrap-visible maps when the artifact can affect initialization or agent instruction loading.
 25. source DocFlow validation enforces the protocol-authoring gate for the canonical law itself, opt-in artifacts with `protocol_authoring_gate: enforced`, and protocol/instruction/bootstrap docs created or revised on or after 2026-07-03; installed runtime enforcement depends on the normal release/install path.
+26. when a script document changes bootstrap-visible authoring rules, register the
+    master at `AGENTS.sidecar.md`, `docs/project-root-map.md`,
+    `docs/process/index.md`, and this tooling map in the same bounded batch.
 
 ## Boundary Rule
 

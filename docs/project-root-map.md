@@ -62,6 +62,9 @@ This map does not cover extracted secondary bundles by default.
 22. `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
     - canonical Rust, WSL semantic-tool deployment, Kani compatibility, manual-proof, and agent-bootstrap reproduction runbook
 
+23. `docs/process/project-script-authoring-master.md`
+    - single source of truth for Go-first project scripts, environment resolution, compiled-binary proof, wrapper deletion, and bootstrap-visible maintenance
+
 ## Activation Triggers
 
 Read this map when:
@@ -121,6 +124,9 @@ Do not use this map as the default route for extracted bundles unless the task e
 
 20. Rust toolchain, semantic-tool installation, Kani compatibility, fuzz/Loom/Miri deployment, or proof reproduction:
     - continue to docs/process/rust-and-semantic-tooling-reproducibility-runbook.md
+
+21. Script authoring, Go-tool migration, wrapper deletion, binary proof, or script environment questions:
+    - continue to `docs/process/project-script-authoring-master.md`
 
 ## Boundary Rule
 

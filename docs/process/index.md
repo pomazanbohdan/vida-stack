@@ -101,6 +101,9 @@ Canonical entrypoints:
 42. `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
     - canonical Rust, WSL semantic-tool deployment, Kani compatibility, manual-proof, and agent-bootstrap reproduction runbook
 
+43. `docs/process/project-script-authoring-master.md`
+    - canonical Go-first script-authoring, environment, binary-proof, wrapper-deletion, and bootstrap-maintenance contract
+
 -----
 artifact_path: process/index
 artifact_type: process_doc

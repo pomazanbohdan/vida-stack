@@ -47,7 +47,14 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
-          pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-host-bridge-capability-neutrality.ps1 -Json
+          $binary = Join-Path $env:RUNNER_TEMP 'vida-check-host-bridge-capability-neutrality.exe'
+          try {
+            go build -trimpath -o $binary ./tools/check-host-bridge-capability-neutrality
+            & $binary --root $pwd --json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Run formatting and compile checks
         shell: pwsh

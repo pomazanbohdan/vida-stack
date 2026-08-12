@@ -51,6 +51,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
     - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 18. Rust and semantic tooling reproducibility runbook:
    - `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
+19. Project script authoring master:
+    - `docs/process/project-script-authoring-master.md`
 
 ## Bootstrap Read Path
 
@@ -114,6 +116,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 30. For Rust toolchain installation, WSL semantic tools, Kani compatibility, fuzz/Loom/Miri deployment, or reproducible semantic proof setup, continue early to:
    - `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
 
+31. For creating, migrating, deleting, building, installing, invoking, or proving project scripts, continue early to:
+    - `docs/process/project-script-authoring-master.md`
 ## Canonical Code-Search Routing
 
 1. Use `ccc` for semantic discovery and ranked concept search after `ccc init` and index-freshness checks; refresh or initialize the index when needed.
@@ -129,7 +133,7 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `rg --files scripts | Sort-Object`
 2. Run the first no-Cargo help surface before choosing a proof mode:
    - `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Help`
-3. Use `docs/process/vida-runtime-development-environment.md` as the canonical script inventory and mode-selection table, and use `docs/process/command-timing-and-gate-optimization-protocol.md` for timing, output, and gate-admission rules.
+3. Use `docs/process/project-script-authoring-master.md` as the canonical script-authoring, Go-tool, environment, and compiled-binary proof contract; use `docs/process/vida-runtime-development-environment.md` for the broader script inventory and mode-selection table; use `docs/process/command-timing-and-gate-optimization-protocol.md` for timing, output, and gate-admission rules.
 4. Use the canonical ladder: `script-check` for docs/scripts, `quick` for compile-aware source proof, `focused-nextest` for one bounded test filter, `package-nextest`/`workspace-nextest` for broader Rust proof, `doc-test` for Rust docs, `build-debug`/`runtime-smoke` for debug runtime proof, and `release-package`/`release-install` only for package or installed-runtime acceptance.
 5. On Windows, route Cargo/MSVC work through `scripts/vida-cargo-msvc.ps1`; it owns `scripts/vida-windows-env.ps1`, MSVC/tool resolution, and PowerShell-to-Cargo test-argument forwarding.
 6. Prefer `-Json`, help, parser checks, dry-run or `-SkipBuild`/explicit artifact-path options, `-Mode target-dir-policy -Json`, and artifact references that preserve stdout/stderr. Never hide failures, bypass ownership/safety checks, or run concurrent Cargo gates in one shared target directory.
@@ -147,6 +151,7 @@ Project-routing rule:
 2. When an existing script needs to resolve an environment limit, ambiguity, shell drift, or path/tool discovery gap, extend or improve it in a bounded, tested way; prefer that extension over ad-hoc one-off commands or duplicated logic.
 3. Scripts must preserve visible failures and safety: never hide errors, weaken safety checks, bypass ownership/approval, or turn diagnostics into unsafe cleanup.
 4. Require focused tests or dry-runs, plus `git diff --check` and any applicable diff/diagnostic check, for script changes; preserve unrelated worktree edits.
+5. The canonical implementation path for reusable validators is an isolated Go module under `tools/<name>/`; PowerShell remains for orchestration, Windows environment setup, and the project gate. Read `docs/process/project-script-authoring-master.md` before adding a new script or retaining a compatibility wrapper.
 
 ## Merge-Before-Close And Release Sync
 

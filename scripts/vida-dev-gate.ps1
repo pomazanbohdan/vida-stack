@@ -2471,13 +2471,6 @@ exit 3
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-release-package.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
-        Invoke-Timed "powershell-evaluation-log-linter-parse" @(
-            $PwshPath,
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-agent-evaluation-log.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
-        )
         Invoke-Timed "powershell-process-runner-parse" @(
             $PwshPath,
             "-NoLogo",
@@ -2493,27 +2486,6 @@ exit 3
             "Bypass",
             "-File",
             "scripts/vida-process-runner-smoke.ps1"
-        )
-        Invoke-Timed "agent-evaluation-log-fixture-lint" @(
-            $PwshPath,
-            "-NoLogo",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            "scripts/check-agent-evaluation-log.ps1",
-            "-Path",
-            "tests/fixtures/agent-evaluation-log/pass.md"
-        )
-        Invoke-Timed "runtime-boundary-lint" @(
-            $PwshPath,
-            "-NoLogo",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            "scripts/check-runtime-boundaries.ps1",
-            "-Json"
         )
         [string[]]$changedBashScripts = @(Get-ChangedBashScripts)
         if ($changedBashScripts.Count -eq 0) {
@@ -2584,6 +2556,74 @@ exit 3
             }
         } finally {
             Remove-Item -LiteralPath $goBinary -Force -ErrorAction SilentlyContinue
+        }
+
+        $goScriptSpecs = @(
+            [pscustomobject]@{ id = "agent-evaluation-log"; module = "check-agent-evaluation-log" },
+            [pscustomobject]@{ id = "runtime-boundaries"; module = "check-runtime-boundaries" },
+            [pscustomobject]@{ id = "host-bridge-capability-neutrality"; module = "check-host-bridge-capability-neutrality" }
+        )
+        foreach ($scriptSpec in $goScriptSpecs) {
+            $scriptModuleDir = Join-Path $RootDir ("tools\{0}" -f $scriptSpec.module)
+            $scriptBinary = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-{0}-{1}.exe" -f $scriptSpec.module, [guid]::NewGuid().ToString("N"))
+            try {
+                Invoke-Timed ("go-{0}-tests" -f $scriptSpec.id) @(
+                    $goCommand.Source,
+                    "test",
+                    "./..."
+                ) -WorkingDirectory $scriptModuleDir
+                Invoke-Timed ("go-{0}-build" -f $scriptSpec.id) @(
+                    $goCommand.Source,
+                    "build",
+                    "-trimpath",
+                    "-o",
+                    $scriptBinary,
+                    "."
+                ) -WorkingDirectory $scriptModuleDir
+
+                if ($scriptSpec.id -eq "agent-evaluation-log") {
+                    Invoke-Timed "go-agent-evaluation-log-binary-json-smoke" @(
+                        $scriptBinary,
+                        "--path",
+                        (Join-Path $RootDir "tests\fixtures\agent-evaluation-log\pass.md"),
+                        "--json"
+                    )
+                    $smokeRecord = $Records[$Records.Count - 1]
+                    try { $smoke = Get-Content -LiteralPath $smokeRecord.artifact_refs[0] -Encoding UTF8 -Raw | ConvertFrom-Json } catch { throw "Go evaluation-log binary JSON smoke emitted invalid JSON." }
+                    if ($smoke.status -ne "pass" -or $smoke.issue_count -ne 0) { throw "Go evaluation-log binary JSON smoke returned an invalid pass envelope." }
+                } elseif ($scriptSpec.id -eq "runtime-boundaries") {
+                    Invoke-Timed "go-runtime-boundaries-binary-json-smoke" @(
+                        $scriptBinary,
+                        "--root",
+                        $RootDir,
+                        "--json"
+                    )
+                    $smokeRecord = $Records[$Records.Count - 1]
+                    try { $smoke = Get-Content -LiteralPath $smokeRecord.artifact_refs[0] -Encoding UTF8 -Raw | ConvertFrom-Json } catch { throw "Go runtime-boundaries binary JSON smoke emitted invalid JSON." }
+                    if ($smoke.status -ne "pass" -or @($smoke.checks | Where-Object { $_.status -ne "pass" }).Count -ne 0) { throw "Go runtime-boundaries binary JSON smoke returned an invalid pass envelope." }
+                } else {
+                    Invoke-Timed "go-host-bridge-capability-neutrality-binary-self-test" @(
+                        $scriptBinary,
+                        "--root",
+                        $RootDir,
+                        "--self-test"
+                    )
+                    $selfTestRecord = $Records[$Records.Count - 1]
+                    $selfTestOutput = Get-Content -LiteralPath $selfTestRecord.artifact_refs[0] -Encoding UTF8 -Raw
+                    if ($selfTestOutput -notmatch "host bridge capability neutrality self-test: pass") { throw "Go host-bridge binary self-test did not emit a pass marker." }
+                    Invoke-Timed "go-host-bridge-capability-neutrality-binary-json-smoke" @(
+                        $scriptBinary,
+                        "--root",
+                        $RootDir,
+                        "--json"
+                    )
+                    $smokeRecord = $Records[$Records.Count - 1]
+                    try { $smoke = Get-Content -LiteralPath $smokeRecord.artifact_refs[0] -Encoding UTF8 -Raw | ConvertFrom-Json } catch { throw "Go host-bridge binary JSON smoke emitted invalid JSON." }
+                    if ($smoke.status -ne "pass" -or @($smoke.violations).Count -ne 0) { throw "Go host-bridge binary JSON smoke returned an invalid pass envelope." }
+                }
+            } finally {
+                Remove-Item -LiteralPath $scriptBinary -Force -ErrorAction SilentlyContinue
+            }
         }
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
