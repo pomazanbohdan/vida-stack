@@ -268,7 +268,11 @@ The semantic-fuzz profile uses pinned nightly-2026-08-11, checked-in seeds,
 -runs=64, and run-local corpus/artifact directories. It writes only those
 run-local test artifacts; it does not write production/runtime state or invoke
 VIDA.
-The pinned `cargo fuzz check` completed successfully on the current WSL host.
+The pinned `cargo fuzz check` completed successfully on the current WSL host. A bounded
+manual execution of all five targets also completed 64 runs per target with no
+crashes on 2026-08-12; the run used `/tmp/vida-semantic-fuzz-20260812` for
+corpus/artifact output so the repository stayed clean. The check and run are
+stability evidence only, not exhaustive coverage.
 
 ### Loom
 
