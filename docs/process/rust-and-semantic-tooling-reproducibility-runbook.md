@@ -38,6 +38,18 @@ identity fields); they are not semantic-gate evidence. Semantic work must not
 weaken the fail-closed runtime guard or treat the unscoped result as green. Re-open
 runtime triage as a separate bounded task if that scope changes.
 
+The 400 baseline failures were distributed as follows (the remainder was spread
+across smaller modules): `runtime_dispatch_state` 107, `taskflow_consume_resume`
+50, `agent_dispatch_surface` 49, `runtime_dispatch_execution` 42,
+`taskflow_run_graph` 31, `lane_surface` 27, `state_store` 13, `init_surfaces` 13,
+`taskflow_consume` 13, and `compiled_agent_extension_bundle` 8. Representative
+failures reproduce on the clean parent commit `18a4cbba8` and include
+`team_flow_authority_selected_node_id_missing`, missing persisted TeamFlow
+identity/inclusion receipts, and incomplete runtime-assignment truth. These are a
+separate runtime-contract remediation packet: repair producers/fixtures and add
+authority-backed evidence; do not infer missing identity or weaken the fail-closed
+guards merely to raise the test percentage.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
