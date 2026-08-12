@@ -20,6 +20,9 @@ Describe 'vida-dev-gate quality modes' {
         $script | Should -Match 'quality-package-nextest'
         $script | Should -Match 'quality-workspace-nextest'
         $script | Should -Match 'quality-doc-test'
+        $script | Should -Match 'quality-focused-nextest'
+        $script | Should -Match 'quality-mutation-audit'
+        $script | Should -Match 'RunMutationAudit'
         $script | Should -Match 'PlanOnly'
     }
 }

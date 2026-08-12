@@ -19,6 +19,8 @@ param(
     [switch]$RefreshCoverage,
     [switch]$CoverageIgnoreRunFail,
     [switch]$PlanOnly,
+    [switch]$RunMutationAudit,
+    [string[]]$MutationFile = @(),
     [switch]$Json,
     [Alias("h")]
     [switch]$Help
@@ -1875,16 +1877,28 @@ function New-QualityGateReport {
 function Invoke-QualitySequence {
     param([switch]$Pack)
     if ($PlanOnly) {
+        Add-SkippedRecord 'quality-script-check' 'PlanOnly requested; nested script-check not executed'
+        Add-SkippedRecord 'quality-focused-nextest' 'PlanOnly requested; focused proof not executed'
+        Add-SkippedRecord 'quality-mutation-audit' 'PlanOnly requested; canonical mutest not executed'
         Add-SkippedRecord 'quality-sequence' 'PlanOnly requested; proof commands not executed'
         return
     }
-    Invoke-Timed 'quality-script-check' @($GitPath, 'diff', '--check')
+    Invoke-Timed 'quality-script-check' @($PwshPath, '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/vida-dev-gate.ps1', '-Mode', 'script-check', '-Json')
+    Invoke-Timed 'quality-diff-check' @($GitPath, 'diff', '--check')
     Invoke-ChangedRustfmtCheck
     Invoke-Timed 'quality-cargo-check' @('cargo', 'check', '--locked', '-p', 'vida')
+    Invoke-Timed 'quality-focused-nextest' (New-NextestCommand -NextestArgs @('-p', 'vida', '--profile', 'quality', 'boot_smoke'))
     Invoke-Timed 'quality-package-nextest' (New-NextestCommand -NextestArgs @('-p', 'vida', '--profile', 'quality'))
     if ($Pack) {
         Invoke-Timed 'quality-workspace-nextest' (New-NextestCommand -NextestArgs @('--workspace', '--profile', 'quality'))
         Invoke-Timed 'quality-doc-test' @('cargo', 'test', '--workspace', '--doc', '--locked')
+    }
+    if ($RunMutationAudit) {
+        if ($MutationFile.Count -eq 0) { throw '-RunMutationAudit requires at least one -MutationFile.' }
+        $mutationArgs = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/vida-mutest-audit.ps1', '-Files', ($MutationFile -join ','), '-IncludeWorkingTree', '-FullRescan', '-Json')
+        Invoke-Timed 'quality-mutation-audit' (@($PwshPath) + $mutationArgs)
+    } else {
+        Add-SkippedRecord 'quality-mutation-audit' 'opt-in only; pass -RunMutationAudit with explicit -MutationFile list'
     }
 }
 
