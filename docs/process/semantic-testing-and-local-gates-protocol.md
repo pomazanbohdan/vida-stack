@@ -84,6 +84,14 @@ stale lease, timeout/retry, and partial journal append followed by restart.
 Retries may recover an accepted write, but may not duplicate semantic effects
 or advance a rejected version.
 
+
+The shared adapter corpus records backend recovery semantics explicitly: filesystem
+journals discard an interrupted fresh append and accept one full retry; redb journals
+may retain a one-event prefix and must reject the stale full retry after restart.
+Both contracts require no loss of previously committed events and no duplicate
+semantic effects. The fixture uses at least two events and two effects so a partial
+fault cannot accidentally equal a complete request.
+
 ## P1 metamorphic and differential rules
 
 - path/status/issue normalization is idempotent;

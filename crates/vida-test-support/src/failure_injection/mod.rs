@@ -122,7 +122,7 @@ impl<J: OperationalJournal> OperationalJournal for FaultInjectingJournal<J> {
                     let _ = self.inner.append(partial);
                 }
                 Err(TaskflowStateError::Storage(
-                    "injected partial journal append".to_string(),
+                    "injected partial write interruption".to_string(),
                 ))
             }
             Some(FaultPoint::AfterWrite) => {
@@ -198,6 +198,121 @@ impl<J: OperationalJournal> OperationalJournal for FaultInjectingJournal<J> {
             Some(FaultPoint::StaleLease | FaultPoint::Timeout) => Vec::new(),
             _ => self.inner.claim_outbox_batch(consumer_id, limit),
         }
+    }
+
+    fn mark_outbox_succeeded(
+        &mut self,
+        outbox_id: &VidaEventRef,
+    ) -> Result<(), TaskflowStateError> {
+        self.inner.mark_outbox_succeeded(outbox_id)
+    }
+
+    fn mark_outbox_failed(
+        &mut self,
+        outbox_id: &VidaEventRef,
+        reason: String,
+    ) -> Result<(), TaskflowStateError> {
+        self.inner.mark_outbox_failed(outbox_id, reason)
+    }
+
+    fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint) {
+        self.inner.record_projection_checkpoint(checkpoint);
+    }
+
+    fn record_projection_failure(&mut self, failure: JournalProjectionFailure) {
+        self.inner.record_projection_failure(failure);
+    }
+
+    fn index_artifact(&mut self, artifact: JournalArtifactRecord) {
+        self.inner.index_artifact(artifact);
+    }
+
+    fn record_aggregate_snapshot(&mut self, snapshot: JournalAggregateSnapshotRecord) {
+        self.inner.record_aggregate_snapshot(snapshot);
+    }
+
+    fn aggregate_snapshot(
+        &self,
+        aggregate_id: &VidaAggregateRef,
+    ) -> Option<JournalAggregateSnapshotRecord> {
+        self.inner.aggregate_snapshot(aggregate_id)
+    }
+}
+
+/// Dynamic journal adapter used when a backend factory needs to insert a
+/// test-only fault around an already-erased journal.
+pub struct BoxedOperationalJournal {
+    inner: Box<dyn OperationalJournal>,
+}
+
+impl std::fmt::Debug for BoxedOperationalJournal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BoxedOperationalJournal")
+            .finish_non_exhaustive()
+    }
+}
+
+impl BoxedOperationalJournal {
+    #[must_use]
+    pub fn new(inner: Box<dyn OperationalJournal>) -> Self {
+        Self { inner }
+    }
+}
+
+impl OperationalJournal for BoxedOperationalJournal {
+    fn append(
+        &mut self,
+        request: JournalAppendRequest,
+    ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        self.inner.append(request)
+    }
+
+    fn load_stream(
+        &self,
+        stream_id: &VidaStreamRef,
+    ) -> Vec<taskflow_contracts::VidaDomainEventEnvelope> {
+        self.inner.load_stream(stream_id)
+    }
+
+    fn read_global_after(
+        &self,
+        cursor: Option<&VidaEventCursor>,
+        limit: usize,
+    ) -> Vec<JournalEventRecord> {
+        self.inner.read_global_after(cursor, limit)
+    }
+
+    fn record_idempotency_started(
+        &mut self,
+        key: VidaIdempotencyKey,
+        command_id: VidaCommandRef,
+    ) -> Result<(), TaskflowStateError> {
+        self.inner.record_idempotency_started(key, command_id)
+    }
+
+    fn record_idempotency_completed(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        receipt_id: VidaReceiptId,
+    ) -> Result<(), TaskflowStateError> {
+        self.inner.record_idempotency_completed(key, receipt_id)
+    }
+
+    fn record_idempotency_conflicted(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        reason: String,
+    ) -> Result<(), TaskflowStateError> {
+        self.inner.record_idempotency_conflicted(key, reason)
+    }
+
+    fn idempotency_record(&self, key: &VidaIdempotencyKey) -> Option<&JournalIdempotencyRecord> {
+        self.inner.idempotency_record(key)
+    }
+
+    fn claim_outbox_batch(&mut self, consumer_id: &str, limit: usize) -> Vec<JournalOutboxRecord> {
+        self.inner.claim_outbox_batch(consumer_id, limit)
     }
 
     fn mark_outbox_succeeded(

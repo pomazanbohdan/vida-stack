@@ -2146,7 +2146,7 @@ mod tests {
     };
     use tempfile::tempdir;
     use vida_test_support::failure_injection::{
-        FaultInjectingJournal, FaultPoint, semantic_append_request,
+        BoxedOperationalJournal, FaultInjectingJournal, FaultPoint, semantic_append_request,
     };
     use vida_test_support::state_conformance::{
         StateAdapterFactory, run_state_adapter_conformance,
@@ -2291,6 +2291,19 @@ mod tests {
                 .expect("checkpoint recovery requires the first committed journal");
             RedbOperationalJournal::open(path)?.projection_checkpoint(projection_id)
         }
+
+        fn inject_partial_write_once(
+            &mut self,
+            journal: Box<dyn OperationalJournal>,
+        ) -> (bool, Box<dyn OperationalJournal>) {
+            let mut fault = FaultInjectingJournal::new(BoxedOperationalJournal::new(journal));
+            fault.arm(FaultPoint::PartialJournalAppend);
+            (true, Box::new(fault))
+        }
+
+        fn partial_append_retains_prefix(&self) -> bool {
+            true
+        }
     }
 
     #[test]
@@ -2300,10 +2313,10 @@ mod tests {
             .expect("redb compatibility adapter should pass the shared corpus");
 
         assert_eq!(report.backend, "redb-compatibility");
-        assert_eq!(report.checks.len(), 7);
+        assert_eq!(report.checks.len(), 9);
         assert!(report.restart_recovered);
         assert!(report.checkpoint_recovered);
-        assert!(!report.partial_write_recovered);
+        assert!(report.partial_write_recovered);
     }
 
     #[test]

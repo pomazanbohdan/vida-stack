@@ -699,9 +699,12 @@ mod tests {
             Ok(FileOperationalJournal::open(path)?.projection_checkpoint(projection_id))
         }
 
-        fn inject_partial_write_once(&mut self) -> bool {
+        fn inject_partial_write_once(
+            &mut self,
+            journal: Box<dyn OperationalJournal>,
+        ) -> (bool, Box<dyn OperationalJournal>) {
             super::arm_partial_write_injection();
-            true
+            (true, journal)
         }
     }
 

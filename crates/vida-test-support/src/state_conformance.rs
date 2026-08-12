@@ -24,7 +24,13 @@ pub trait StateAdapterFactory {
     ) -> Result<Option<VidaProjectionCheckpoint>, TaskflowStateError> {
         Ok(None)
     }
-    fn inject_partial_write_once(&mut self) -> bool {
+    fn inject_partial_write_once(
+        &mut self,
+        journal: Box<dyn OperationalJournal>,
+    ) -> (bool, Box<dyn OperationalJournal>) {
+        (false, journal)
+    }
+    fn partial_append_retains_prefix(&self) -> bool {
         false
     }
 }
@@ -149,9 +155,12 @@ pub fn run_state_adapter_conformance<F: StateAdapterFactory>(
         "conformance-malformed",
     )?;
 
-    let partial_write_injected = factory.inject_partial_write_once();
+    let (partial_write_injected, journal) = factory.inject_partial_write_once(journal);
+    let mut journal = journal;
     let mut partial_write_recovered = false;
     let fresh_request = fresh_append_request();
+    let retained_partial_prefix = partial_write_injected && factory.partial_append_retains_prefix();
+    let expected_global_event_count = 3 + usize::from(retained_partial_prefix);
     if partial_write_injected {
         let interrupted = journal.append(fresh_request.clone());
         if !matches!(
@@ -175,7 +184,7 @@ pub fn run_state_adapter_conformance<F: StateAdapterFactory>(
         };
         let mut reopened = factory.reopen()?;
         if reopened.load_stream(&stream_id).len() != 3
-            || reopened.read_global_after(None, 10).len() != 3
+            || reopened.read_global_after(None, 10).len() != expected_global_event_count
         {
             return Err(storage(
                 "restart did not recover the committed event stream",
@@ -208,21 +217,37 @@ pub fn run_state_adapter_conformance<F: StateAdapterFactory>(
             ));
         }
         if partial_write_injected {
-            if !reopened.load_stream(&fresh_request.stream_id).is_empty()
-                || reopened.read_global_after(None, 10).len() != 3
-            {
-                return Err(storage(
-                    "fresh append interruption left a phantom event or lost committed events",
-                ));
-            }
-            let recovered_receipt = reopened.append(fresh_request)?;
-            if recovered_receipt.event_count != 1
-                || reopened.load_stream(&recovered_receipt.stream_id).len() != 1
-                || reopened.read_global_after(None, 10).len() != 4
-            {
-                return Err(storage(
-                    "fresh append retry did not recover exactly one event without loss",
-                ));
+            if factory.partial_append_retains_prefix() {
+                if reopened.load_stream(&fresh_request.stream_id).len() != 1
+                    || reopened.read_global_after(None, 10).len() != 4
+                {
+                    return Err(storage(
+                        "retained partial append prefix was not recovered after restart",
+                    ));
+                }
+                if reopened.append(fresh_request.clone()).is_ok() {
+                    return Err(storage(
+                        "stale full retry was accepted after retained partial append",
+                    ));
+                }
+            } else {
+                if !reopened.load_stream(&fresh_request.stream_id).is_empty()
+                    || reopened.read_global_after(None, 10).len() != 3
+                {
+                    return Err(storage(
+                        "fresh append interruption left a phantom event or lost committed events",
+                    ));
+                }
+                let recovered_receipt = reopened.append(fresh_request)?;
+                if recovered_receipt.event_count != 2
+                    || recovered_receipt.effect_intent_count != 2
+                    || reopened.load_stream(&recovered_receipt.stream_id).len() != 2
+                    || reopened.read_global_after(None, 10).len() != 5
+                {
+                    return Err(storage(
+                        "fresh append retry did not recover the full event/effect request without loss",
+                    ));
+                }
             }
         }
         restart_recovered = true;
@@ -294,22 +319,32 @@ fn fresh_append_request() -> JournalAppendRequest {
         idempotency_key: VidaIdempotencyKey("conformance-fresh-append-idempotency".to_string()),
         causation_id: None,
         correlation_id: Some("conformance-fresh-append-correlation".to_string()),
-        events: vec![VidaDomainEventEnvelope {
-            schema_id: VidaSchemaId("taskflow.state.conformance".to_string()),
-            event_version: VidaSchemaVersion(1),
-            event_id: VidaEventRef("fresh-append-event-1".to_string()),
-            command_id: Some(VidaCommandRef(
-                "conformance-fresh-append-command".to_string(),
-            )),
-            causation_id: None,
-            stream_id: VidaStreamRef("conformance-fresh-append-stream".to_string()),
-            stream_version: VidaStreamVersion(1),
-            aggregate_id: VidaAggregateRef("conformance-fresh-append-aggregate".to_string()),
-            occurred_at: VidaTimestamp("fresh-append-version-1".to_string()),
-            payload: serde_json::json!({ "version": 1 }),
-            trace: serde_json::json!({ "suite": "state-adapter-conformance" }),
-        }],
-        effect_intents: Vec::new(),
+        events: (1..=2)
+            .map(|version| VidaDomainEventEnvelope {
+                schema_id: VidaSchemaId("taskflow.state.conformance".to_string()),
+                event_version: VidaSchemaVersion(1),
+                event_id: VidaEventRef(format!("fresh-append-event-{version}")),
+                command_id: Some(VidaCommandRef(
+                    "conformance-fresh-append-command".to_string(),
+                )),
+                causation_id: None,
+                stream_id: VidaStreamRef("conformance-fresh-append-stream".to_string()),
+                stream_version: VidaStreamVersion(version),
+                aggregate_id: VidaAggregateRef("conformance-fresh-append-aggregate".to_string()),
+                occurred_at: VidaTimestamp(format!("fresh-append-version-{version}")),
+                payload: serde_json::json!({ "version": version }),
+                trace: serde_json::json!({ "suite": "state-adapter-conformance" }),
+            })
+            .collect(),
+        effect_intents: (1..=2)
+            .map(|id| VidaEffectIntent {
+                effect_id: VidaEffectRef(format!("fresh-append-effect-{id}")),
+                operation: VidaOperation("taskflow.state.conformance.effect".to_string()),
+                command_id: VidaCommandRef("conformance-fresh-append-command".to_string()),
+                stream_id: VidaStreamRef("conformance-fresh-append-stream".to_string()),
+                payload: serde_json::json!({ "effect_id": id }),
+            })
+            .collect(),
     }
 }
 
