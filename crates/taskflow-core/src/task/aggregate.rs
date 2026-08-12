@@ -682,6 +682,43 @@ mod tests {
     }
 
     #[test]
+    fn task_aggregate_auto_close_uses_deterministic_parent_defaults() {
+        let parent = TaskAggregateTaskSnapshot {
+            id: "parent".to_string(),
+            status: "in_progress".to_string(),
+            updated_at: "101".to_string(),
+            closed_at: None,
+            close_reason: None,
+            parent_id: Some("root".to_string()),
+        };
+
+        let plan = plan_update_task_status(TaskStatusUpdateCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "closed".to_string(),
+                updated_at: "101".to_string(),
+                closed_at: Some("101".to_string()),
+                close_reason: Some("done".to_string()),
+                parent_id: Some("parent".to_string()),
+            },
+            occurred_at: "101".to_string(),
+            auto_closed_parents: vec![parent],
+            auto_reopened_parents: Vec::new(),
+        });
+
+        assert!(matches!(
+            &plan.events[1],
+            TaskAggregateEvent::ParentAutoClosed { reason, .. }
+                if reason == "all direct child tasks closed after closing `child`"
+        ));
+        assert!(matches!(
+            &plan.mutations[1],
+            TaskAggregateMutation::AutoCloseParent { closed_at, .. }
+                if closed_at == "101"
+        ));
+    }
+
+    #[test]
     fn task_aggregate_plans_status_update_and_parent_reopen_events() {
         let mut parent =
             TaskAggregateTaskSnapshot::closed("parent", "101", Some("root".to_string()));
