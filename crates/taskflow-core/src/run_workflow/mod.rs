@@ -742,6 +742,44 @@ mod tests {
     }
 
     #[test]
+    fn status_mapping_preserves_precedence_and_normalizes_observable_stages() {
+        assert_eq!(
+            map_lifecycle_status(" dispatch-init-timeout ", "running"),
+            StatusMappingDecision::State(RunWorkflowState::RecoveryBlocked)
+        );
+        assert_eq!(
+            map_lifecycle_status("custom_failed_stage", "ready"),
+            StatusMappingDecision::State(RunWorkflowState::Failed)
+        );
+        assert_eq!(
+            map_lifecycle_status("tester-rework-required", "running"),
+            StatusMappingDecision::State(RunWorkflowState::LaneBlocked)
+        );
+        assert_eq!(
+            map_lifecycle_status("developer-dispatch-ready", "ready"),
+            StatusMappingDecision::State(RunWorkflowState::from_role_step(
+                RoleStep::planning()
+            ))
+        );
+        assert_eq!(
+            map_lifecycle_status("closure-pending", "ready"),
+            StatusMappingDecision::State(RunWorkflowState::from_role_step(
+                RoleStep::closure()
+            ))
+        );
+        assert!(matches!(
+            map_lifecycle_status("writer_active", "running"),
+            StatusMappingDecision::State(RunWorkflowState::Active { ref step })
+                if step.role_id == "writer"
+        ));
+        assert!(matches!(
+            map_lifecycle_status("external_stage", "awaiting-approval"),
+            StatusMappingDecision::State(RunWorkflowState::Active { ref step })
+                if step.role_id == "external_stage"
+        ));
+    }
+
+    #[test]
     fn aggregate_actions_emit_effect_intents_without_io_payloads() {
         let mut aggregate = RunWorkflowAggregate::new("run-020", "ldr-020");
         let event = aggregate.handle(RunWorkflowCommand::Start {
