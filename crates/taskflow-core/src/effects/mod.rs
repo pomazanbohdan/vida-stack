@@ -604,6 +604,35 @@ mod tests {
         assert_eq!(MODULE, "effects");
     }
 
+    #[test]
+    fn effect_commands_fail_closed_without_a_record_or_lease() {
+        let missing_lease = decide_effect_processing(
+            None,
+            EffectProcessingCommand::Lease {
+                owner: "worker".to_string(),
+                lease_expires_at: "2026-06-22T00:00:00Z".to_string(),
+            },
+        );
+        assert!(!missing_lease.admitted);
+        assert_eq!(missing_lease.blocker_codes, vec!["effect_record_missing"]);
+
+        let generator = StableGenerator;
+        let enqueued = decide_effect_processing(
+            None,
+            EffectProcessingCommand::Enqueue {
+                intent: host_dispatch_intent(&generator, "packet-1"),
+            },
+        );
+        let completion = decide_effect_processing(
+            Some(&enqueued.record),
+            EffectProcessingCommand::Complete {
+                receipt_ref: "receipt".to_string(),
+            },
+        );
+        assert!(!completion.admitted);
+        assert_eq!(completion.blocker_codes, vec!["effect_not_leased"]);
+    }
+
     fn host_dispatch_intent(generator: &StableGenerator, packet_id: &str) -> EffectIntent {
         EffectIntent::new(
             "run-1",

@@ -617,6 +617,45 @@ mod tests {
     }
 
     #[test]
+    fn replay_task_events_deduplicates_and_removes_dependency_edges() {
+        let events = vec![
+            TaskAggregateEvent::TaskDependencyAdded {
+                task_id: "task".to_string(),
+                depends_on_id: "dep-b".to_string(),
+                edge_type: "blocks".to_string(),
+                occurred_at: "1".to_string(),
+            },
+            TaskAggregateEvent::TaskDependencyAdded {
+                task_id: "task".to_string(),
+                depends_on_id: "dep-a".to_string(),
+                edge_type: "parent-child".to_string(),
+                occurred_at: "2".to_string(),
+            },
+            TaskAggregateEvent::TaskDependencyAdded {
+                task_id: "task".to_string(),
+                depends_on_id: "dep-b".to_string(),
+                edge_type: "blocks".to_string(),
+                occurred_at: "3".to_string(),
+            },
+            TaskAggregateEvent::TaskDependencyRemoved {
+                task_id: "task".to_string(),
+                depends_on_id: "dep-b".to_string(),
+                edge_type: "blocks".to_string(),
+                occurred_at: "4".to_string(),
+            },
+        ];
+
+        let projection = replay_task_events(&events);
+        assert_eq!(
+            projection.dependencies["task"],
+            vec![TaskAggregateDependencyEdge {
+                depends_on_id: "dep-a".to_string(),
+                edge_type: "parent-child".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn task_aggregate_plans_parent_auto_close_event() {
         let mut parent =
             TaskAggregateTaskSnapshot::closed("parent", "100", Some("root".to_string()));
