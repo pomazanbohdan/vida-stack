@@ -8,6 +8,12 @@ inherits = "default"
 fail-fast = false
 retries = { backoff = "exponential", count = 2, delay = "1s", max-delay = "10s", jitter = true }
 
+[profile.quality]
+inherits = "default"
+fail-fast = false
+retries = 0
+slow-timeout = { period = "120s", terminate-after = 3 }
+
 [test-groups]
 db = { max-threads = 2 }
 serial-integration = { max-threads = 1 }

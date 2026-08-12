@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "process-runner-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "quality-cycle", "quality-pack", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "process-runner-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -18,6 +18,7 @@ param(
     [switch]$Windows,
     [switch]$RefreshCoverage,
     [switch]$CoverageIgnoreRunFail,
+    [switch]$PlanOnly,
     [switch]$Json,
     [Alias("h")]
     [switch]$Help
@@ -272,6 +273,8 @@ Modes:
   build-debug       Debug build of supported runtime entrypoints.
   runtime-smoke     Build debug vida and run status from the effective target dir.
   coverage          Bounded coverage gate over existing LCOV/CRAP artifacts; use -RefreshCoverage to regenerate.
+  quality-cycle     Deterministic mutation-quality risk gate from the canonical mutest registry.
+  quality-pack      Quality cycle plus deterministic pack/report artifacts (no registry mutation).
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   release-install-status
@@ -1794,6 +1797,97 @@ function Invoke-ScopedFormat {
     Assert-ScopedDirtyFiles -AllowedPaths $allowed -Phase "postcheck"
 }
 
+function Get-QualityRiskClass {
+    param([object]$File)
+    $path = [string]$File.path
+    $package = [string]$File.package
+    if ([string]::IsNullOrWhiteSpace($path) -or $path -notmatch '\.rs$' -or [int]$File.loc_total -le 0) { return 'inert' }
+    if ($package -eq 'vida' -or $path -match '(?i)(runtime|dispatch|taskflow|docflow|state_access)') { return 'critical' }
+    if ($path -match '(?i)(cli|agent|orchestrator|surface)') { return 'runtime' }
+    return 'standard'
+}
+
+function Get-QualityThreshold {
+    param([string]$RiskClass)
+    switch ($RiskClass) {
+        'critical' { return 98.0 }
+        'runtime' { return 95.0 }
+        'standard' { return 93.0 }
+        default { return $null }
+    }
+}
+
+function Read-CanonicalMutestRegistry {
+    $path = Join-Path $RootDir '.vida\evidence\mutest-audit\file-registry.json'
+    if (-not (Test-Path -LiteralPath $path)) { throw "canonical mutest registry missing: $path" }
+    try { return [pscustomobject]@{ path = $path; data = (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json) } }
+    catch { throw "canonical mutest registry invalid: $($_.Exception.Message)" }
+}
+
+function New-QualityGateReport {
+    param([switch]$Pack)
+    $registry = Read-CanonicalMutestRegistry
+    # Deterministic preflight is intentionally bounded; quality-pack reuses the same
+    # proof surface and does not mutate or rewrite the canonical mutest registry.
+    $preflightOperation = if ($Pack) { 'quality-pack-diff-check' } else { 'quality-cycle-diff-check' }
+    Invoke-Timed $preflightOperation @($GitPath, 'diff', '--check')
+    if ($Pack) { Invoke-ChangedRustfmtCheck }
+    $rows = @()
+    foreach ($file in @($registry.data.files | Sort-Object path)) {
+        $risk = Get-QualityRiskClass $file
+        $threshold = Get-QualityThreshold $risk
+        $score = if ($null -ne $file.mutation_score) { [double]$file.mutation_score } else { $null }
+        $metricBlocker = $null
+        $qualityStatus = 'not_applicable'
+        if ($null -ne $threshold) {
+            if ($null -eq $score) { $metricBlocker = 'quality_metric_missing'; $qualityStatus = 'blocked' }
+            elseif ($score -gt $threshold) { $qualityStatus = 'pass' }
+            else { $qualityStatus = 'fail' }
+        }
+        $typedBlocker = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$file.blocker_code) -or -not [string]::IsNullOrWhiteSpace([string]$file.blocker_family)) {
+            $typedBlocker = [ordered]@{ code = $file.blocker_code; family = $file.blocker_family; reason = $file.blocker_reason; next_action = $file.next_action }
+        }
+        $rows += [pscustomobject][ordered]@{
+            path = [string]$file.path; package = [string]$file.package; risk_class = $risk
+            threshold_percent = $threshold; mutation_score_percent = $score; quality_status = $qualityStatus
+            metric_blocker = $metricBlocker; typed_blocker = $typedBlocker
+        }
+    }
+    $counts = [ordered]@{ critical = 0; runtime = 0; standard = 0; inert = 0; pass = 0; fail = 0; blocked = 0; not_applicable = 0 }
+    foreach ($row in $rows) { $counts[$row.risk_class]++; $counts[$row.quality_status]++ }
+    $overall = if ($counts.fail -gt 0 -or $counts.blocked -gt 0) { 'fail' } else { 'pass' }
+    $reportMode = if ($Pack) { 'quality-pack' } else { 'quality-cycle' }
+    $thresholds = [pscustomobject]@{ critical = 98.0; runtime = 95.0; standard = 93.0; inert = $null }
+    $rowArray = @($rows)
+    $report = [pscustomobject]@{ schema_version = 1; mode = $reportMode; status = $overall; thresholds = $thresholds; counts = [pscustomobject]$counts; registry_path = $registry.path; registry_revision = $registry.data.registry_revision; rows = $rowArray }
+    $artifactDir = Join-Path $RootDir '.vida\tmp'
+    New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+    $name = $reportMode
+    $planPath = Join-Path $artifactDir "$name-plan.json"
+    $reportPath = Join-Path $artifactDir "$name-report.json"
+    ([ordered]@{ schema_version = 1; mode = $report.mode; registry_revision = $report.registry_revision; rows = $rowArray } | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $planPath -Encoding UTF8
+    ($report | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    $Records.Add([pscustomobject]@{ operation_id = $name; command_or_surface = "scripts/vida-dev-gate.ps1 -Mode $name"; cwd_or_context = $RootDir; started_at = (Get-Date).ToString('o'); duration_ms = 0; exit_status = $overall; classification = 'fast'; artifact_refs = @($planPath, $reportPath, $registry.path); quality_report = $report })
+    if ($overall -ne 'pass') { throw "$name quality gate failed; see $reportPath" }
+}
+
+function Invoke-QualitySequence {
+    param([switch]$Pack)
+    if ($PlanOnly) {
+        Add-SkippedRecord 'quality-sequence' 'PlanOnly requested; proof commands not executed'
+        return
+    }
+    Invoke-Timed 'quality-script-check' @($GitPath, 'diff', '--check')
+    Invoke-ChangedRustfmtCheck
+    Invoke-Timed 'quality-cargo-check' @('cargo', 'check', '--locked', '-p', 'vida')
+    Invoke-Timed 'quality-package-nextest' (New-NextestCommand -NextestArgs @('-p', 'vida', '--profile', 'quality'))
+    if ($Pack) {
+        Invoke-Timed 'quality-workspace-nextest' (New-NextestCommand -NextestArgs @('--workspace', '--profile', 'quality'))
+        Invoke-Timed 'quality-doc-test' @('cargo', 'test', '--workspace', '--doc', '--locked')
+    }
+}
+
 function Invoke-CoverageGate {
     $coveragePath = Resolve-RepoOutputFilePath $CoverageOutputPath
     $crapPath = Resolve-RepoOutputFilePath $CrapOutputPath
@@ -2184,6 +2278,12 @@ exit 3
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
     } elseif ($Mode -eq "coverage") {
         Invoke-CoverageGate
+    } elseif ($Mode -eq "quality-cycle") {
+        Invoke-QualitySequence
+        New-QualityGateReport
+    } elseif ($Mode -eq "quality-pack") {
+        Invoke-QualitySequence -Pack
+        New-QualityGateReport -Pack
     } elseif ($Mode -eq "release-package") {
         $releaseCommand = New-Object System.Collections.Generic.List[string]
         $releaseCommand.Add($PwshPath)
