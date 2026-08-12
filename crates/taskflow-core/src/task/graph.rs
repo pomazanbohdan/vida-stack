@@ -593,6 +593,18 @@ mod tests {
     }
 
     #[test]
+    fn task_graph_validation_accepts_dependency_target_present_in_view() {
+        let mut child = row("child", "open", "task");
+        child.dependencies = vec![blocks("child", "blocker")];
+
+        let issues = validate_task_graph_rows([row("blocker", "open", "task"), child]);
+
+        assert!(!issues
+            .iter()
+            .any(|issue| issue.issue_type == "missing_dependency_target"));
+    }
+
+    #[test]
     fn graph_analysis_reports_topological_order_for_acyclic_dependencies() {
         let analysis = analyze_directed_dependencies(
             ["task-a", "task-b", "task-c"],
