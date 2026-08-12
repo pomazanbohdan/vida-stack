@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2bbfd21a7fd1a1e4620065cfbfc300498a982d128660c1d5d681be86c64ec635 # shrinks to (initial_state, transitions, seen_counter) = (ReferenceState { state: Idle, version: 0 }, [Fail, RepairReopen, CompleteLaneTerminal], None)

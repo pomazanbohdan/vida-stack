@@ -2143,6 +2143,9 @@ mod tests {
         verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use tempfile::tempdir;
+    use vida_test_support::failure_injection::{
+        FaultInjectingJournal, FaultPoint, semantic_append_request,
+    };
     use vida_test_support::state_conformance::{
         StateAdapterFactory, run_state_adapter_conformance,
     };
@@ -2202,6 +2205,24 @@ mod tests {
             ),
             "normalized adapter must not keep the scaffold snapshot table"
         );
+    }
+
+    #[test]
+    fn partial_append_restarts_from_redb_journal_and_rejects_stale_retry() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("semantic-partial.redb");
+        let stream = VidaStreamRef("semantic-stream".to_string());
+        let mut journal = FaultInjectingJournal::new(
+            RedbOperationalJournal::create(&path).expect("create redb journal"),
+        );
+        journal.arm(FaultPoint::PartialJournalAppend);
+        assert!(journal.append(semantic_append_request()).is_err());
+        assert_eq!(journal.load_stream(&stream).len(), 1);
+        drop(journal);
+
+        let mut reopened = RedbOperationalJournal::open(&path).expect("reopen redb journal");
+        assert_eq!(reopened.load_stream(&stream).len(), 1);
+        assert!(reopened.append(semantic_append_request()).is_err());
     }
 
     struct RedbJournalFactory {

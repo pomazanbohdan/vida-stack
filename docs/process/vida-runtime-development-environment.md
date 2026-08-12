@@ -18,6 +18,10 @@ This document covers active `vida-stack` development sessions that touch:
 
 It does not replace framework runtime law, TaskFlow authority, DocFlow owner law, or GitHub public repository law.
 
+For Rust toolchain installation, WSL semantic tools, Kani compatibility,
+fuzz/Loom/Miri deployment, or reproducible proof setup, use the canonical
+runbook at docs/process/rust-and-semantic-tooling-reproducibility-runbook.md.
+
 ## Required Skills
 
 Use these project-local skills when available in the active catalog:
@@ -410,10 +414,10 @@ Before reporting a runtime environment/docs/skill update as complete:
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
 artifact_version: 1
-artifact_revision: 2026-07-27
+artifact_revision: 2026-08-12
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-07-27T08:30:00.0000000Z
+updated_at: 2026-08-12T00:00:00+03:00
 changelog_ref: vida-runtime-development-environment.changelog.jsonl

@@ -1,5 +1,5 @@
 minimum_pre_commit_version: "4.0.0"
-default_install_hook_types: [pre-commit]
+default_install_hook_types: [pre-commit, pre-push]
 default_stages: [pre-commit]
 
 exclude: |
@@ -22,6 +22,7 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
+        exclude: ^fuzz/seeds/
       - id: check-toml
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -43,6 +44,46 @@ repos:
       - id: vida-rust-quick
         name: VIDA Rust quick gate (manual)
         entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      - id: vida-semantic-prepush
+        name: VIDA semantic P0/P1 pre-push gate
+        entry: '"C:\Windows\System32\cmd.exe" /d /s /c scripts\\vida-semantic-prepush.cmd'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: vida-semantic-fuzz
+        name: VIDA semantic fuzz profile (manual)
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode semantic-fuzz -Json
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      - id: vida-semantic-loom
+        name: VIDA semantic Loom profile (manual)
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode semantic-loom -Json
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      - id: vida-semantic-kani
+        name: VIDA semantic Kani profile (manual)
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode semantic-kani -Json
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      - id: vida-semantic-miri
+        name: VIDA semantic Miri profile (manual)
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode semantic-miri -Json
         language: system
         pass_filenames: false
         always_run: true

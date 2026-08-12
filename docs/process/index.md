@@ -96,15 +96,19 @@ Canonical entrypoints:
     - project-owned runbook for authoring, validating, promoting, rolling back, and resuming versioned Rhai policies
 40. `docs/process/mutest-rs-audit-script-adaptation.md`
     - project-owned process adapter for bounded mutest-rs mutation-audit waves, registry continuity, and evidence handoff
+41. `docs/process/semantic-testing-and-local-gates-protocol.md`
+    - project-owned protocol for state-machine, metamorphic, fault-injection, fuzz, Loom, Kani, Miri, and local pre-push gates
+42. `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
+    - canonical Rust, WSL semantic-tool deployment, Kani compatibility, manual-proof, and agent-bootstrap reproduction runbook
 
 -----
 artifact_path: process/index
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-08-10
+artifact_revision: 2026-08-12
 schema_version: '1'
 status: canonical
 source_path: docs/process/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-08-10T05:53:38+03:00
+updated_at: 2026-08-12T00:00:00+03:00
 changelog_ref: index.changelog.jsonl

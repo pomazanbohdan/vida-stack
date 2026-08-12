@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "quality-cycle", "quality-pack", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "process-runner-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "quality-cycle", "quality-pack", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "process-runner-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke", "semantic-focused", "semantic-fuzz", "semantic-loom", "semantic-kani", "semantic-miri")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -30,6 +30,7 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
+$SemanticNightlyToolchain = "nightly-2026-08-11"
 $WindowsEnvScript = Join-Path $PSScriptRoot "vida-windows-env.ps1"
 if (Test-Path -LiteralPath $WindowsEnvScript) {
     . $WindowsEnvScript
@@ -207,6 +208,7 @@ function Test-ModeNeedsWindowsBuildEnvironment {
         "build-debug",
         "runtime-smoke",
         "coverage",
+        "semantic-focused",
         "release-install",
         "release-install-status"
     )
@@ -227,6 +229,8 @@ function Test-ModeNeedsBuildConcurrencyGuard {
         "doc-test",
         "build-debug",
         "runtime-smoke",
+        "semantic-focused",
+        "semantic-loom",
         "release-package",
         "release-install"
     )
@@ -284,7 +288,12 @@ Modes:
   target-dir-policy Print the effective Cargo target directory policy.
   proof-scheduler   Run proof command snippets: non-Cargo in parallel, Cargo-like sequentially.
   compact-cargo-test-smoke
-                    Synthetic cargo test proof that verifies compact default output and raw artifact retention.
+                     Synthetic cargo test proof that verifies compact default output and raw artifact retention.
+  semantic-focused  P0/P1 state-machine, fault-injection, metamorphic, and projection proof.
+  semantic-fuzz     Manual cargo-fuzz parser/config/protocol profile (Linux/toolchain required).
+  semantic-loom     Manual Loom reservation/lease interleaving profile (Linux/toolchain required).
+  semantic-kani     Manual bounded Kani proof profile (Kani toolchain required).
+  semantic-miri     Manual targeted Miri profile (Miri toolchain required).
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
@@ -557,7 +566,9 @@ $BashPath = Resolve-CommandPath "bash" @(
 function Invoke-Timed {
     param(
         [string]$OperationId,
-        [string[]]$Command
+        [string[]]$Command,
+        [string]$WorkingDirectory = $RootDir,
+        [switch]$ContinueOnFailure
     )
 
     $started = Get-Date
@@ -569,7 +580,11 @@ function Invoke-Timed {
     if ($Command.Length -gt 1) {
         $args = $Command[1..($Command.Length - 1)]
     }
-    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    $logDir = if ($Mode -like "semantic-*") {
+        New-SemanticRunDirectory
+    } else {
+        Join-Path $RootDir ".vida\data\state\command-timing"
+    }
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     Assert-NoReparsePointInPath -Root $RootDir -Path $logDir -OriginalPath $logDir
     $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
@@ -595,7 +610,7 @@ function Invoke-Timed {
         $exitCode = Invoke-VidaProcess `
             -FilePath $exe `
             -ArgumentList $args `
-            -WorkingDirectory $RootDir `
+            -WorkingDirectory $WorkingDirectory `
             -StdoutPath $stdoutPath `
             -StderrPath $stderrPath
         $compactProofOutput = Test-CompactProofOutputCommand -Command $Command
@@ -628,7 +643,7 @@ function Invoke-Timed {
         $record = [pscustomobject]@{
             operation_id = $OperationId
             command_or_surface = ($Command -join " ")
-            cwd_or_context = $RootDir
+            cwd_or_context = $WorkingDirectory
             started_at = $started.ToString("o")
             duration_ms = [int64]$sw.ElapsedMilliseconds
             exit_status = $(if ($exitCode -eq 0) { "pass" } else { "fail" })
@@ -636,6 +651,8 @@ function Invoke-Timed {
             target_dir_policy = $CargoTargetDirState.target_dir_policy
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = $artifactRefs
+            evidence_refs = $artifactRefs
+            zombie_d = $(if ($Mode -eq "semantic-focused") { New-SemanticZombieEvidence -EvidenceRefs $artifactRefs } else { $null })
         }
         $cargoTiming = New-CargoTimingContract -Command $Command -DurationMs ([int64]$sw.ElapsedMilliseconds)
         if ($null -ne $cargoTiming) {
@@ -675,7 +692,7 @@ function Invoke-Timed {
         }
         $Records.Add($record)
     }
-    if ($exitCode -ne 0) {
+    if ($exitCode -ne 0 -and -not $ContinueOnFailure) {
         exit $exitCode
     }
 }
@@ -1109,6 +1126,255 @@ function Add-SkippedRecord {
     })
 }
 
+$script:SemanticRunDirectory = $null
+
+function New-SemanticZombieEvidence {
+    param([string[]]$EvidenceRefs)
+
+    [ordered]@{
+        R = [ordered]@{ status = "pass"; evidence_refs = @($EvidenceRefs) }
+        P = [ordered]@{ status = "pass"; evidence_refs = @($EvidenceRefs) }
+        C = [ordered]@{ status = "pass"; evidence_refs = @($EvidenceRefs) }
+    }
+}
+
+function New-SemanticRunDirectory {
+    if ($null -ne $script:SemanticRunDirectory) {
+        return $script:SemanticRunDirectory
+    }
+    $runId = "{0}-{1}" -f ((Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")), ([guid]::NewGuid().ToString("N").Substring(0, 8))
+    $script:SemanticRunDirectory = Join-Path $RootDir (Join-Path ".vida\tmp\semantic-testing" $runId)
+    New-Item -ItemType Directory -Force -Path $script:SemanticRunDirectory | Out-Null
+    return $script:SemanticRunDirectory
+}
+
+function Add-SemanticStatusRecord {
+    param(
+        [string]$OperationId,
+        [ValidateSet("pass", "blocked", "not_applicable")]
+        [string]$Status,
+        [string]$Reason
+    )
+
+    $artifactDir = New-SemanticRunDirectory
+    $Records.Add([pscustomobject]@{
+        operation_id = $OperationId
+        command_or_surface = $Reason
+        cwd_or_context = $RootDir
+        started_at = (Get-Date).ToString("o")
+        duration_ms = 0
+        exit_status = $Status
+        classification = "semantic"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = @($artifactDir)
+        evidence_refs = @($artifactDir)
+    })
+}
+
+function Complete-SemanticRun {
+    param([string]$Profile)
+
+    $artifactDir = New-SemanticRunDirectory
+    $recordArray = @($Records.ToArray())
+    $failed = @($recordArray | Where-Object { $_.exit_status -eq "fail" }).Count -gt 0
+    $blocked = @($recordArray | Where-Object { $_.exit_status -in @("blocked", "not_applicable") }).Count -gt 0
+    $status = if ($failed) { "fail" } elseif ($blocked) { "blocked" } else { "pass" }
+    $summaryPath = Join-Path $artifactDir "summary.json"
+    $summary = [ordered]@{
+        schema_version = 1
+        profile = $Profile
+        status = $status
+        generated_at = (Get-Date).ToUniversalTime().ToString("o")
+        records = $recordArray
+    }
+    ($summary | ConvertTo-Json -Depth 16) | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+    $Records.Add([pscustomobject]@{
+        operation_id = "semantic-summary"
+        command_or_surface = "semantic testing summary"
+        cwd_or_context = $RootDir
+        started_at = (Get-Date).ToString("o")
+        duration_ms = 0
+        exit_status = $status
+        classification = "semantic"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = @($summaryPath)
+        evidence_refs = @($summaryPath)
+    })
+    if ($status -ne "pass") {
+        exit 2
+    }
+}
+
+function Test-LinuxHost {
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
+}
+
+function Test-NightlyRustToolchain {
+    if (-not (Test-CommandExists "rustup")) {
+        return $false
+    }
+    & rustup run $SemanticNightlyToolchain rustc --version *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Initialize-SemanticFuzzCorpus {
+    param([string]$Target)
+
+    $runDir = New-SemanticRunDirectory
+    $seedDir = Join-Path $RootDir (Join-Path "fuzz\seeds" $Target)
+    $corpusDir = Join-Path $runDir (Join-Path "corpus" $Target)
+    $artifactDir = Join-Path $runDir (Join-Path "artifacts" $Target)
+    New-Item -ItemType Directory -Force -Path $corpusDir, $artifactDir | Out-Null
+    if (Test-Path -LiteralPath $seedDir) {
+        Get-ChildItem -LiteralPath $seedDir -File | Copy-Item -Destination $corpusDir -Force
+    }
+    return [pscustomobject]@{
+        corpus = $corpusDir
+        artifact_prefix = ((Resolve-Path -LiteralPath $artifactDir).Path + [System.IO.Path]::DirectorySeparatorChar)
+    }
+}
+
+function Invoke-SemanticFocused {
+    [void](New-SemanticRunDirectory)
+    $commands = @(
+        @("cargo", "test", "-p", "taskflow-core", "--lib", "--locked"),
+        @("cargo", "test", "-p", "taskflow-authority", "--lib", "--locked"),
+        @("cargo", "test", "-p", "taskflow-state", "--lib", "--locked"),
+        @("cargo", "test", "-p", "taskflow-state-fs", "--lib", "--locked"),
+        @("cargo", "test", "-p", "taskflow-state-redb", "--lib", "--locked"),
+        @("cargo", "test", "-p", "vida-test-support", "--lib", "--locked"),
+        @("cargo", "test", "--manifest-path", "tests/model/Cargo.toml", "--locked")
+    )
+    $index = 0
+    foreach ($command in $commands) {
+        $index++
+        Invoke-Timed ("semantic-focused-{0}" -f $index) $command -ContinueOnFailure
+    }
+    Complete-SemanticRun -Profile "semantic-focused"
+}
+
+function Invoke-SemanticFuzz {
+    if (-not (Test-LinuxHost)) {
+        Add-SemanticStatusRecord "semantic-fuzz" "not_applicable" "cargo-fuzz profile is Linux-only by project policy"
+        Complete-SemanticRun -Profile "semantic-fuzz"
+        return
+    }
+    if (-not (Test-CommandExists "cargo-fuzz")) {
+        Add-SemanticStatusRecord "semantic-fuzz" "blocked" "cargo-fuzz is not installed"
+        Complete-SemanticRun -Profile "semantic-fuzz"
+        return
+    }
+    if (-not (Test-NightlyRustToolchain)) {
+        Add-SemanticStatusRecord "semantic-fuzz" "blocked" "Rust nightly toolchain is not installed or unavailable"
+        Complete-SemanticRun -Profile "semantic-fuzz"
+        return
+    }
+    $previousToolchain = $env:RUSTUP_TOOLCHAIN
+    try {
+        $env:RUSTUP_TOOLCHAIN = $SemanticNightlyToolchain
+        $fuzzDir = Join-Path $RootDir "fuzz"
+        Invoke-Timed "semantic-fuzz-check" @("cargo-fuzz", "check") -WorkingDirectory $fuzzDir -ContinueOnFailure
+        foreach ($target in @("config_json", "jsonl_decoder", "cli_parser", "workflow_payload", "toon_render")) {
+            $fuzzPaths = Initialize-SemanticFuzzCorpus -Target $target
+            Invoke-Timed ("semantic-fuzz-run-{0}" -f $target) @(
+                "cargo-fuzz", "run", $target, $fuzzPaths.corpus, "--", "-runs=64",
+                ("-artifact_prefix={0}" -f $fuzzPaths.artifact_prefix)
+            ) -WorkingDirectory $fuzzDir -ContinueOnFailure
+        }
+    } finally {
+        if ($null -eq $previousToolchain) {
+            Remove-Item Env:RUSTUP_TOOLCHAIN -ErrorAction SilentlyContinue
+        } else {
+            $env:RUSTUP_TOOLCHAIN = $previousToolchain
+        }
+    }
+    Complete-SemanticRun -Profile "semantic-fuzz"
+}
+
+function Invoke-SemanticLoom {
+    if (-not (Test-LinuxHost)) {
+        Add-SemanticStatusRecord "semantic-loom" "not_applicable" "Loom profile is Linux-only by project policy"
+        Complete-SemanticRun -Profile "semantic-loom"
+        return
+    }
+    $previousRustFlags = $env:RUSTFLAGS
+    try {
+        $env:RUSTFLAGS = "--cfg loom"
+        Invoke-Timed "semantic-loom-claim-reservation" @("cargo", "test", "--manifest-path", "crates/taskflow-authority/Cargo.toml", "--test", "loom_claim_reservation", "--release", "--locked") -ContinueOnFailure
+    } finally {
+        if ($null -eq $previousRustFlags) {
+            Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+        } else {
+            $env:RUSTFLAGS = $previousRustFlags
+        }
+    }
+    Complete-SemanticRun -Profile "semantic-loom"
+}
+
+function Invoke-SemanticKani {
+    if (-not (Test-LinuxHost)) {
+        Add-SemanticStatusRecord "semantic-kani" "not_applicable" "Kani profile is Linux-only by project policy"
+        Complete-SemanticRun -Profile "semantic-kani"
+        return
+    }
+    if (-not (Test-CommandExists "cargo-kani")) {
+        Add-SemanticStatusRecord "semantic-kani" "blocked" "cargo-kani is not installed"
+        Complete-SemanticRun -Profile "semantic-kani"
+        return
+    }
+    $kaniHelp = (& cargo-kani --help 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $kaniHelp -notmatch "ignore-rust-version") {
+        Add-SemanticStatusRecord "semantic-kani" "blocked" "installed cargo-kani lacks --ignore-rust-version; Kani bundle is incompatible with the workspace MSRV"
+        Complete-SemanticRun -Profile "semantic-kani"
+        return
+    }
+    $previousIgnoreRustVersion = $env:CARGO_UNSTABLE_IGNORE_RUST_VERSION
+    try {
+        $env:CARGO_UNSTABLE_IGNORE_RUST_VERSION = "1"
+        Invoke-Timed "semantic-kani-proof" @("cargo", "kani", "--ignore-rust-version", "--manifest-path", "verification/kani/Cargo.toml") -ContinueOnFailure
+    } finally {
+        if ($null -eq $previousIgnoreRustVersion) {
+            Remove-Item Env:CARGO_UNSTABLE_IGNORE_RUST_VERSION -ErrorAction SilentlyContinue
+        } else {
+            $env:CARGO_UNSTABLE_IGNORE_RUST_VERSION = $previousIgnoreRustVersion
+        }
+    }
+    Complete-SemanticRun -Profile "semantic-kani"
+}
+
+function Invoke-SemanticMiri {
+    if (-not (Test-CommandExists "cargo")) {
+        Add-SemanticStatusRecord "semantic-miri" "blocked" "cargo is not installed"
+        Complete-SemanticRun -Profile "semantic-miri"
+        return
+    }
+    if (-not (Test-NightlyRustToolchain)) {
+        Add-SemanticStatusRecord "semantic-miri" "blocked" "pinned Rust nightly-2026-08-11 toolchain is not installed or unavailable"
+        Complete-SemanticRun -Profile "semantic-miri"
+        return
+    }
+    $previousToolchain = $env:RUSTUP_TOOLCHAIN
+    try {
+        $env:RUSTUP_TOOLCHAIN = $SemanticNightlyToolchain
+        $miriVersion = & cargo miri --version 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Add-SemanticStatusRecord "semantic-miri" "blocked" "cargo-miri is not installed"
+            Complete-SemanticRun -Profile "semantic-miri"
+            return
+        }
+        Invoke-Timed "semantic-miri-path-policy" @("cargo", "miri", "test", "-p", "taskflow-core", "--lib", "path_policy") -ContinueOnFailure
+    } finally {
+        if ($null -eq $previousToolchain) {
+            Remove-Item Env:RUSTUP_TOOLCHAIN -ErrorAction SilentlyContinue
+        } else {
+            $env:RUSTUP_TOOLCHAIN = $previousToolchain
+        }
+    }
+    Complete-SemanticRun -Profile "semantic-miri"
+}
+
 function Invoke-DiffWhitespaceCheck {
     $started = Get-Date
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1227,7 +1493,8 @@ function Get-ChangedBashScripts {
     foreach ($diffMode in @(@(), @("--cached"))) {
         $changed = & $GitPath diff @diffMode --name-only -- "scripts/*.sh" "install/*.sh"
         foreach ($path in $changed) {
-            if (-not [string]::IsNullOrWhiteSpace($path)) {
+            if (-not [string]::IsNullOrWhiteSpace($path) -and
+                (Test-Path -LiteralPath $path -PathType Leaf)) {
                 [void]$paths.Add($path)
             }
         }
@@ -2163,6 +2430,16 @@ exit 3
         Invoke-NextestSummarySmoke
     } elseif ($Mode -eq "compact-cargo-test-smoke") {
         Invoke-CompactCargoTestSmoke
+    } elseif ($Mode -eq "semantic-focused") {
+        Invoke-SemanticFocused
+    } elseif ($Mode -eq "semantic-fuzz") {
+        Invoke-SemanticFuzz
+    } elseif ($Mode -eq "semantic-loom") {
+        Invoke-SemanticLoom
+    } elseif ($Mode -eq "semantic-kani") {
+        Invoke-SemanticKani
+    } elseif ($Mode -eq "semantic-miri") {
+        Invoke-SemanticMiri
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck

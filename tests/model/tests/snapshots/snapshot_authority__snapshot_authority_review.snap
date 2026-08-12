@@ -1,26 +1,27 @@
 ---
 source: tests/snapshot_authority.rs
+assertion_line: 18
 expression: snapshot_authority_review_artifact()
 ---
 {
+  "invariant": "june_2026_live_snapshot_divergence_recovery",
   "bounded_state_count": 128,
   "counterexample_count": 0,
-  "invariant": "june_2026_live_snapshot_divergence_recovery",
+  "required_authority_switch": {
+    "when": "snapshot_fresh && snapshot_ids is a strict superset of live_ids",
+    "authority": "fresh_snapshot"
+  },
   "june_2026_regression_seed": {
-    "expected_authority": "fresh_snapshot",
     "live_ids": [
       "epic-root",
       "task-a"
     ],
-    "snapshot_fresh": true,
     "snapshot_ids": [
       "epic-root",
       "task-a",
       "task-b"
-    ]
-  },
-  "required_authority_switch": {
-    "authority": "fresh_snapshot",
-    "when": "snapshot_fresh && snapshot_ids is a strict superset of live_ids"
+    ],
+    "snapshot_fresh": true,
+    "expected_authority": "fresh_snapshot"
   }
 }

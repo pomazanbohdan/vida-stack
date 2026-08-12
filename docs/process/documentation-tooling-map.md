@@ -29,6 +29,9 @@ This map covers project-facing documentation tooling for the active `vida-stack`
    - product-spec owner for protocol authoring, block-level token reduction, algorithm selection, and validation gates
 8. `docs/process/runtime-command-authority-inventory.md`
    - project-owned inventory of public VIDA runtime and CLI command authority
+9. `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
+   - canonical Rust, WSL semantic-tool deployment, Kani compatibility, and
+     bootstrap reproduction runbook
 
 ## Read / Status Commands
 
@@ -103,6 +106,8 @@ Read this map when:
 5. project-local skill or runtime-development environment documentation is being created or updated.
 6. the task promotes a protocol-only or runtime-backed agent skill learning document into the project process lane.
 7. the task writes or compresses protocol, instruction, bootstrap-visible, or token-heavy process documentation.
+8. the task installs, upgrades, or reproduces the pinned Rust toolchain or
+   semantic proof tools used by this repository.
 
 ## Operational Rule
 
@@ -144,10 +149,10 @@ Read this map when:
 artifact_path: process/documentation-tooling-map
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-04'
+artifact_revision: '2026-08-12'
 schema_version: '1'
 status: canonical
 source_path: docs/process/documentation-tooling-map.md
 created_at: '2026-03-10T09:45:00+02:00'
-updated_at: 2026-07-03T07:22:56.7731399Z
+updated_at: 2026-08-12T00:00:00+03:00
 changelog_ref: documentation-tooling-map.changelog.jsonl

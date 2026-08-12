@@ -59,6 +59,11 @@ hooks. Default pre-commit must therefore stay fast and predictable.
 | `detect-private-key` | `pre-commit` | block private key material | fast |
 | `vida-script-check` | `pre-commit` | run repo-owned no-Cargo script/diff gate | bounded |
 | `vida-rust-quick` | `manual` | opt-in compile-aware Rust source proof | slower/manual |
+| `vida-semantic-prepush` | `pre-push` | run P0/P1 state-machine, fault, and metamorphic proof | bounded/slower |
+| `vida-semantic-fuzz` | `manual` | run Linux cargo-fuzz targets | toolchain/manual |
+| `vida-semantic-loom` | `manual` | run targeted Loom interleaving proof | Linux/manual |
+| `vida-semantic-kani` | `manual` | run bounded Kani proof | toolchain/manual |
+| `vida-semantic-miri` | `manual` | run targeted Miri checks | toolchain/manual |
 
 ## Acceptance Criteria
 
@@ -70,6 +75,8 @@ hooks. Default pre-commit must therefore stay fast and predictable.
 4. The config excludes generated/runtime-heavy paths that should not be
    normalized by file-fixer hooks.
 5. This contract records the hook matrix and non-goals.
+6. Pre-push runs only P0/P1; Linux-only and specialized proof tools remain
+   manual and return explicit blocked/not-applicable evidence when absent.
 
 ## Proof Targets
 
@@ -97,6 +104,21 @@ Run the opt-in Rust quick gate:
 
 ```powershell
 pre-commit run vida-rust-quick --hook-stage manual
+```
+
+Run the semantic pre-push gate directly:
+
+```powershell
+pre-commit run vida-semantic-prepush --hook-stage pre-push
+```
+
+Run specialized profiles manually on their supported toolchains:
+
+```powershell
+pwsh -File scripts/vida-dev-gate.ps1 -Mode semantic-fuzz -Json
+pwsh -File scripts/vida-dev-gate.ps1 -Mode semantic-loom -Json
+pwsh -File scripts/vida-dev-gate.ps1 -Mode semantic-kani -Json
+pwsh -File scripts/vida-dev-gate.ps1 -Mode semantic-miri -Json
 ```
 
 -----

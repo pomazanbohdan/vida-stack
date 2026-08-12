@@ -23,4 +23,9 @@ trycmd = "1.2.0"
 vida-contracts = { path = "../vida-contracts" }
 
 [dev-dependencies]
+common-format-jsonl = { path = "../common-format-jsonl" }
+common-format-toon = { path = "../common-format-toon" }
+docflow-format-jsonl = { path = "../docflow-format-jsonl" }
+proptest-state-machine = "0.8.0"
+taskflow-format-jsonl = { path = "../taskflow-format-jsonl" }
 vida-runtime-local = { path = "../vida-runtime-local" }

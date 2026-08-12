@@ -18,6 +18,9 @@ pub mod model;
 pub mod shadow_diff;
 pub mod state_conformance;
 
+#[cfg(test)]
+mod semantic_tests;
+
 #[cfg(unix)]
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];
 pub const STATE_LOCK_ERROR_MESSAGE: &str = "LOCK is already locked";

@@ -49,6 +49,9 @@ Purpose: provide the project-level agent instruction overlay for the repository 
     - `docs/process/zombie-d-test-writing-protocol.md`
 17. Protocol authoring and token economy law:
     - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
+18. Rust and semantic tooling reproducibility runbook:
+   - `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
+
 ## Bootstrap Read Path
 
 1. After `AGENTS.md`, read this sidecar immediately.
@@ -107,6 +110,9 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 28. This path set is mandatory bootstrap context, not an optional later lookup.
 29. For protocol authoring, instruction compression, token-budget gates, quality-versus-size block routing, or bootstrap-visible protocol registration, continue early to:
    - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
+
+30. For Rust toolchain installation, WSL semantic tools, Kani compatibility, fuzz/Loom/Miri deployment, or reproducible semantic proof setup, continue early to:
+   - `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
 
 ## Canonical Code-Search Routing
 
@@ -323,10 +329,10 @@ Verification checklist for complex or architectural work:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-07-22'
+artifact_revision: '2026-08-12'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-07-22T00:00:00+03:00
+updated_at: 2026-08-12T00:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

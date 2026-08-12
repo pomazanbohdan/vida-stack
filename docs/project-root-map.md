@@ -59,6 +59,9 @@ This map does not cover extracted secondary bundles by default.
 21. `docs/product/spec/protocol-authoring-and-token-economy-law.md`
      - product-spec law for protocol/instruction authoring, token-budget gates, and bootstrap-visible compression validation
 
+22. `docs/process/rust-and-semantic-tooling-reproducibility-runbook.md`
+    - canonical Rust, WSL semantic-tool deployment, Kani compatibility, manual-proof, and agent-bootstrap reproduction runbook
+
 ## Activation Triggers
 
 Read this map when:
@@ -116,6 +119,9 @@ Do not use this map as the default route for extracted bundles unless the task e
 19. Protocol authoring, instruction compression, token-budget gates, or bootstrap-visible documentation registration:
      - continue to `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
+20. Rust toolchain, semantic-tool installation, Kani compatibility, fuzz/Loom/Miri deployment, or proof reproduction:
+    - continue to docs/process/rust-and-semantic-tooling-reproducibility-runbook.md
+
 ## Boundary Rule
 
 1. `docs/**` remains the active current-project documentation surface for `vida-stack`.
@@ -126,10 +132,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-07-01'
+artifact_revision: '2026-08-12'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-07-03T06:54:50.9705656Z
+updated_at: 2026-08-12T00:00:00+03:00
 changelog_ref: project-root-map.changelog.jsonl

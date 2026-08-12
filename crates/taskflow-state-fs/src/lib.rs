@@ -437,6 +437,9 @@ mod tests {
         InMemoryTaskStore, JournalAggregateSnapshotRecord, JournalArtifactRecord,
         JournalProjectionFailure, OperationalJournal, TaskStore, TaskflowStateError,
     };
+    use vida_test_support::failure_injection::{
+        FaultInjectingJournal, FaultPoint, semantic_append_request,
+    };
     use vida_test_support::state_conformance::{
         StateAdapterFactory, run_state_adapter_conformance,
     };
@@ -498,6 +501,26 @@ mod tests {
             loaded.dependencies[0].depends_on_id.as_str(),
             "vida-rf1-taskflow-core"
         );
+    }
+
+    #[test]
+    fn partial_append_restarts_from_filesystem_journal_and_rejects_stale_retry() {
+        let path = temp_snapshot_path();
+        let stream = VidaStreamRef("semantic-stream".to_string());
+        let mut journal = FaultInjectingJournal::new(
+            FileOperationalJournal::create(&path).expect("create filesystem journal"),
+        );
+        journal.arm(FaultPoint::PartialJournalAppend);
+        assert!(journal.append(semantic_append_request()).is_err());
+        assert_eq!(journal.load_stream(&stream).len(), 1);
+        drop(journal);
+
+        let mut reopened = FileOperationalJournal::open(&path).expect("reopen filesystem journal");
+        assert_eq!(reopened.load_stream(&stream).len(), 1);
+        assert!(reopened.append(semantic_append_request()).is_err());
+        drop(reopened);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("bak"));
     }
 
     #[test]

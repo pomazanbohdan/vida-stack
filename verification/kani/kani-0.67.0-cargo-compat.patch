@@ -1,0 +1,28 @@
+diff --git a/kani-driver/src/args/cargo.rs b/kani-driver/src/args/cargo.rs
+index 67b04d7..40bb9a5 100644
+--- a/kani-driver/src/args/cargo.rs
++++ b/kani-driver/src/args/cargo.rs
+@@ -45,0 +46,4 @@ pub struct CargoCommonArgs {
++
++    /// Ignore package rust-version requirements when invoking Cargo.
++    #[arg(long)]
++    pub ignore_rust_version: bool,
+@@ -87,0 +91,4 @@ pub fn to_cargo_args(&self) -> Vec<CargoArg> {
++        if self.ignore_rust_version {
++            cargo_args.push("--ignore-rust-version".into());
++        }
++
+diff --git a/kani-driver/src/call_cargo.rs b/kani-driver/src/call_cargo.rs
+index fbcd09c..d93bc5e 100644
+--- a/kani-driver/src/call_cargo.rs
++++ b/kani-driver/src/call_cargo.rs
+@@ -163,6 +167,9 @@ pub fn cargo_build(&mut self, keep_going: bool) -> Result<CargoOutputs> {
+         if self.args.cargo.no_default_features {
+             cargo_args.push("--no-default-features".into());
+         }
++        if self.args.cargo.ignore_rust_version {
++            cargo_args.push("--ignore-rust-version".into());
++        }
+         let features = self.args.cargo.features();
+         if !features.is_empty() {
+             cargo_args.push(format!("--features={}", features.join(",")).into());
