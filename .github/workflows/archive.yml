@@ -154,11 +154,24 @@ jobs:
         with:
           path: _release_assets
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: tools/render-public-release-notes/go.mod
+          cache: false
+
+      - name: Build release notes renderer
+        shell: bash
+        working-directory: tools/render-public-release-notes
+        run: |
+          set -euo pipefail
+          go build -trimpath -o "$RUNNER_TEMP/render-public-release-notes" .
+
       - name: Render public release body
         shell: bash
         run: |
           set -euo pipefail
-          scripts/render-public-release-notes.sh "${RELEASE_TAG}" > _release_assets/release-notes.md
+          "$RUNNER_TEMP/render-public-release-notes" "${RELEASE_TAG}" > _release_assets/release-notes.md
 
       - name: Create or update GitHub release
         env:

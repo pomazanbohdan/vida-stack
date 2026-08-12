@@ -84,18 +84,21 @@ For the active release line:
 
 ## Tooling Rule
 
-The current thin render helper is:
+The canonical renderer is the isolated Go module:
 
-1. [render-public-release-notes.sh](../../scripts/render-public-release-notes.sh)
+1. [tools/render-public-release-notes](../../tools/render-public-release-notes/main.go)
+
+The existing [shell entrypoint](../../scripts/render-public-release-notes.sh) remains a compatibility wrapper for local callers and delegates to the Go renderer.
 
 Rules:
 
-1. this helper renders the public body from the canonical `install/release-notes-v*.md` artifact or a directly supplied file path,
+1. the Go renderer accepts the same tag or direct release-note path as the compatibility wrapper,
 2. it must strip the metadata footer at `-----`,
 3. it must drop the first top-level release-title heading (`# ...`) from the public body render,
 4. it must append a bottom `## Commit Ledger` section from the previous release tag to the current release tag,
 5. it must fail closed when the current or previous release tag cannot be resolved,
-6. GitHub release publication should consume that rendered output rather than the raw canonical file body.
+6. GitHub release publication should consume the built Go renderer output rather than the raw canonical file body,
+7. the wrapper may remain until one successful release workflow run proves parity, after which it can be removed in a separate cleanup change.
 
 ## Current Interpretation
 
@@ -111,10 +114,10 @@ For the active release line:
 artifact_path: process/release-formatting-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-08-12'
 schema_version: '1'
 status: canonical
 source_path: docs/process/release-formatting-protocol.md
 created_at: '2026-03-12T16:37:07+02:00'
-updated_at: '2026-06-02T02:30:00+03:00'
+updated_at: '2026-08-12T00:00:00+03:00'
 changelog_ref: release-formatting-protocol.changelog.jsonl
