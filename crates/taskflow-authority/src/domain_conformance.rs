@@ -345,4 +345,32 @@ mod tests {
             vec!["continuation", "run_graph", "task_lifecycle"]
         );
     }
+
+    #[test]
+    fn domain_conformance_scenarios_preserve_named_contract_and_diagnostics() {
+        let report = verify_domain_conformance();
+        let names = report
+            .scenario_results
+            .iter()
+            .map(|scenario| scenario.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "task.lifecycle.close_open_task",
+                "task.lifecycle.close_blocks_active_children",
+                "task.lifecycle.update_status",
+                "run_graph.terminal_closure_wins",
+                "run_graph.exception_takeover_resumes_owner",
+                "run_graph.blocked_lane_fails_closed",
+                "run_graph.downstream_handoff_advances_resume_target",
+                "continuation.open_delegated_cycle_requires_progress",
+                "continuation.idle_pause_boundary",
+            ]
+        );
+        assert!(report
+            .scenario_results
+            .iter()
+            .all(|scenario| scenario.passed && !scenario.detail.trim().is_empty()));
+    }
 }
