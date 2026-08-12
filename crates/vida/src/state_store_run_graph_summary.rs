@@ -308,8 +308,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt_and_rework_route(
             status.next_node = Some(blocked_target.clone());
             status.lifecycle_stage = format!("{blocked_target}_blocked");
             status.policy_gate = receipt.blocker_code.clone().unwrap_or_default();
-            status.handoff_state = format!("awaiting_{blocked_target}");
-            status.resume_target = format!("dispatch.{blocked_target}");
+            let (handoff_state, resume_target) =
+                taskflow_authority::run_graph_transition::run_graph_handoff(
+                    Some(&blocked_target),
+                    RunGraphDispatchTargetFormat::Direct,
+                );
+            status.handoff_state = handoff_state;
+            status.resume_target = resume_target;
             status.context_state = "sealed".to_string();
             status.recovery_ready = true;
         } else {

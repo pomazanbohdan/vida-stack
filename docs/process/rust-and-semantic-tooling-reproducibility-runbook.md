@@ -20,6 +20,22 @@ It does not activate VIDA runtime, dispatch TaskFlow commands, create
 authoritative receipts/effects, or replace the semantic-testing protocol.
 Production runtime behavior remains a separate proof surface.
 
+### Workspace Acceptance Boundary
+
+The acceptance command for this semantic slice is:
+
+~~~powershell
+cargo test --workspace --all-targets --exclude vida --locked
+cargo test --manifest-path tests/model/Cargo.toml --locked
+~~~
+
+The unscoped `cargo test --workspace --all-targets --locked` command also enters the
+VIDA runtime test contour. On 2026-08-12 that contour reported 2700 passing and 563
+failing tests because existing selection fixtures omit `role_selection.fallback_role`.
+That runtime fixture debt is intentionally outside this slice; semantic work must not
+weaken the fail-closed runtime guard or treat the unscoped result as semantic-gate
+evidence. Re-open runtime triage as a separate bounded task if that scope changes.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
@@ -281,6 +297,16 @@ does not make production/runtime state authoritative.
 
 Miri is not a replacement for Loom and is not expanded to unsafe/FFI or
 concurrency claims in this slice.
+
+### Stack Policy
+
+The VIDA CLI outer runtime thread and the deep async test harnesses use a
+64 MiB stack. This fixes the observed Windows test-thread overflow in
+resume/init regression paths while keeping the change bounded to the CLI
+carrier and explicit deep-test helpers. It does not set RUST_MIN_STACK, does
+not enlarge every Tokio worker thread, and does not change TaskFlow state or
+runtime semantics. If a new stack overflow appears, reproduce the smallest
+targeted test first; do not hide it with a global environment override.
 
 ## Pre-push And Pre-commit
 

@@ -9647,6 +9647,27 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn run_on_resume_test_stack<F, Fut>(name: &str, test: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = std::thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("resume test runtime");
+                runtime.block_on(test());
+            })
+            .expect("spawn resume test thread");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     fn wait_for_consume_resume_state_unlock(state_dir: &std::path::Path) {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
@@ -20583,8 +20604,16 @@ agent_system:
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[tokio::test]
-    async fn resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run(
+    #[test]
+    fn resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run(
+    ) {
+        run_on_resume_test_stack(
+            "resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run",
+            resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run_inner,
+        );
+    }
+
+    async fn resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run_inner(
     ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -20606,22 +20635,24 @@ agent_system:
             "implementation",
         );
         status.task_id = run_id.to_string();
-        status.active_node = "implementer".to_string();
-        status.next_node = Some("coach".to_string());
+        status.active_node = "coder".to_string();
+        status.next_node = Some("tester".to_string());
         status.status = "ready".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
         status.policy_gate = "single_task_scope_required".to_string();
-        status.handoff_state = "awaiting_implementer".to_string();
+        status.handoff_state = "awaiting_tester".to_string();
         status.context_state = "sealed".to_string();
         status.checkpoint_kind = "execution_cursor".to_string();
-        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.resume_target = "dispatch.tester".to_string();
         status.recovery_ready = true;
         store
             .record_run_graph_status(&status)
             .await
             .expect("persist run graph status");
+        let compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
 
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
+        let mut role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "auto".to_string(),
@@ -20630,32 +20661,25 @@ agent_system:
             selected_role: "pm".to_string(),
             conversational_mode: Some("development".to_string()),
             single_task_only: true,
-            tracked_flow_entry: Some("dev-pack".to_string()),
+            tracked_flow_entry: None,
             allow_freeform_chat: false,
             confidence: "high".to_string(),
-            matched_terms: vec!["continue".to_string()],
-            compiled_bundle: crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["implementer", "coach", "verification"],
-                        "implementer_activation": {
-                            "activation_agent_type": "junior",
-                            "activation_runtime_role": "worker"
-                        },
-                        "coach_activation": {
-                            "activation_agent_type": "middle",
-                            "activation_runtime_role": "coach"
-                        },
-                        "verifier_activation": {
-                            "activation_agent_type": "senior",
-                            "activation_runtime_role": "verifier"
-                        }
-                    }
-                }
-            }),
+            matched_terms: vec!["continue".to_string(), "tester".to_string()],
+            compiled_bundle: compiled_bundle.clone(),
+            execution_plan: serde_json::Value::Null,
             reason: "test".to_string(),
         };
+        let mut plan_selection = role_selection.clone();
+        plan_selection.tracked_flow_entry = None;
+        role_selection.execution_plan =
+            crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+                &compiled_bundle,
+                &plan_selection,
+            );
+        assert_eq!(
+            role_selection.execution_plan["team_flow_inclusion"]["status"], "ready",
+            "fixture must persist canonical inclusion receipts"
+        );
         store
             .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
                 run_id: run_id.to_string(),
@@ -20673,7 +20697,10 @@ agent_system:
             .expect("latest continuation path should recover missing first receipt");
 
         assert_eq!(resolved.dispatch_receipt.run_id, run_id);
-        assert_eq!(resolved.dispatch_receipt.dispatch_target, "implementer");
+        assert_eq!(
+            resolved.dispatch_receipt.dispatch_target,
+            "development_implementer"
+        );
         assert_eq!(resolved.dispatch_receipt.dispatch_status, "packet_ready");
         assert_eq!(resolved.dispatch_receipt.lane_status, "packet_ready");
         assert!(
@@ -20685,7 +20712,7 @@ agent_system:
             .await
             .expect("read persisted receipt")
             .expect("receipt should be persisted");
-        assert_eq!(persisted.dispatch_target, "implementer");
+        assert_eq!(persisted.dispatch_target, "development_implementer");
         assert_eq!(persisted.dispatch_status, "packet_ready");
 
         store.close().await;

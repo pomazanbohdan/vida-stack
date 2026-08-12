@@ -3691,7 +3691,7 @@ mod tests {
     pub(super) fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
         let handle = std::thread::Builder::new()
             .name(name.to_string())
-            .stack_size(32 * 1024 * 1024)
+            .stack_size(64 * 1024 * 1024)
             .spawn(test)
             .expect("cli-stack test thread should spawn");
         if let Err(panic) = handle.join() {
@@ -3702,7 +3702,7 @@ mod tests {
     pub(super) fn cli_tokio_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .thread_stack_size(32 * 1024 * 1024)
+            .thread_stack_size(64 * 1024 * 1024)
             .build()
             .expect("tokio runtime should initialize")
     }
@@ -9645,8 +9645,20 @@ mod agent_init_surface_tests {
         );
     }
 
-    #[tokio::test]
-    async fn agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id() {
+    #[test]
+    fn agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id() {
+        super::tests::run_on_cli_runtime_stack(
+            "agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id",
+            || {
+                let runtime = super::tests::cli_tokio_runtime();
+                runtime.block_on(
+                    agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id_inner(),
+                );
+            },
+        );
+    }
+
+    async fn agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id_inner() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = crate::state_store::StateStore::open(harness.path().to_path_buf())
             .await

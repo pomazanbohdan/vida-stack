@@ -368,7 +368,7 @@ use taskflow_spec_bootstrap::{
 };
 use time::format_description::well_known::Rfc3339;
 
-const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
+const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn main() -> ExitCode {
     bootstrap_windows_host_environment();

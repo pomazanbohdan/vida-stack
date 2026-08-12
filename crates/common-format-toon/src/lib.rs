@@ -3,7 +3,7 @@ pub fn render_compact_block(title: &str, body: &str) -> String {
 }
 
 pub fn sanitize_toon_scalar(value: &str) -> String {
-    let mut sanitized = String::new();
+    let mut sanitized = String::with_capacity(value.len());
     for character in value.chars() {
         if character.is_control() {
             sanitized.extend(character.escape_default());
