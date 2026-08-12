@@ -413,7 +413,27 @@ pub(crate) async fn build_runtime_lane_selection_with_store(
     store: &StateStore,
     request: &str,
 ) -> Result<RuntimeConsumptionLaneSelection, String> {
-    let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    build_runtime_lane_selection_with_store_persistence(store, request, true).await
+}
+
+pub(crate) async fn build_runtime_lane_selection_with_store_read_only(
+    store: &StateStore,
+    request: &str,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
+    build_runtime_lane_selection_with_store_persistence(store, request, false).await
+}
+
+pub(crate) async fn build_runtime_lane_selection_with_store_persistence(
+    store: &StateStore,
+    request: &str,
+    persist_launcher_snapshot: bool,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
+    let snapshot = if persist_launcher_snapshot {
+        read_or_sync_launcher_activation_snapshot(store).await?
+    } else {
+        crate::launcher_activation_snapshot::read_or_capture_launcher_activation_snapshot(store)
+            .await?
+    };
     build_runtime_lane_selection_from_bundle(
         &snapshot.compiled_bundle,
         &snapshot.source,

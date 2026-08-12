@@ -783,7 +783,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     }
-                    match super::build_taskflow_consume_bundle_payload(&store).await {
+                    match super::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_with_persistence(
+                        &store,
+                        !consume_final_mode.is_read_only(),
+                    )
+                    .await
+                    {
                         Ok(runtime_bundle) => {
                             let bundle_check =
                                 super::taskflow_consume_bundle_check(&runtime_bundle);
@@ -797,9 +802,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &registry, &check, &readiness, &proof,
                             );
                             let mut role_selection =
-                                match super::build_runtime_lane_selection_with_store(
+                                match super::runtime_lane_summary::build_runtime_lane_selection_with_store_persistence(
                                     &store,
                                     &request_text,
+                                    !consume_final_mode.is_read_only(),
                                 )
                                 .await
                                 {

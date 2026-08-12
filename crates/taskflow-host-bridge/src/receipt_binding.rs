@@ -136,17 +136,19 @@ impl HostBridgePrecursorFingerprintV1 {
 fn canonical_precursor_receipt(receipt: &Value) -> Result<Value, String> {
     let object = receipt
         .as_object()
-        .filter(|object| object.len() == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len())
+        .filter(|object| {
+            object.len() == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len()
+                || (object.len() + 1 == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len()
+                    && !object.contains_key("policy_bundle_ref"))
+        })
         .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
     let mut canonical = serde_json::Map::new();
     for field in HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS {
-        let value = object
-            .get(*field)
-            .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
+        let value = object.get(*field).cloned().unwrap_or(Value::Null);
         let value = match *field {
-            "dispatch_status" | "lane_status" => Value::String(normalize_precursor_status(value)?),
-            "dispatch_result_path" => normalize_precursor_result_path(value)?,
-            _ => value.clone(),
+            "dispatch_status" | "lane_status" => Value::String(normalize_precursor_status(&value)?),
+            "dispatch_result_path" => normalize_precursor_result_path(&value)?,
+            _ => value,
         };
         canonical.insert((*field).to_string(), value);
     }

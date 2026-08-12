@@ -225,6 +225,21 @@ pub(crate) async fn authorized_dispatch_rework_context_from_receipt_fields(
             Vec::new(),
         ));
     }
+    let packet_fallback_path = (downstream_dispatch_result_path.is_none()
+        && dispatch_result_path.is_none())
+    .then_some(dispatch_packet_path)
+    .flatten();
+    let result_paths = dispatch_result_path_candidates_from_receipt_fields(
+        downstream_dispatch_result_path,
+        dispatch_result_path,
+        packet_fallback_path,
+    );
+    if !result_paths
+        .iter()
+        .any(|path| dispatch_rework_route_from_result_path(path).is_some())
+    {
+        return Ok(None);
+    }
     let packet_path = dispatch_packet_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -260,21 +275,6 @@ pub(crate) async fn authorized_dispatch_rework_context_from_receipt_fields(
             packet_run_id,
             vec![run_id.to_string()],
         ));
-    }
-    let packet_fallback_path = (downstream_dispatch_result_path.is_none()
-        && dispatch_result_path.is_none())
-    .then_some(dispatch_packet_path)
-    .flatten();
-    let result_paths = dispatch_result_path_candidates_from_receipt_fields(
-        downstream_dispatch_result_path,
-        dispatch_result_path,
-        packet_fallback_path,
-    );
-    if !result_paths
-        .iter()
-        .any(|path| dispatch_rework_route_from_result_path(path).is_some())
-    {
-        return Ok(None);
     }
     store.show_task(task_id).await.map_err(|error| {
         rework_authority_blocker(

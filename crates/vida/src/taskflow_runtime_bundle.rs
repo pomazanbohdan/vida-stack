@@ -81,7 +81,25 @@ fn apply_terminal_task_active_run_graph_verdict(
 pub(crate) async fn build_taskflow_consume_bundle_payload(
     store: &StateStore,
 ) -> Result<TaskflowConsumeBundlePayload, String> {
-    let activation_snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    build_taskflow_consume_bundle_payload_with_persistence(store, true).await
+}
+
+pub(crate) async fn build_taskflow_consume_bundle_payload_read_only(
+    store: &StateStore,
+) -> Result<TaskflowConsumeBundlePayload, String> {
+    build_taskflow_consume_bundle_payload_with_persistence(store, false).await
+}
+
+pub(crate) async fn build_taskflow_consume_bundle_payload_with_persistence(
+    store: &StateStore,
+    persist_launcher_snapshot: bool,
+) -> Result<TaskflowConsumeBundlePayload, String> {
+    let activation_snapshot = if persist_launcher_snapshot {
+        read_or_sync_launcher_activation_snapshot(store).await?
+    } else {
+        crate::launcher_activation_snapshot::read_or_capture_launcher_activation_snapshot(store)
+            .await?
+    };
     let vida_root = bundle_project_root(
         store.root(),
         activation_snapshot.source_config_path.as_str(),
@@ -130,13 +148,6 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
-    let active_flow_mismatch = latest_global_run_graph_status
-        .as_ref()
-        .is_some_and(|global| {
-            latest_run_graph_status
-                .as_ref()
-                .is_none_or(|current| current.run_id != global.run_id)
-        });
     let effective_latest_run_graph_status = latest_run_graph_status.as_ref();
     let effective_latest_run_graph_recovery = latest_run_graph_recovery.as_ref();
     let latest_terminal_task_active_run_graph_status = store
@@ -169,6 +180,23 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
+    let single_active_task_matches_global = latest_global_run_graph_status
+        .as_ref()
+        .zip(taskflow_active_candidates.first())
+        .is_some_and(|(global, candidate)| {
+            taskflow_active_candidates.len() == 1
+                && candidate["task_id"].as_str() == Some(global.task_id.as_str())
+        });
+    let active_flow_mismatch = latest_global_run_graph_status
+        .as_ref()
+        .is_some_and(|global| {
+            latest_run_graph_status
+                .as_ref()
+                .is_none_or(|current| current.run_id != global.run_id)
+        })
+        && !single_active_task_matches_global;
     let (mut latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
         match effective_latest_run_graph_status {
             Some(status) => {
@@ -260,8 +288,6 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         }
         _ => false,
     };
-    let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let continuation_binding =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_continuation_binding.as_ref(),
@@ -358,11 +384,48 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         effective_latest_run_graph_status,
         effective_latest_run_graph_recovery,
     );
+    let global_closed_task_active_run_projection_mismatch =
+        if latest_global_run_graph_status.is_none() {
+            let mut mismatch = false;
+            for task in all_tasks.iter().filter(|task| {
+                crate::state_store::StateStore::task_status_is_closed_like(&task.status)
+            }) {
+                let Some(run_id) = store
+                    .latest_run_graph_run_id_for_task(&task.id)
+                    .await
+                    .map_err(|error| format!("Failed to read closed-task run graph id: {error}"))?
+                else {
+                    continue;
+                };
+                let status = store.run_graph_status(&run_id).await.map_err(|error| {
+                    format!("Failed to read closed-task run graph status: {error}")
+                })?;
+                if status.task_id != task.id
+                || crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                    &status,
+                )
+            {
+                continue;
+            }
+                if !store
+                    .run_graph_terminal_closure_has_task_close_truth(&status)
+                    .await
+                    .map_err(|error| format!("Failed to read closed-task closure truth: {error}"))?
+                {
+                    mismatch = true;
+                    break;
+                }
+            }
+            mismatch
+        } else {
+            false
+        };
     let closed_task_active_run_projection_mismatch =
         !latest_recovery_is_terminal_retired_runtime_run
             && (latest_run_graph_task_closed
                 || global_closed_run_is_current
-                || terminal_closed_run_is_current);
+                || terminal_closed_run_is_current
+                || global_closed_task_active_run_projection_mismatch);
     let continuation_binding = if active_flow_mismatch {
         crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
             continuation_binding,
@@ -400,9 +463,11 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .await
         .map_err(|error| format!("Failed to read protocol binding cache token: {error}"))?
         .unwrap_or_default();
-    let compiled_payload_import_evidence =
-        crate::taskflow_protocol_binding::protocol_binding_compiled_payload_import_evidence(store)
-            .await;
+    let compiled_payload_import_evidence = crate::taskflow_protocol_binding::protocol_binding_compiled_payload_import_evidence_with_persistence(
+        store,
+        persist_launcher_snapshot,
+    )
+    .await;
     let protocol_binding_ready = protocol_binding_receipt.is_some()
         && !protocol_binding_rows.is_empty()
         && compiled_payload_import_evidence.imported

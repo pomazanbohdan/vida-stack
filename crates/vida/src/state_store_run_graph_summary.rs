@@ -2973,10 +2973,14 @@ impl StateStore {
         // bound identically during fingerprint creation and validation.
         let value = taskflow_host_bridge::HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
             .iter()
-            .filter_map(|field| {
-                object
-                    .get(*field)
-                    .map(|value| ((*field).to_string(), value.clone()))
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    object
+                        .get(*field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
             })
             .collect::<serde_json::Map<_, _>>();
         taskflow_host_bridge::HostBridgePrecursorFingerprintV1::from_dispatch_receipt(
@@ -4951,14 +4955,25 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
+            let receipt = self
+                .run_graph_dispatch_receipt_stored(&latest.run_id)
+                .await?;
+            let superseded_lane = receipt.as_ref().is_some_and(|receipt| {
+                receipt.lane_status.as_deref() == Some("lane_superseded")
+                    && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+            });
+            if superseded_lane
+                && !receipt
+                    .as_ref()
+                    .is_some_and(stored_receipt_has_active_exception_takeover)
+            {
+                continue;
+            }
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
             let task = self.show_task(&latest.task_id).await.ok();
             let task_exists = task.is_some();
-            let receipt = self
-                .run_graph_dispatch_receipt_stored(&latest.run_id)
-                .await?;
             let active_receipt = self
                 .run_graph_dispatch_receipt_has_active_lane_evidence(&latest.run_id)
                 .await?;
@@ -5038,6 +5053,20 @@ impl StateStore {
     pub(crate) async fn latest_terminal_task_active_run_graph_status(
         &self,
     ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let explicit_open_task_binding_task_id = match self
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await?
+        {
+            Some(binding) => {
+                let task_is_open = self
+                    .show_task(&binding.task_id)
+                    .await
+                    .ok()
+                    .is_some_and(|task| !StateStore::task_status_is_closed_like(&task.status));
+                task_is_open.then_some(binding.task_id)
+            }
+            None => None,
+        };
         let mut query = self
             .db
             .query(
@@ -5058,15 +5087,29 @@ impl StateStore {
             {
                 continue;
             }
-            if self
+            let status = self.run_graph_status(&latest.run_id).await?;
+            let task_is_closed = self
                 .show_task(&latest.task_id)
                 .await
                 .ok()
-                .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status))
-            {
-                continue;
+                .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status));
+            if task_is_closed {
+                if explicit_open_task_binding_task_id.as_deref() == Some(latest.task_id.as_str()) {
+                    continue;
+                }
+                if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                    &status,
+                ) && self
+                    .run_graph_terminal_closure_has_task_close_truth(&status)
+                    .await?
+                {
+                    continue;
+                }
+                // Keep closed stale runs visible as diagnostic evidence. The
+                // caller must fail closed and offer reconciliation; hiding the
+                // row makes the same defect look like an idle graph.
+                return Ok(Some(status));
             }
-            let status = self.run_graph_status(&latest.run_id).await?;
             let active_dispatch =
                 status.recovery_ready && status.resume_target.starts_with("dispatch.");
             let task_is_terminal = self
@@ -7228,8 +7271,8 @@ mod tests {
         receipt.policy_bundle_ref = Some(RunGraphPolicyPin {
             policy_id: "rhai.runtime.authority".to_string(),
             version: 1,
-            content_digest:
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            content_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
         });
         let identity = sample_host_bridge_receipt_identity(run_id, packet_path, &receipt);
         let baseline = identity
@@ -7241,14 +7284,17 @@ mod tests {
         cross_policy.policy_bundle_ref = Some(RunGraphPolicyPin {
             policy_id: "rhai.runtime.authority".to_string(),
             version: 2,
-            content_digest:
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            content_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
         });
         let cross_policy_fingerprint =
             StateStore::host_bridge_precursor_fingerprint(&identity.request_id, &cross_policy)
                 .expect("cross-policy fingerprint should build");
 
-        assert_ne!(baseline.fingerprint(), cross_policy_fingerprint.fingerprint());
+        assert_ne!(
+            baseline.fingerprint(),
+            cross_policy_fingerprint.fingerprint()
+        );
         assert_ne!(
             baseline.exact_binding_key(),
             cross_policy_fingerprint.exact_binding_key()
@@ -7274,18 +7320,16 @@ mod tests {
                 .contains("host_bridge_precursor_fingerprint_conflict"),
             "error={error:?}"
         );
-        assert!(
-            store
-                .host_bridge_receipt_identity(
-                    &identity.run_id,
-                    &identity.dispatch_target,
-                    &identity.packet_path,
-                    &identity.request_id,
-                )
-                .await
-                .expect("identity lookup should succeed")
-                .is_none()
-        );
+        assert!(store
+            .host_bridge_receipt_identity(
+                &identity.run_id,
+                &identity.dispatch_target,
+                &identity.packet_path,
+                &identity.request_id,
+            )
+            .await
+            .expect("identity lookup should succeed")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
@@ -11797,7 +11841,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_status_skips_active_run_for_closed_task() {
+    async fn latest_run_graph_status_retains_unrelated_closed_task_active_evidence() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         let nanos = SystemTime::now()
@@ -11956,9 +12000,12 @@ mod tests {
             .latest_terminal_task_active_run_graph_status()
             .await
             .expect("terminal-task-active evidence should load");
-        assert!(
-            terminal_evidence.is_none(),
-            "terminal closed-task run must not remain active projection evidence"
+        assert_eq!(
+            terminal_evidence
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
+            Some("run-closed-active-task"),
+            "unrelated closed-task stale run must remain diagnostic evidence"
         );
 
         let graph_summary = store
@@ -12041,8 +12088,8 @@ mod tests {
                 exception_path_receipt_id: None,
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida agent-init".to_string()),
-                dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
-                dispatch_packet_path: Some("packet.json".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
                 dispatch_result_path: None,
                 blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
                 downstream_dispatch_target: None,

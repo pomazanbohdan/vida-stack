@@ -352,9 +352,7 @@ fn host_bridge_request_uses_current_packet_scoped_receipt_only() {
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -833,168 +831,168 @@ fn project_bound_state_dir() -> (String, String) {
     )
     .expect("write AGENTS.sidecar.md");
     let fixture_overlay_yaml = concat!(
-            "project:\n",
-            "  id: test\n",
-            "agent_system:\n",
-            "  mode: internal\n",
-            "  state_owner: taskflow_state_store\n",
-            "  max_parallel_agents: 4\n",
-            "  model_selection:\n",
-            "    enabled: true\n",
-            "    candidate_scope: unified_carrier_model_profiles\n",
-            "    default_strategy: balanced_cost_quality\n",
-            "    selection_rule: cheapest_capable\n",
-            "    semantic_scores:\n",
-            "      reasoning_effort: {minimal: 15.0, low: 35.0, medium: 60.0, high: 82.0, xhigh: 95.0}\n",
-            "      quality_tier: {low: 35.0, medium: 60.0, high: 82.0}\n",
-            "      speed_tier: {slow: 35.0, medium: 60.0, fast: 82.0}\n",
-            "    ordinal_ranks:\n",
-            "      reasoning_effort: {minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5}\n",
-            "      quality_tier: {low: 1, medium: 3, high: 4}\n",
-            "    missing_reasoning_effort_policy:\n",
-            "      mode: use_configured_default\n",
-            "      default: medium\n",
-            "  subagents:\n",
-            "    junior:\n",
-            "      enabled: true\n",
-            "      subagent_backend_class: internal\n",
-            "      rate: 1\n",
-            "      default_runtime_role: worker\n",
-            "      runtime_roles:\n",
-            "        - worker\n",
-            "      task_classes:\n",
-            "        - implementation\n",
-            "      default_model_profile: test_low\n",
-            "      write_scope: scoped_only\n",
-            "      model_profiles:\n",
-            "        test_low:\n",
-            "          profile_id: test_low\n",
-            "          provider: test\n",
-            "          model_ref: test-model-low\n",
-            "          reasoning_effort: low\n",
-            "          quality_tier: medium\n",
-            "          speed_tier: fast\n",
-            "          normalized_cost_units: 1\n",
-            "          sandbox_mode: workspace-write\n",
-            "          write_scope: scoped_only\n",
-            "          runtime_roles:\n",
-            "            - worker\n",
-            "          task_classes:\n",
-            "            - implementation\n",
-            "          readiness:\n",
-            "            required: false\n",
-            "            ready: true\n",
-            "    senior:\n",
-            "      enabled: true\n",
-            "      subagent_backend_class: internal\n",
-            "      rate: 2\n",
-            "      default_runtime_role: verifier\n",
-            "      runtime_roles:\n",
-            "        - verifier\n",
-            "      task_classes:\n",
-            "        - verification\n",
-            "      default_model_profile: test_verifier\n",
-            "      write_scope: scoped_only\n",
-            "      model_profiles:\n",
-            "        test_verifier:\n",
-            "          profile_id: test_verifier\n",
-            "          provider: test\n",
-            "          model_ref: test-model-verifier\n",
-            "          reasoning_effort: medium\n",
-            "          quality_tier: high\n",
-            "          speed_tier: medium\n",
-            "          normalized_cost_units: 2\n",
-            "          sandbox_mode: workspace-write\n",
-            "          write_scope: scoped_only\n",
-            "          runtime_roles:\n",
-            "            - verifier\n",
-            "          task_classes:\n",
-            "            - verification\n",
-            "          readiness:\n",
-            "            required: false\n",
-            "            ready: true\n",
-            "    middle:\n",
-            "      enabled: true\n",
-            "      subagent_backend_class: internal\n",
-            "      rate: 2\n",
-            "      default_runtime_role: business_analyst\n",
-            "      runtime_roles:\n",
-            "        - business_analyst\n",
-            "        - worker\n",
-            "        - coach\n",
-            "      task_classes:\n",
-            "        - specification\n",
-            "        - regression_test\n",
-            "        - validation\n",
-            "        - coach\n",
-            "      default_model_profile: test_middle\n",
-            "      write_scope: scoped_only\n",
-            "      model_profiles:\n",
-            "        test_middle:\n",
-            "          profile_id: test_middle\n",
-            "          provider: test\n",
-            "          model_ref: test-model-middle\n",
-            "          reasoning_effort: medium\n",
-            "          quality_tier: medium\n",
-            "          speed_tier: fast\n",
-            "          normalized_cost_units: 2\n",
-            "          sandbox_mode: workspace-write\n",
-            "          write_scope: scoped_only\n",
-            "          runtime_roles:\n",
-            "            - business_analyst\n",
-            "            - worker\n",
-            "            - coach\n",
-            "          task_classes:\n",
-            "            - specification\n",
-            "            - regression_test\n",
-            "            - validation\n",
-            "            - coach\n",
-            "          readiness:\n",
-            "            required: false\n",
-            "            ready: true\n",
-            "requirement_analysis:\n",
-            "  party_chat_route:\n",
-            "    enabled: true\n",
-            "    route_owner: problem-party projection\n",
-            "    route_id: party_chat_challenge_round\n",
-            "    board_flow_id: party_chat_council_modern_full\n",
-            "    activation_policy: optional_explicit_or_risk_triggered\n",
-            "    default_for_routine_requirements: false\n",
-            "    structured_output_contract:\n",
-            "      - findings\n",
-            "      - conflicts\n",
-            "      - questions\n",
-            "      - options\n",
-            "      - synthesis\n",
-            "    guardrails:\n",
-            "      - do_not_bypass_taskflow_writer\n",
-            "      - do_not_bypass_coach\n",
-            "      - do_not_bypass_verifier\n",
-            "      - do_not_bypass_approval\n",
-            "      - do_not_bypass_closure_law\n",
-            "    triggers:\n",
-            "      - trigger_id: critical_depth\n",
-            "        kind: depth_mode\n",
-            "        values:\n",
-            "          - critical\n",
-            "      - trigger_id: explicit_multi_perspective_request\n",
-            "        kind: source_terms\n",
-            "        terms:\n",
-            "          - multi-perspective\n",
-            "          - party chat\n",
-            "          - problem-party\n",
-            "          - challenge round\n",
-            "      - trigger_id: cross_boundary_ambiguity\n",
-            "        kind: source_terms\n",
-            "        terms:\n",
-            "          - architecture ambiguity\n",
-            "          - security ambiguity\n",
-            "          - data ambiguity\n",
-            "          - api ambiguity\n",
-            "agent_extensions:\n",
-            "  role_selection:\n",
-            "    mode: default\n",
-        );
+        "project:\n",
+        "  id: test\n",
+        "agent_system:\n",
+        "  mode: internal\n",
+        "  state_owner: taskflow_state_store\n",
+        "  max_parallel_agents: 4\n",
+        "  model_selection:\n",
+        "    enabled: true\n",
+        "    candidate_scope: unified_carrier_model_profiles\n",
+        "    default_strategy: balanced_cost_quality\n",
+        "    selection_rule: cheapest_capable\n",
+        "    semantic_scores:\n",
+        "      reasoning_effort: {minimal: 15.0, low: 35.0, medium: 60.0, high: 82.0, xhigh: 95.0}\n",
+        "      quality_tier: {low: 35.0, medium: 60.0, high: 82.0}\n",
+        "      speed_tier: {slow: 35.0, medium: 60.0, fast: 82.0}\n",
+        "    ordinal_ranks:\n",
+        "      reasoning_effort: {minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5}\n",
+        "      quality_tier: {low: 1, medium: 3, high: 4}\n",
+        "    missing_reasoning_effort_policy:\n",
+        "      mode: use_configured_default\n",
+        "      default: medium\n",
+        "  subagents:\n",
+        "    junior:\n",
+        "      enabled: true\n",
+        "      subagent_backend_class: internal\n",
+        "      rate: 1\n",
+        "      default_runtime_role: worker\n",
+        "      runtime_roles:\n",
+        "        - worker\n",
+        "      task_classes:\n",
+        "        - implementation\n",
+        "      default_model_profile: test_low\n",
+        "      write_scope: scoped_only\n",
+        "      model_profiles:\n",
+        "        test_low:\n",
+        "          profile_id: test_low\n",
+        "          provider: test\n",
+        "          model_ref: test-model-low\n",
+        "          reasoning_effort: low\n",
+        "          quality_tier: medium\n",
+        "          speed_tier: fast\n",
+        "          normalized_cost_units: 1\n",
+        "          sandbox_mode: workspace-write\n",
+        "          write_scope: scoped_only\n",
+        "          runtime_roles:\n",
+        "            - worker\n",
+        "          task_classes:\n",
+        "            - implementation\n",
+        "          readiness:\n",
+        "            required: false\n",
+        "            ready: true\n",
+        "    senior:\n",
+        "      enabled: true\n",
+        "      subagent_backend_class: internal\n",
+        "      rate: 2\n",
+        "      default_runtime_role: verifier\n",
+        "      runtime_roles:\n",
+        "        - verifier\n",
+        "      task_classes:\n",
+        "        - verification\n",
+        "      default_model_profile: test_verifier\n",
+        "      write_scope: scoped_only\n",
+        "      model_profiles:\n",
+        "        test_verifier:\n",
+        "          profile_id: test_verifier\n",
+        "          provider: test\n",
+        "          model_ref: test-model-verifier\n",
+        "          reasoning_effort: medium\n",
+        "          quality_tier: high\n",
+        "          speed_tier: medium\n",
+        "          normalized_cost_units: 2\n",
+        "          sandbox_mode: workspace-write\n",
+        "          write_scope: scoped_only\n",
+        "          runtime_roles:\n",
+        "            - verifier\n",
+        "          task_classes:\n",
+        "            - verification\n",
+        "          readiness:\n",
+        "            required: false\n",
+        "            ready: true\n",
+        "    middle:\n",
+        "      enabled: true\n",
+        "      subagent_backend_class: internal\n",
+        "      rate: 2\n",
+        "      default_runtime_role: business_analyst\n",
+        "      runtime_roles:\n",
+        "        - business_analyst\n",
+        "        - worker\n",
+        "        - coach\n",
+        "      task_classes:\n",
+        "        - specification\n",
+        "        - regression_test\n",
+        "        - validation\n",
+        "        - coach\n",
+        "      default_model_profile: test_middle\n",
+        "      write_scope: scoped_only\n",
+        "      model_profiles:\n",
+        "        test_middle:\n",
+        "          profile_id: test_middle\n",
+        "          provider: test\n",
+        "          model_ref: test-model-middle\n",
+        "          reasoning_effort: medium\n",
+        "          quality_tier: medium\n",
+        "          speed_tier: fast\n",
+        "          normalized_cost_units: 2\n",
+        "          sandbox_mode: workspace-write\n",
+        "          write_scope: scoped_only\n",
+        "          runtime_roles:\n",
+        "            - business_analyst\n",
+        "            - worker\n",
+        "            - coach\n",
+        "          task_classes:\n",
+        "            - specification\n",
+        "            - regression_test\n",
+        "            - validation\n",
+        "            - coach\n",
+        "          readiness:\n",
+        "            required: false\n",
+        "            ready: true\n",
+        "requirement_analysis:\n",
+        "  party_chat_route:\n",
+        "    enabled: true\n",
+        "    route_owner: problem-party projection\n",
+        "    route_id: party_chat_challenge_round\n",
+        "    board_flow_id: party_chat_council_modern_full\n",
+        "    activation_policy: optional_explicit_or_risk_triggered\n",
+        "    default_for_routine_requirements: false\n",
+        "    structured_output_contract:\n",
+        "      - findings\n",
+        "      - conflicts\n",
+        "      - questions\n",
+        "      - options\n",
+        "      - synthesis\n",
+        "    guardrails:\n",
+        "      - do_not_bypass_taskflow_writer\n",
+        "      - do_not_bypass_coach\n",
+        "      - do_not_bypass_verifier\n",
+        "      - do_not_bypass_approval\n",
+        "      - do_not_bypass_closure_law\n",
+        "    triggers:\n",
+        "      - trigger_id: critical_depth\n",
+        "        kind: depth_mode\n",
+        "        values:\n",
+        "          - critical\n",
+        "      - trigger_id: explicit_multi_perspective_request\n",
+        "        kind: source_terms\n",
+        "        terms:\n",
+        "          - multi-perspective\n",
+        "          - party chat\n",
+        "          - problem-party\n",
+        "          - challenge round\n",
+        "      - trigger_id: cross_boundary_ambiguity\n",
+        "        kind: source_terms\n",
+        "        terms:\n",
+        "          - architecture ambiguity\n",
+        "          - security ambiguity\n",
+        "          - data ambiguity\n",
+        "          - api ambiguity\n",
+        "agent_extensions:\n",
+        "  role_selection:\n",
+        "    mode: default\n",
+    );
     let config_path = format!("{project_root}/vida.config.yaml");
     let canonical_config_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -2218,9 +2216,7 @@ fn stale_blocked_next_lawful_projection() -> serde_json::Value {
 fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -2812,40 +2808,121 @@ fn create_run_graph_backing_task(state_dir: &str, task_id: &str) {
 
 // Management-only fixture seam: persist the same projections as run-graph init
 // without invoking the dispatch-gated mutation surface.
-fn seed_management_run_graph_fixture(state_dir: &str, task_id: &str) {
+fn seed_management_run_graph_fixtures(state_dir: &str, task_ids: &[&str]) {
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
             .await
             .expect("open surreal store");
-        db.use_ns("vida").use_db("primary").await.expect("use namespace/database");
-        let run_id = task_id;
-        let projection = serde_json::json!({
-            "run_id": run_id, "task_id": task_id, "task_class": "implementation",
-            "active_node": "implementation", "next_node": null, "status": "pending",
-            "updated_at": "2026-06-01T00:00:00Z"
-        });
-        db.query("UPSERT type::record('execution_plan_state', $run) CONTENT $row")
-            .bind(("run", run_id)).bind(("row", projection)).await
-            .expect("seed execution plan state");
-        db.query("UPSERT type::record('routed_run_state', $run) CONTENT $row")
-            .bind(("run", run_id)).bind(("row", serde_json::json!({
-                "run_id": run_id, "route_task_class": "implementation",
-                "selected_backend": "unknown", "lane_id": "unassigned",
-                "lifecycle_stage": "initialized", "updated_at": "2026-06-01T00:00:00Z"
-            }))).await.expect("seed routed run state");
-        db.query("UPSERT type::record('governance_state', $run) CONTENT $row")
-            .bind(("run", run_id)).bind(("row", serde_json::json!({
-                "run_id": run_id, "policy_gate": "not_required", "handoff_state": "none",
-                "context_state": "open", "updated_at": "2026-06-01T00:00:00Z"
-            }))).await.expect("seed governance state");
-        db.query("UPSERT type::record('resumability_capsule', $run) CONTENT $row")
-            .bind(("run", run_id)).bind(("row", serde_json::json!({
-                "run_id": run_id, "checkpoint_kind": "none", "resume_target": "none",
-                "recovery_ready": false, "updated_at": "2026-06-01T00:00:00Z"
-            }))).await.expect("seed resumability capsule");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        for task_id in task_ids {
+            let run_id = *task_id;
+            let projection = serde_json::json!({
+                "run_id": run_id, "task_id": task_id, "task_class": "implementation",
+                "active_node": "implementation", "next_node": "none", "status": "pending",
+                "updated_at": "2026-06-01T00:00:00Z"
+            });
+            db.query("UPSERT type::record('execution_plan_state', $run) CONTENT $row")
+                .bind(("run", run_id))
+                .bind(("row", projection))
+                .await
+                .expect("seed execution plan state");
+            db.query("UPSERT type::record('routed_run_state', $run) CONTENT $row")
+                .bind(("run", run_id))
+                .bind((
+                    "row",
+                    serde_json::json!({
+                        "run_id": run_id, "route_task_class": "implementation",
+                        "selected_backend": "unknown", "lane_id": "unassigned",
+                        "lifecycle_stage": "initialized", "updated_at": "2026-06-01T00:00:00Z"
+                    }),
+                ))
+                .await
+                .expect("seed routed run state");
+            db.query("UPSERT type::record('governance_state', $run) CONTENT $row")
+                .bind(("run", run_id))
+                .bind((
+                    "row",
+                    serde_json::json!({
+                        "run_id": run_id, "policy_gate": "not_required", "handoff_state": "none",
+                        "context_state": "open", "updated_at": "2026-06-01T00:00:00Z"
+                    }),
+                ))
+                .await
+                .expect("seed governance state");
+            db.query("UPSERT type::record('resumability_capsule', $run) CONTENT $row")
+                .bind(("run", run_id))
+                .bind((
+                    "row",
+                    serde_json::json!({
+                        "run_id": run_id, "checkpoint_kind": "none", "resume_target": "none",
+                        "recovery_ready": false, "updated_at": "2026-06-01T00:00:00Z"
+                    }),
+                ))
+                .await
+                .expect("seed resumability capsule");
+        }
         drop(db);
+        tokio::time::sleep(Duration::from_millis(100)).await;
     });
+}
+
+fn seed_management_run_graph_fixture(state_dir: &str, task_id: &str) {
+    seed_management_run_graph_fixtures(state_dir, &[task_id]);
+}
+
+fn write_test_dispatch_packet(state_dir: &str, run_id: &str) -> String {
+    let packet_path = format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json");
+    fs::create_dir_all(
+        std::path::Path::new(&packet_path)
+            .parent()
+            .expect("dispatch packet parent"),
+    )
+    .expect("create dispatch packet dir");
+    fs::write(
+        &packet_path,
+        serde_json::to_string_pretty(&serde_json::json!({"run_id": run_id}))
+            .expect("encode dispatch packet"),
+    )
+    .expect("write dispatch packet");
+    packet_path
+}
+
+async fn open_task_smoke_db_with_retry(state_dir: &str) -> Surreal<Db> {
+    let mut last_error = None;
+    for attempt in 0..120_u64 {
+        match Surreal::new::<SurrealKv>(state_dir).await {
+            Ok(db) => match db.use_ns("vida").use_db("primary").await {
+                Ok(_) => return db,
+                Err(error) if task_smoke_is_lock_error(&error.to_string()) => {
+                    last_error = Some(error.to_string());
+                    drop(db);
+                }
+                Err(error) => panic!("task smoke state namespace should open: {error}"),
+            },
+            Err(error) if task_smoke_is_lock_error(&error.to_string()) => {
+                last_error = Some(error.to_string());
+            }
+            Err(error) => panic!("task smoke state db should open: {error}"),
+        }
+        tokio::time::sleep(Duration::from_millis((25 * (attempt + 1)).min(250))).await;
+    }
+    panic!(
+        "task smoke state db should open after retries: {}",
+        last_error.unwrap_or_else(|| "unknown lock error".to_string())
+    );
+}
+
+fn task_smoke_is_lock_error(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("lock")
+        || lowered.contains("being used by another process")
+        || lowered.contains("access is denied")
+        || lowered.contains("os error 33")
+        || lowered.contains("could not acquire")
 }
 
 struct AgentStatusScenario {
@@ -3826,10 +3903,7 @@ fn task_tree_status_selector_parity_envelope_matrix() {
     fs::create_dir_all(&state_dir).expect("create state dir");
     sample_jsonl(&jsonl_path);
     run_and_assert_success(&["boot"], &state_dir);
-    run_and_assert_success(
-        &["task", "import-jsonl", &jsonl_path, "--json"],
-        &state_dir,
-    );
+    run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
 
     let pass = run_command_json(&["task", "tree", "vida-b", "--json"], &state_dir);
     assert_eq!(pass["status"], "pass");
@@ -3838,7 +3912,14 @@ fn task_tree_status_selector_parity_envelope_matrix() {
     assert_eq!(pass["task"]["status"], "in_progress");
 
     let selected = run_command_json(
-        &["task", "tree", "vida-b", "--fields", "task.status", "--json"],
+        &[
+            "task",
+            "tree",
+            "vida-b",
+            "--fields",
+            "task.status",
+            "--json",
+        ],
         &state_dir,
     );
     assert_eq!(selected["status"], "pass");
@@ -4276,7 +4357,6 @@ fn task_list_help_and_parser_share_field_selector_contract() {
 
     let _ = fs::remove_dir_all(&state_dir);
 }
-
 
 #[test]
 fn task_list_fields_and_default_toon_shape_are_binary_visible() {
@@ -12366,9 +12446,7 @@ fn external_attempt_scope_guard() {
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -12470,9 +12548,7 @@ fn external_attempt_scope_guard() {
     }]);
     fs::write(&request_path, blocked_request.to_string()).expect("write blocked request");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -12592,9 +12668,7 @@ fn external_attempt_scope_guard() {
     fs::write(&request_path, missing_artifacts_request.to_string())
         .expect("write missing-artifacts request");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -13708,9 +13782,7 @@ fn graph_summary_invalid_persisted_graph_returns_json_envelope() {
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -14439,9 +14511,7 @@ fn task_replace_jsonl_rebinds_latest_run_graph_continuation() {
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -15103,9 +15173,7 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -15289,9 +15357,7 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
     );
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -21713,14 +21779,17 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             &state_dir,
         );
         assert_eq!(created["status"], "pass");
-        seed_management_run_graph_fixture(&state_dir, task_id);
     }
-
+    seed_management_run_graph_fixtures(
+        &state_dir,
+        &[
+            "task-reconcile-closed-runs-a",
+            "task-reconcile-closed-runs-b",
+        ],
+    );
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -21730,15 +21799,16 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             "task-reconcile-closed-runs-b",
         ] {
             let mut run_query = db
-                .query("SELECT VALUE run_id FROM execution_plan_state WHERE task_id = $task LIMIT 1")
+                .query(
+                    "SELECT VALUE run_id FROM execution_plan_state WHERE task_id = $task LIMIT 1",
+                )
                 .bind(("task", task_id))
                 .await
                 .expect("query task run id");
             let mut run_ids: Vec<String> = run_query.take(0).expect("decode task run id");
             let run_id = run_ids.pop().expect("task run graph should exist");
-            let result_path = format!(
-                "{state_dir}/runtime-consumption/dispatch-results/{run_id}.json"
-            );
+            let result_path =
+                format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}.json");
             fs::create_dir_all(
                 std::path::Path::new(&result_path)
                     .parent()
@@ -21758,6 +21828,20 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
                 .expect("encode dispatch result"),
             )
             .expect("write dispatch result");
+            let packet_path =
+                format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json");
+            fs::create_dir_all(
+                std::path::Path::new(&packet_path)
+                    .parent()
+                    .expect("dispatch packet parent"),
+            )
+            .expect("create dispatch packet dir");
+            fs::write(
+                &packet_path,
+                serde_json::to_string_pretty(&serde_json::json!({"run_id": run_id}))
+                    .expect("encode dispatch packet"),
+            )
+            .expect("write dispatch packet");
             let receipt = serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementation",
@@ -21766,7 +21850,7 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
                 "dispatch_kind": "agent_lane",
                 "dispatch_surface": "vida agent-init",
                 "dispatch_command": "vida agent-init --execute-dispatch",
-                "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json"),
+                "dispatch_packet_path": packet_path,
                 "dispatch_result_path": result_path,
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": [],
@@ -22285,9 +22369,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -22600,9 +22682,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -22638,6 +22718,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             .expect("encode dispatch result"),
         )
         .expect("write dispatch result");
+        let packet_path = write_test_dispatch_packet(&state_dir, &run_id);
         let receipt = serde_json::json!({
             "run_id": run_id,
             "dispatch_target": "closure",
@@ -22646,7 +22727,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             "dispatch_kind": "agent_lane",
             "dispatch_surface": "vida agent-init",
             "dispatch_command": "vida agent-init --execute-dispatch",
-            "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json"),
+            "dispatch_packet_path": packet_path,
             "dispatch_result_path": result_path,
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": [],
@@ -22736,9 +22817,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
         "taskflow closeout must share terminal closure truth semantics before reconcile: {closeout_before_reconcile}"
     );
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -22807,14 +22886,12 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
             &state_dir,
         );
         assert_eq!(created["status"], "pass");
-        seed_management_run_graph_fixture(&state_dir, task_id);
     }
+    seed_management_run_graph_fixtures(&state_dir, &[stale_route_task_id, non_closure_task_id]);
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
-            .await
-            .expect("open surreal store");
+        let db = open_task_smoke_db_with_retry(&state_dir).await;
         db.use_ns("vida")
             .use_db("primary")
             .await
@@ -22876,6 +22953,7 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
                 .expect("encode dispatch result"),
             )
             .expect("write dispatch result");
+            let packet_path = write_test_dispatch_packet(&state_dir, &run_id);
             let receipt = serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": dispatch_target,
@@ -22884,7 +22962,7 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
                 "dispatch_kind": "agent_lane",
                 "dispatch_surface": "vida agent-init",
                 "dispatch_command": "vida agent-init --execute-dispatch",
-                "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json"),
+                "dispatch_packet_path": packet_path,
                 "dispatch_result_path": result_path,
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": [],

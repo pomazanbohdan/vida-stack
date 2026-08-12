@@ -54,84 +54,90 @@ pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitC
 async fn run_consume_agent_system(as_json: bool) -> ExitCode {
     let state_dir = super::taskflow_task_bridge::proxy_state_dir();
     match super::StateStore::open_existing(state_dir).await {
-        Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
-            Ok(payload) => {
-                let snapshot = build_taskflow_agent_system_snapshot(
-                    &payload.config_path,
-                    &payload.activation_bundle,
-                );
-                let snapshot_path = match super::write_runtime_consumption_snapshot(
-                    store.root(),
-                    "agent-system",
-                    &serde_json::json!({
-                        "surface": "vida taskflow consume agent-system",
-                        "snapshot": &snapshot,
-                    }),
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-                if as_json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
+        Ok(store) => {
+            match super::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+                &store,
+            )
+            .await
+            {
+                Ok(payload) => {
+                    let snapshot = build_taskflow_agent_system_snapshot(
+                        &payload.config_path,
+                        &payload.activation_bundle,
+                    );
+                    let snapshot_path = match super::write_runtime_consumption_snapshot(
+                        store.root(),
+                        "agent-system",
+                        &serde_json::json!({
                             "surface": "vida taskflow consume agent-system",
-                            "snapshot": snapshot,
-                            "snapshot_path": snapshot_path,
-                        }))
-                        .expect("consume agent-system should render as json")
-                    );
-                } else {
-                    super::print_surface_header(
-                        super::RenderMode::Plain,
-                        "vida taskflow consume agent-system",
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "materialization",
-                        snapshot["materialization_mode"]
-                            .as_str()
-                            .unwrap_or("unknown"),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "selection rule",
-                        snapshot["agent_model"]["selection_rule"]
-                            .as_str()
-                            .unwrap_or("unknown"),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "carriers",
-                        &snapshot["carriers"]
-                            .as_array()
-                            .map(|rows| rows.len().to_string())
-                            .unwrap_or_else(|| "0".to_string()),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "runtime roles",
-                        &snapshot["runtime_roles"]
-                            .as_array()
-                            .map(|rows| rows.len().to_string())
-                            .unwrap_or_else(|| "0".to_string()),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "snapshot path",
-                        &snapshot_path,
-                    );
+                            "snapshot": &snapshot,
+                        }),
+                    ) {
+                        Ok(path) => path,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow consume agent-system",
+                                "snapshot": snapshot,
+                                "snapshot_path": snapshot_path,
+                            }))
+                            .expect("consume agent-system should render as json")
+                        );
+                    } else {
+                        super::print_surface_header(
+                            super::RenderMode::Plain,
+                            "vida taskflow consume agent-system",
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "materialization",
+                            snapshot["materialization_mode"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "selection rule",
+                            snapshot["agent_model"]["selection_rule"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "carriers",
+                            &snapshot["carriers"]
+                                .as_array()
+                                .map(|rows| rows.len().to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "runtime roles",
+                            &snapshot["runtime_roles"]
+                                .as_array()
+                                .map(|rows| rows.len().to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "snapshot path",
+                            &snapshot_path,
+                        );
+                    }
+                    ExitCode::SUCCESS
                 }
-                ExitCode::SUCCESS
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
             }
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::from(1)
-            }
-        },
+        }
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
@@ -142,89 +148,95 @@ async fn run_consume_agent_system(as_json: bool) -> ExitCode {
 async fn run_consume_bundle(as_json: bool) -> ExitCode {
     let state_dir = super::taskflow_task_bridge::proxy_state_dir();
     match super::StateStore::open_existing(state_dir).await {
-        Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
-            Ok(payload) => {
-                let snapshot_path = match super::write_runtime_consumption_snapshot(
-                    store.root(),
-                    "bundle",
-                    &serde_json::json!({
-                        "surface": "vida taskflow consume bundle",
-                        "bundle": &payload,
-                    }),
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-                if as_json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
+        Ok(store) => {
+            match super::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+                &store,
+            )
+            .await
+            {
+                Ok(payload) => {
+                    let snapshot_path = match super::write_runtime_consumption_snapshot(
+                        store.root(),
+                        "bundle",
+                        &serde_json::json!({
                             "surface": "vida taskflow consume bundle",
-                            "bundle": payload,
-                            "snapshot_path": snapshot_path,
-                        }))
-                        .expect("consume bundle should render as json")
-                    );
-                } else {
-                    super::print_surface_header(
-                        super::RenderMode::Plain,
-                        "vida taskflow consume bundle",
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "artifact",
-                        &payload.artifact_name,
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "root artifact",
-                        payload.control_core["root_artifact_id"]
-                            .as_str()
-                            .unwrap_or("unknown"),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "bundle order",
-                        &payload.control_core["mandatory_chain_order"]
-                            .as_array()
-                            .map(|rows| {
-                                rows.iter()
-                                    .filter_map(serde_json::Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(" -> ")
-                            })
-                            .unwrap_or_else(|| "none".to_string()),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "boot compatibility",
-                        payload.boot_compatibility["classification"]
-                            .as_str()
-                            .unwrap_or("unknown"),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "migration state",
-                        payload.migration_preflight["migration_state"]
-                            .as_str()
-                            .unwrap_or("unknown"),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "snapshot path",
-                        &snapshot_path,
-                    );
+                            "bundle": &payload,
+                        }),
+                    ) {
+                        Ok(path) => path,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow consume bundle",
+                                "bundle": payload,
+                                "snapshot_path": snapshot_path,
+                            }))
+                            .expect("consume bundle should render as json")
+                        );
+                    } else {
+                        super::print_surface_header(
+                            super::RenderMode::Plain,
+                            "vida taskflow consume bundle",
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "artifact",
+                            &payload.artifact_name,
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "root artifact",
+                            payload.control_core["root_artifact_id"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "bundle order",
+                            &payload.control_core["mandatory_chain_order"]
+                                .as_array()
+                                .map(|rows| {
+                                    rows.iter()
+                                        .filter_map(serde_json::Value::as_str)
+                                        .collect::<Vec<_>>()
+                                        .join(" -> ")
+                                })
+                                .unwrap_or_else(|| "none".to_string()),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "boot compatibility",
+                            payload.boot_compatibility["classification"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "migration state",
+                            payload.migration_preflight["migration_state"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        super::print_surface_line(
+                            super::RenderMode::Plain,
+                            "snapshot path",
+                            &snapshot_path,
+                        );
+                    }
+                    ExitCode::SUCCESS
                 }
-                ExitCode::SUCCESS
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
             }
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::from(1)
-            }
-        },
+        }
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
@@ -250,18 +262,14 @@ async fn run_consume_bundle_check(args: &[String], as_json: bool) -> ExitCode {
     match fail_fast_with_timeout(
         "building consume bundle payload",
         CONSUME_BUNDLE_CHECK_PAYLOAD_TIMEOUT,
-        super::build_taskflow_consume_bundle_payload(&store),
+        super::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(&store),
     )
     .await
     {
         Ok(payload) => {
             let check = super::taskflow_consume_bundle_check(&payload);
             let mut effective_blockers = check.blockers.clone();
-            let db_first_activation_truth = match super::read_or_sync_launcher_activation_snapshot(
-                &store,
-            )
-            .await
-            {
+            let db_first_activation_truth = match store.read_launcher_activation_snapshot().await {
                 Ok(snapshot) => {
                     if let Some(error) = db_first_activation_snapshot_validation_error(&snapshot) {
                         if let Some(code) = crate::release_contract_adapters::blocker_code(
@@ -293,7 +301,7 @@ async fn run_consume_bundle_check(args: &[String], as_json: bool) -> ExitCode {
                     }
                     serde_json::json!({
                         "ok": false,
-                        "error": error,
+                        "error": error.to_string(),
                     })
                 }
             };
@@ -4370,11 +4378,9 @@ dev_team:
             assert_eq!(diagnostics["context"]["config_path"], persisted_path);
             assert!(diagnostics["context"]["selected_flow"].is_string());
             if mutation == "disabled" {
-                assert!(diagnostics["blockers"]
-                    .as_array()
-                    .is_some_and(|blockers| blockers
-                        .iter()
-                        .any(|value| value == "dev_team_disabled")));
+                assert!(diagnostics["blockers"].as_array().is_some_and(|blockers| {
+                    blockers.iter().any(|value| value == "dev_team_disabled")
+                }));
             } else {
                 assert!(diagnostics["blockers"].as_array().is_some_and(|blockers| {
                     blockers

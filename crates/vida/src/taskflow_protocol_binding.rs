@@ -128,11 +128,23 @@ fn has_non_empty_string_field(payload: &serde_json::Value, path: &[&str]) -> boo
 pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
     store: &StateStore,
 ) -> ProtocolBindingCompiledPayloadImportEvidence {
+    protocol_binding_compiled_payload_import_evidence_with_persistence(store, true).await
+}
+
+pub(crate) async fn protocol_binding_compiled_payload_import_evidence_with_persistence(
+    store: &StateStore,
+    persist_launcher_snapshot: bool,
+) -> ProtocolBindingCompiledPayloadImportEvidence {
     let mut blockers = Vec::new();
 
-    let activation_snapshot = match super::read_or_sync_launcher_activation_snapshot(store).await {
-        Ok(snapshot) => Some(snapshot),
-        Err(_) => None,
+    let activation_snapshot = if persist_launcher_snapshot {
+        super::read_or_sync_launcher_activation_snapshot(store)
+            .await
+            .ok()
+    } else {
+        super::launcher_activation_snapshot::read_or_capture_launcher_activation_snapshot(store)
+            .await
+            .ok()
     };
     let effective_bundle_receipt = match store.latest_effective_bundle_receipt_summary().await {
         Ok(receipt) => receipt,

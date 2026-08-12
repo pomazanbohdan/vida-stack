@@ -30,11 +30,13 @@ cargo test --manifest-path tests/model/Cargo.toml --locked
 ~~~
 
 The unscoped `cargo test --workspace --all-targets --locked` command also enters the
-VIDA runtime test contour. On 2026-08-12 that contour reported 2700 passing and 563
-failing tests because existing selection fixtures omit `role_selection.fallback_role`.
-That runtime fixture debt is intentionally outside this slice; semantic work must not
-weaken the fail-closed runtime guard or treat the unscoped result as semantic-gate
-evidence. Re-open runtime triage as a separate bounded task if that scope changes.
+VIDA runtime test contour. The latest serialized Windows VIDA binary run on
+2026-08-12 completed 3267 tests in 1115.82s: 2866 passed, 400 failed, and 1 was
+ignored. The remaining failures are the pre-existing runtime selection/TeamFlow
+fixture debt (for example missing `role_selection.fallback_role` and replay
+identity fields); they are not semantic-gate evidence. Semantic work must not
+weaken the fail-closed runtime guard or treat the unscoped result as green. Re-open
+runtime triage as a separate bounded task if that scope changes.
 
 ## Bootstrap Read Order
 
@@ -227,7 +229,7 @@ CARGO_UNSTABLE_IGNORE_RUST_VERSION=1 cargo kani --ignore-rust-version --manifest
 
 Expected result: VERIFICATION:- SUCCESSFUL,
 Complete - 1 successfully verified harnesses, 0 failures.
-The latest verified WSL run took 53.26 seconds; timing is hardware/cache
+The latest verified WSL run took 38.78 seconds; timing is hardware/cache
 dependent. This is a bounded proof, not a full runtime or concurrency
 guarantee.
 
@@ -307,10 +309,13 @@ concurrency claims in this slice.
 The VIDA CLI outer runtime thread, its Tokio worker threads, and the deep async
 test harnesses use a 64 MiB stack. This fixes the observed Windows
 test-thread overflow in resume/init regression paths and keeps the default
-CLI worker budget consistent. It does not set RUST_MIN_STACK, does not change
-TaskFlow state or runtime semantics, and the stack is reserved per worker
-thread. If a new stack overflow appears, reproduce the smallest targeted test
-first; do not hide it with a global environment override.
+CLI worker budget consistent. `scripts/vida-cargo-msvc.ps1` sets
+`RUST_MIN_STACK=67108864` for Cargo test processes when the caller has not
+provided an override; production runtime stack sizes remain code-owned. The
+setting does not change TaskFlow state or runtime semantics, and the stack is
+reserved per worker thread. If a new stack overflow appears, reproduce the
+smallest targeted test first and then decide whether a narrower stack override
+is warranted.
 
 ## Pre-push And Pre-commit
 

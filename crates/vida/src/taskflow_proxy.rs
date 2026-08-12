@@ -1115,6 +1115,35 @@ fn apply_closed_task_active_run_projection_mismatch_to_graph_summary(
     ));
 }
 
+async fn graph_summary_closed_task_active_run_projection_mismatch(
+    store: &crate::state_store::StateStore,
+    tasks: &[crate::state_store::TaskRecord],
+) -> Result<bool, crate::state_store::StateStoreError> {
+    for task in tasks
+        .iter()
+        .filter(|task| crate::state_store::StateStore::task_status_is_closed_like(&task.status))
+    {
+        let Some(run_id) = store.latest_run_graph_run_id_for_task(&task.id).await? else {
+            continue;
+        };
+        let status = store.run_graph_status(&run_id).await?;
+        if status.task_id != task.id
+            || crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                &status,
+            )
+        {
+            continue;
+        }
+        if !store
+            .run_graph_terminal_closure_has_task_close_truth(&status)
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value) -> u64 {
     activation_bundle["agent_system"]["max_parallel_agents"]
         .as_u64()
@@ -3000,7 +3029,11 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     dry_run: bool,
     execute_requested: bool,
 ) -> Result<TaskflowSchedulerDispatchPlan, String> {
-    let max_parallel_agents = crate::build_taskflow_consume_bundle_payload(store)
+    let max_parallel_agents =
+        crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_with_persistence(
+            store,
+            execute_requested && !dry_run,
+        )
         .await
         .map(|payload| normalize_scheduler_max_parallel_agents(&payload.activation_bundle))
         .or_else(|_| {
@@ -6073,8 +6106,24 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
         _ => false,
     };
-    let closed_task_active_run_projection_mismatch =
-        latest_run_graph_task_closed || terminal_closed_run_is_current;
+    // `latest_run_graph_status` intentionally excludes stale runs for closed
+    // tasks. Preserve the diagnostic contract by checking those excluded rows
+    // explicitly; otherwise graph-summary reports only the empty backlog and
+    // hides the actionable closed-task projection mismatch.
+    let global_closed_task_active_run_projection_mismatch = if latest_run_graph.is_none() {
+        match graph_summary_closed_task_active_run_projection_mismatch(&store, &all_tasks).await {
+            Ok(mismatch) => mismatch,
+            Err(error) => {
+                eprintln!("Failed to read closed-task active run projection: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        false
+    };
+    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+        || terminal_closed_run_is_current
+        || global_closed_task_active_run_projection_mismatch;
     let latest_run_graph_legacy_ownerless = match latest_run_graph.as_ref() {
         Some(status) => match store.run_graph_legacy_ownerless(&status.run_id).await {
             Ok(ownerless) => ownerless,

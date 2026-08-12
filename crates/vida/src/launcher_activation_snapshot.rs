@@ -34,6 +34,17 @@ pub(crate) fn config_file_digest(path: &Path) -> Result<String, String> {
     Ok(blake3::hash(&bytes).to_hex().to_string())
 }
 
+fn config_paths_match(snapshot_path: &str, current_path: &Path) -> bool {
+    let snapshot_path = Path::new(snapshot_path);
+    match (
+        std::fs::canonicalize(snapshot_path),
+        std::fs::canonicalize(current_path),
+    ) {
+        (Ok(snapshot_path), Ok(current_path)) => snapshot_path == current_path,
+        _ => snapshot_path.to_string_lossy() == current_path.to_string_lossy(),
+    }
+}
+
 pub(crate) fn capture_launcher_activation_snapshot() -> Result<LauncherActivationSnapshot, String> {
     let project_root = crate::resolve_runtime_project_root()?;
     capture_launcher_activation_snapshot_for_root(&project_root)
@@ -85,9 +96,8 @@ pub(crate) async fn read_or_sync_launcher_activation_snapshot(
         Ok(snapshot) => {
             let config_path = config_file_path_for_root(&project_root);
             let current_digest = config_file_digest(&config_path)?;
-            let current_config_path = config_path.display().to_string();
             if snapshot.source_config_digest == current_digest
-                && snapshot.source_config_path == current_config_path
+                && config_paths_match(&snapshot.source_config_path, &config_path)
             {
                 match crate::team_flow_authority_adapter::require_team_flow_execution_authority(
                     &snapshot.compiled_bundle,
@@ -110,6 +120,46 @@ pub(crate) async fn read_or_sync_launcher_activation_snapshot(
         }
         Err(StateStoreError::MissingLauncherActivationSnapshot) => {
             sync_launcher_activation_snapshot_for_root(store, &project_root).await
+        }
+        Err(error) => Err(format!(
+            "Failed to read launcher activation snapshot: {error}"
+        )),
+    }
+}
+
+/// Read the authoritative snapshot when available, otherwise derive the same
+/// snapshot in memory for read-only projections.  This deliberately never
+/// writes the launcher snapshot; callers use it for preview/diagnostic paths.
+pub(crate) async fn read_or_capture_launcher_activation_snapshot(
+    store: &StateStore,
+) -> Result<LauncherActivationSnapshot, String> {
+    match store.read_launcher_activation_snapshot().await {
+        Ok(snapshot) => {
+            let Ok(project_root) = launcher_activation_project_root(store) else {
+                return Ok(snapshot);
+            };
+            let config_path = config_file_path_for_root(&project_root);
+            let current_digest = config_file_digest(&config_path)?;
+            if snapshot.source_config_digest == current_digest
+                && config_paths_match(&snapshot.source_config_path, &config_path)
+                && crate::team_flow_authority_adapter::require_team_flow_execution_authority(
+                    &snapshot.compiled_bundle,
+                    None,
+                    None,
+                )
+                .is_ok()
+            {
+                return Ok(snapshot);
+            }
+            let mut captured = capture_launcher_activation_snapshot_for_root(&project_root)?;
+            captured.source = "read_only_capture".to_string();
+            Ok(captured)
+        }
+        Err(StateStoreError::MissingLauncherActivationSnapshot) => {
+            let project_root = launcher_activation_project_root(store)?;
+            let mut captured = capture_launcher_activation_snapshot_for_root(&project_root)?;
+            captured.source = "read_only_capture".to_string();
+            Ok(captured)
         }
         Err(error) => Err(format!(
             "Failed to read launcher activation snapshot: {error}"

@@ -4373,7 +4373,19 @@ struct CompiledRunGraphControl {
 }
 
 async fn compiled_run_graph_control(store: &StateStore) -> Result<CompiledRunGraphControl, String> {
-    let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    compiled_run_graph_control_with_persistence(store, true).await
+}
+
+async fn compiled_run_graph_control_with_persistence(
+    store: &StateStore,
+    persist_launcher_snapshot: bool,
+) -> Result<CompiledRunGraphControl, String> {
+    let snapshot = if persist_launcher_snapshot {
+        read_or_sync_launcher_activation_snapshot(store).await?
+    } else {
+        crate::launcher_activation_snapshot::read_or_capture_launcher_activation_snapshot(store)
+            .await?
+    };
     compiled_run_graph_control_from_bundle(&snapshot.compiled_bundle, &snapshot.source)
 }
 
@@ -6847,12 +6859,25 @@ async fn seeded_implementation_lane_sequence(
     store: &StateStore,
     run_id: &str,
 ) -> Result<Option<Vec<crate::team_flow_authority_adapter::TeamFlowNodeResolution>>, String> {
+    seeded_implementation_lane_sequence_with_persistence(store, run_id, true).await
+}
+
+async fn seeded_implementation_lane_sequence_with_persistence(
+    store: &StateStore,
+    run_id: &str,
+    persist_launcher_snapshot: bool,
+) -> Result<Option<Vec<crate::team_flow_authority_adapter::TeamFlowNodeResolution>>, String> {
     let context = store
         .run_graph_dispatch_context(run_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "run_graph_dispatch_context_missing".to_string())?;
-    let selection = rehydrate_dispatch_context_role_selection(store, &context).await?;
+    let selection = rehydrate_dispatch_context_role_selection_with_persistence(
+        store,
+        &context,
+        persist_launcher_snapshot,
+    )
+    .await?;
     let mut sequence = crate::runtime_dispatch_state::typed_lane_node_sequence(&selection, true)?;
     let selected_node = selection.execution_plan["development_flow"]["implementation"]
         .get("team_flow_selected_node_id")
@@ -7685,8 +7710,34 @@ pub(crate) async fn derive_seeded_run_graph_state(
     requested_run_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
-    derive_seeded_run_graph_state_with_stage(store, requested_run_id, request_text, None, false)
+    derive_seeded_run_graph_state_with_persistence(store, requested_run_id, request_text, true)
         .await
+}
+
+pub(crate) async fn derive_seeded_run_graph_state_read_only(
+    store: &StateStore,
+    requested_run_id: &str,
+    request_text: &str,
+) -> Result<TaskflowRunGraphSeedPayload, String> {
+    derive_seeded_run_graph_state_with_persistence(store, requested_run_id, request_text, false)
+        .await
+}
+
+pub(crate) async fn derive_seeded_run_graph_state_with_persistence(
+    store: &StateStore,
+    requested_run_id: &str,
+    request_text: &str,
+    persist_launcher_snapshot: bool,
+) -> Result<TaskflowRunGraphSeedPayload, String> {
+    derive_seeded_run_graph_state_with_stage(
+        store,
+        requested_run_id,
+        request_text,
+        None,
+        false,
+        persist_launcher_snapshot,
+    )
+    .await
 }
 
 async fn derive_seeded_run_graph_state_with_stage(
@@ -7695,12 +7746,13 @@ async fn derive_seeded_run_graph_state_with_stage(
     request_text: &str,
     timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
     skip_design_override: bool,
+    persist_launcher_snapshot: bool,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_resolve_task_id");
     let bounded_task_id =
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_read_launcher_snapshot");
-    let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    let snapshot = read_seed_launcher_activation_snapshot(store, persist_launcher_snapshot).await?;
     let bounded_task = store.show_task(&bounded_task_id).await.ok();
     if let Some(task) = bounded_task
         .as_ref()
@@ -7868,7 +7920,14 @@ async fn derive_seeded_run_graph_state_with_stage(
 
 async fn read_seed_launcher_activation_snapshot(
     store: &StateStore,
+    persist_launcher_snapshot: bool,
 ) -> Result<crate::state_store::LauncherActivationSnapshot, String> {
+    if !persist_launcher_snapshot {
+        return crate::launcher_activation_snapshot::read_or_capture_launcher_activation_snapshot(
+            store,
+        )
+        .await;
+    }
     match crate::launcher_activation_snapshot::read_or_sync_launcher_activation_snapshot(store)
         .await
     {
@@ -7906,10 +7965,19 @@ pub(crate) fn run_graph_dispatch_context_from_seed_payload(
 
 pub(crate) async fn rehydrate_persisted_role_selection(
     store: &StateStore,
-    mut selection: RuntimeConsumptionLaneSelection,
+    selection: RuntimeConsumptionLaneSelection,
     task_id: Option<&str>,
 ) -> Result<RuntimeConsumptionLaneSelection, String> {
-    let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    rehydrate_persisted_role_selection_with_persistence(store, selection, task_id, true).await
+}
+
+async fn rehydrate_persisted_role_selection_with_persistence(
+    store: &StateStore,
+    mut selection: RuntimeConsumptionLaneSelection,
+    task_id: Option<&str>,
+    persist_launcher_snapshot: bool,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
+    let snapshot = read_seed_launcher_activation_snapshot(store, persist_launcher_snapshot).await?;
     let compiled_bundle = snapshot.compiled_bundle;
     selection.compiled_bundle = compiled_bundle.clone();
 
@@ -7995,9 +8063,7 @@ pub(crate) async fn rehydrate_persisted_role_selection(
                     blockers.join(",")
                 ));
             }
-            return Err(
-                "team_flow_authority_rehydrated_execution_plan_blocked".to_string(),
-            );
+            return Err("team_flow_authority_rehydrated_execution_plan_blocked".to_string());
         }
         let contract_flow =
             plan["development_flow"]["dispatch_contract"]["selected_flow_set"].as_str();
@@ -8031,10 +8097,31 @@ pub(crate) async fn rehydrate_dispatch_context_role_selection(
     store: &StateStore,
     context: &RunGraphDispatchContext,
 ) -> Result<RuntimeConsumptionLaneSelection, String> {
+    rehydrate_dispatch_context_role_selection_with_persistence(store, context, true).await
+}
+
+pub(crate) async fn rehydrate_dispatch_context_role_selection_read_only(
+    store: &StateStore,
+    context: &RunGraphDispatchContext,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
+    rehydrate_dispatch_context_role_selection_with_persistence(store, context, false).await
+}
+
+async fn rehydrate_dispatch_context_role_selection_with_persistence(
+    store: &StateStore,
+    context: &RunGraphDispatchContext,
+    persist_launcher_snapshot: bool,
+) -> Result<RuntimeConsumptionLaneSelection, String> {
     let selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
-    rehydrate_persisted_role_selection(store, selection, Some(&context.task_id)).await
+    rehydrate_persisted_role_selection_with_persistence(
+        store,
+        selection,
+        Some(&context.task_id),
+        persist_launcher_snapshot,
+    )
+    .await
 }
 
 fn seed_payload_operator_surface_json(payload: &TaskflowRunGraphSeedPayload) -> serde_json::Value {
@@ -8342,6 +8429,18 @@ async fn reseed_dispatch_context_after_route_assignment_drift(
     status: &RunGraphStatus,
     context: &RunGraphDispatchContext,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
+    reseed_dispatch_context_after_route_assignment_drift_with_persistence(
+        store, status, context, true,
+    )
+    .await
+}
+
+async fn reseed_dispatch_context_after_route_assignment_drift_with_persistence(
+    store: &StateStore,
+    status: &RunGraphStatus,
+    context: &RunGraphDispatchContext,
+    persist_launcher_snapshot: bool,
+) -> Result<TaskflowRunGraphSeedPayload, String> {
     let task_id = if status.task_id.trim().is_empty() {
         context.task_id.as_str()
     } else {
@@ -8355,7 +8454,13 @@ async fn reseed_dispatch_context_after_route_assignment_drift(
             ));
         }
     }
-    derive_seeded_run_graph_state(store, task_id, &context.request_text).await
+    derive_seeded_run_graph_state_with_persistence(
+        store,
+        task_id,
+        &context.request_text,
+        persist_launcher_snapshot,
+    )
+    .await
 }
 
 pub(crate) async fn persist_seed_artifacts(
@@ -8792,7 +8897,7 @@ async fn read_run_graph_dispatch_init_fast_cache_for_dispatch_init(
     .ok()?;
     let current_seed = tokio::time::timeout(
         DISPATCH_INIT_IDENTITY_BACKFILL_OPEN_TIMEOUT,
-        seed_existing_task_payload_for_dispatch_init(&store, run_id, None),
+        seed_existing_task_payload_for_dispatch_init(&store, run_id, None, false),
     )
     .await
     .ok()?
@@ -8824,8 +8929,30 @@ async fn dispatch_context_configured_dev_team_route_drift(
     role_selection: &RuntimeConsumptionLaneSelection,
     timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
 ) -> Result<Option<serde_json::Value>, String> {
-    let Some(current_seed) =
-        seed_existing_task_payload_for_dispatch_init(store, run_id, timeout_stage).await?
+    dispatch_context_configured_dev_team_route_drift_with_persistence(
+        store,
+        run_id,
+        role_selection,
+        timeout_stage,
+        true,
+    )
+    .await
+}
+
+async fn dispatch_context_configured_dev_team_route_drift_with_persistence(
+    store: &StateStore,
+    run_id: &str,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    persist_launcher_snapshot: bool,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(current_seed) = seed_existing_task_payload_for_dispatch_init(
+        store,
+        run_id,
+        timeout_stage,
+        persist_launcher_snapshot,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -9045,6 +9172,23 @@ async fn existing_dispatch_receipt_matches_current_seed(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
 ) -> Result<bool, String> {
+    existing_dispatch_receipt_matches_current_seed_with_persistence(
+        store,
+        run_id,
+        receipt,
+        timeout_stage,
+        true,
+    )
+    .await
+}
+
+async fn existing_dispatch_receipt_matches_current_seed_with_persistence(
+    store: &StateStore,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    persist_launcher_snapshot: bool,
+) -> Result<bool, String> {
     let Some(packet_path) = receipt
         .dispatch_packet_path
         .as_deref()
@@ -9053,8 +9197,13 @@ async fn existing_dispatch_receipt_matches_current_seed(
     else {
         return Ok(true);
     };
-    let Some(current_seed) =
-        seed_existing_task_payload_for_dispatch_init(store, run_id, timeout_stage).await?
+    let Some(current_seed) = seed_existing_task_payload_for_dispatch_init(
+        store,
+        run_id,
+        timeout_stage,
+        persist_launcher_snapshot,
+    )
+    .await?
     else {
         return Ok(true);
     };
@@ -9140,6 +9289,16 @@ async fn existing_routed_dispatch_init_artifacts(
     requested_run_id: &str,
     run_id: &str,
 ) -> Result<Option<RunGraphDispatchInitArtifacts>, String> {
+    existing_routed_dispatch_init_artifacts_with_persistence(store, requested_run_id, run_id, true)
+        .await
+}
+
+async fn existing_routed_dispatch_init_artifacts_with_persistence(
+    store: &StateStore,
+    requested_run_id: &str,
+    run_id: &str,
+    persist_launcher_snapshot: bool,
+) -> Result<Option<RunGraphDispatchInitArtifacts>, String> {
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(_) => return Ok(None),
@@ -9173,14 +9332,26 @@ async fn existing_routed_dispatch_init_artifacts(
     if dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection).is_some() {
         return Ok(None);
     }
-    if dispatch_context_configured_dev_team_route_drift(store, run_id, &role_selection, None)
-        .await?
-        .is_some()
+    if dispatch_context_configured_dev_team_route_drift_with_persistence(
+        store,
+        run_id,
+        &role_selection,
+        None,
+        persist_launcher_snapshot,
+    )
+    .await?
+    .is_some()
     {
         return Ok(None);
     }
-    if !existing_dispatch_receipt_matches_current_seed(store, run_id, &dispatch_receipt, None)
-        .await?
+    if !existing_dispatch_receipt_matches_current_seed_with_persistence(
+        store,
+        run_id,
+        &dispatch_receipt,
+        None,
+        persist_launcher_snapshot,
+    )
+    .await?
     {
         return Ok(None);
     }
@@ -9217,6 +9388,7 @@ pub(crate) fn dispatch_command_from_packet_path(
 async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     store: &StateStore,
     requested_run_id: &str,
+    persist_launcher_snapshot: bool,
 ) -> Result<Option<String>, String> {
     let binding = store
         .run_graph_continuation_binding(requested_run_id)
@@ -9278,6 +9450,9 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
         ));
     };
 
+    if !persist_launcher_snapshot {
+        return Ok(Some(bound_task_id.to_string()));
+    }
     let payload = derive_seeded_run_graph_state(store, bound_task_id, &request_text).await?;
     persist_seed_artifacts(store, &payload).await?;
 
@@ -9865,6 +10040,15 @@ pub(crate) async fn run_graph_state_has_configured_dev_team_route_mismatch(
     store: &StateStore,
     status: &RunGraphStatus,
 ) -> Result<bool, String> {
+    run_graph_state_has_configured_dev_team_route_mismatch_with_persistence(store, status, true)
+        .await
+}
+
+async fn run_graph_state_has_configured_dev_team_route_mismatch_with_persistence(
+    store: &StateStore,
+    status: &RunGraphStatus,
+    persist_launcher_snapshot: bool,
+) -> Result<bool, String> {
     let task = match store.show_task(&status.task_id).await {
         Ok(task) => task,
         Err(_) => return Ok(false),
@@ -9872,7 +10056,7 @@ pub(crate) async fn run_graph_state_has_configured_dev_team_route_mismatch(
     if !task_has_configured_dev_team_dispatch_identity(&task) {
         return Ok(false);
     }
-    let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    let snapshot = read_seed_launcher_activation_snapshot(store, persist_launcher_snapshot).await?;
     let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
     let Some(route) = crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
         &activation_bundle,
@@ -10142,6 +10326,7 @@ async fn seed_existing_task_payload_for_dispatch_init(
     store: &StateStore,
     task_id: &str,
     timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    persist_launcher_snapshot: bool,
 ) -> Result<Option<TaskflowRunGraphSeedPayload>, String> {
     set_dispatch_init_timeout_stage(timeout_stage, "seed_existing_task_show_task");
     let task = match store.show_task(task_id).await {
@@ -10173,6 +10358,7 @@ async fn seed_existing_task_payload_for_dispatch_init(
         &request_text,
         timeout_stage,
         skip_design_override,
+        persist_launcher_snapshot,
     )
     .await?;
     Ok(Some(payload))
@@ -10182,19 +10368,37 @@ async fn preview_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
     timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    persist_launcher_snapshot: bool,
 ) -> Result<RunGraphDispatchInitPreview, String> {
     set_dispatch_init_timeout_stage(timeout_stage, "read_existing_routed_dispatch_artifacts");
-    if let Some(artifacts) = existing_routed_dispatch_init_artifacts(store, run_id, run_id).await? {
+    if let Some(artifacts) = existing_routed_dispatch_init_artifacts_with_persistence(
+        store,
+        run_id,
+        run_id,
+        persist_launcher_snapshot,
+    )
+    .await?
+    {
         return Ok(RunGraphDispatchInitPreview::Existing(artifacts));
     }
 
     set_dispatch_init_timeout_stage(timeout_stage, "reseed_explicit_task_graph_binding");
     let effective_run_id = if let Some(bound_run_id) =
-        reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id).await?
+        reseed_explicit_task_graph_binding_for_dispatch_init(
+            store,
+            run_id,
+            persist_launcher_snapshot,
+        )
+        .await?
     {
         set_dispatch_init_timeout_stage(timeout_stage, "read_bound_routed_dispatch_artifacts");
-        if let Some(artifacts) =
-            existing_routed_dispatch_init_artifacts(store, run_id, &bound_run_id).await?
+        if let Some(artifacts) = existing_routed_dispatch_init_artifacts_with_persistence(
+            store,
+            run_id,
+            &bound_run_id,
+            persist_launcher_snapshot,
+        )
+        .await?
         {
             return Ok(RunGraphDispatchInitPreview::Existing(artifacts));
         }
@@ -10215,6 +10419,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
                 store,
                 &effective_run_id,
                 timeout_stage,
+                persist_launcher_snapshot,
             )
             .await?
             {
@@ -10229,11 +10434,21 @@ async fn preview_run_graph_dispatch_init_artifacts(
     };
     set_dispatch_init_timeout_stage(timeout_stage, "reconcile_active_exception_status");
     let mut status = reconcile_dispatch_init_state_for_active_exception(store, status).await?;
-    if run_graph_state_has_configured_dev_team_route_mismatch(store, &status).await? {
+    if run_graph_state_has_configured_dev_team_route_mismatch_with_persistence(
+        store,
+        &status,
+        persist_launcher_snapshot,
+    )
+    .await?
+    {
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_configured_dev_team_route_mismatch");
-        if let Some(payload) =
-            seed_existing_task_payload_for_dispatch_init(store, &effective_run_id, timeout_stage)
-                .await?
+        if let Some(payload) = seed_existing_task_payload_for_dispatch_init(
+            store,
+            &effective_run_id,
+            timeout_stage,
+            persist_launcher_snapshot,
+        )
+        .await?
         {
             status =
                 reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
@@ -10262,6 +10477,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
                 store,
                 &effective_run_id,
                 timeout_stage,
+                persist_launcher_snapshot,
             )
             .await?
             {
@@ -10283,23 +10499,35 @@ async fn preview_run_graph_dispatch_init_artifacts(
     };
 
     set_dispatch_init_timeout_stage(timeout_stage, "decode_role_selection");
-    let mut role_selection = rehydrate_dispatch_context_role_selection(store, &context).await?;
-    set_dispatch_init_timeout_stage(timeout_stage, "check_route_assignment_catalog_drift");
-    let route_assignment_drift = match dispatch_context_configured_dev_team_route_drift(
+    let mut role_selection = rehydrate_dispatch_context_role_selection_with_persistence(
         store,
-        &effective_run_id,
-        &role_selection,
-        timeout_stage,
+        &context,
+        persist_launcher_snapshot,
     )
-    .await?
-    {
-        Some(drift) => Some(drift),
-        None => dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection),
-    };
+    .await?;
+    set_dispatch_init_timeout_stage(timeout_stage, "check_route_assignment_catalog_drift");
+    let route_assignment_drift =
+        match dispatch_context_configured_dev_team_route_drift_with_persistence(
+            store,
+            &effective_run_id,
+            &role_selection,
+            timeout_stage,
+            persist_launcher_snapshot,
+        )
+        .await?
+        {
+            Some(drift) => Some(drift),
+            None => dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection),
+        };
     if route_assignment_drift.is_some() {
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_route_assignment_drift");
-        let payload =
-            reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
+        let payload = reseed_dispatch_context_after_route_assignment_drift_with_persistence(
+            store,
+            &status,
+            &context,
+            persist_launcher_snapshot,
+        )
+        .await?;
         status = reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
             .await?;
         role_selection = payload.role_selection.clone();
@@ -10318,11 +10546,12 @@ async fn preview_run_graph_dispatch_init_artifacts(
         None
     };
     let stale_seeded_packet = if let Some(receipt) = existing_dispatch_receipt.as_ref() {
-        !existing_dispatch_receipt_matches_current_seed(
+        !existing_dispatch_receipt_matches_current_seed_with_persistence(
             store,
             &effective_run_id,
             receipt,
             timeout_stage,
+            persist_launcher_snapshot,
         )
         .await?
     } else {
@@ -10330,8 +10559,13 @@ async fn preview_run_graph_dispatch_init_artifacts(
     };
     if stale_seeded_packet {
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_stale_dispatch_packet");
-        let payload =
-            reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
+        let payload = reseed_dispatch_context_after_route_assignment_drift_with_persistence(
+            store,
+            &status,
+            &context,
+            persist_launcher_snapshot,
+        )
+        .await?;
         status = reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
             .await?;
         role_selection = payload.role_selection.clone();
@@ -10347,7 +10581,11 @@ async fn preview_run_graph_dispatch_init_artifacts(
     }
     set_dispatch_init_timeout_stage(timeout_stage, "build_run_graph_dispatch_bootstrap");
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_state(&status)?;
-    let runtime_bundle = crate::build_taskflow_consume_bundle_payload(store)
+    let runtime_bundle =
+        crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_with_persistence(
+            store,
+            persist_launcher_snapshot,
+        )
         .await
         .ok();
     let assignment_bundle = runtime_bundle
@@ -10529,7 +10767,7 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
 ) -> Result<RunGraphDispatchInitArtifacts, String> {
-    match preview_run_graph_dispatch_init_artifacts(store, run_id, None).await? {
+    match preview_run_graph_dispatch_init_artifacts(store, run_id, None, true).await? {
         RunGraphDispatchInitPreview::Existing(artifacts) => Ok(artifacts),
         RunGraphDispatchInitPreview::Prepared(prepared) => {
             if let Some(seed_payload) = prepared.seed_payload.as_ref() {
@@ -10591,6 +10829,7 @@ pub(crate) async fn run_graph_dispatch_init_from_state_dir(
                 &store,
                 run_id,
                 Some(&timeout_stage_for_task),
+                false,
             )
             .await?;
             *timeout_stage_for_task
@@ -10654,7 +10893,23 @@ pub(crate) async fn derive_advanced_run_graph_state(
     store: &StateStore,
     existing: RunGraphStatus,
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
-    let compiled_control = compiled_run_graph_control(store).await?;
+    derive_advanced_run_graph_state_with_persistence(store, existing, true).await
+}
+
+pub(crate) async fn derive_advanced_run_graph_state_read_only(
+    store: &StateStore,
+    existing: RunGraphStatus,
+) -> Result<TaskflowRunGraphAdvancePayload, String> {
+    derive_advanced_run_graph_state_with_persistence(store, existing, false).await
+}
+
+pub(crate) async fn derive_advanced_run_graph_state_with_persistence(
+    store: &StateStore,
+    existing: RunGraphStatus,
+    persist_launcher_snapshot: bool,
+) -> Result<TaskflowRunGraphAdvancePayload, String> {
+    let compiled_control =
+        compiled_run_graph_control_with_persistence(store, persist_launcher_snapshot).await?;
     let implementation = compiled_control.implementation;
     let compiled_route_uses_seeded_sequence = implementation["team_flow_selected_node_id"]
         .as_str()
@@ -10663,7 +10918,12 @@ pub(crate) async fn derive_advanced_run_graph_state(
         && existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
     {
-        seeded_implementation_lane_sequence(store, &existing.run_id).await?
+        seeded_implementation_lane_sequence_with_persistence(
+            store,
+            &existing.run_id,
+            persist_launcher_snapshot,
+        )
+        .await?
     } else {
         None
     };
@@ -15973,6 +16233,43 @@ agent_system:
             .await
             .map_err(|error| format!("write launcher activation snapshot: {error}"))?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_only_seed_snapshot_does_not_persist_refresh() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let before = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read persisted activation snapshot");
+        store.close().await;
+        let read_only_store = StateStore::open_existing_read_only(harness.path().to_path_buf())
+            .await
+            .expect("open read-only store");
+        let _ = crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+            &read_only_store,
+        )
+        .await;
+        let observed = read_seed_launcher_activation_snapshot(&read_only_store, false)
+            .await
+            .expect("read-only seed snapshot should use persisted state");
+        assert_eq!(observed, before);
+        read_only_store.close().await;
+        let after_store = StateStore::open_existing(harness.path().to_path_buf())
+            .await
+            .expect("reopen store after read-only consume");
+        let after = after_store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read persisted activation snapshot after read-only consume");
+        assert_eq!(after, before);
+        after_store.close().await;
     }
 
     fn force_selected_model_ref(value: &mut serde_json::Value, model_ref: &str) {

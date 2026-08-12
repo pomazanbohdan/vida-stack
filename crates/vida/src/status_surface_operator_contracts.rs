@@ -63,6 +63,26 @@ pub(crate) fn latest_run_graph_artifact_refs(
     })
 }
 
+fn continuation_binding_next_actions(
+    active_bounded_unit_blocked: bool,
+    active_flow_mismatch: bool,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    if active_bounded_unit_blocked {
+        actions.push(
+            "Inspect the blocked active bounded unit and resolve its TaskFlow blocker before continuing."
+                .to_string(),
+        );
+    }
+    if active_flow_mismatch {
+        actions.push(
+            "Reconcile the active session and TaskFlow ownership projection before continuing; do not continue by heuristic."
+                .to_string(),
+        );
+    }
+    actions
+}
+
 pub(crate) fn build_status_operator_contracts(
     inputs: StatusOperatorContractInputs<'_>,
 ) -> Result<serde_json::Value, String> {
@@ -143,9 +163,8 @@ pub(crate) fn build_status_operator_contracts(
             .push(blocker_code_str(BlockerCode::ContinuationBindingAmbiguous).to_string());
     }
     if inputs.active_bounded_unit_blocked {
-        operator_blocker_codes.push(
-            blocker_code_str(BlockerCode::ContinuationBindingMismatch).to_string(),
-        );
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::ContinuationBindingMismatch).to_string());
     }
     if inputs.active_flow_mismatch {
         operator_blocker_codes
@@ -315,10 +334,10 @@ pub(crate) fn build_status_operator_contracts(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::ContinuationBindingMismatch))
     {
-        operator_next_actions.push(
-            "Inspect the blocked active bounded unit and resolve its TaskFlow blocker before continuing."
-                .to_string(),
-        );
+        operator_next_actions.extend(continuation_binding_next_actions(
+            inputs.active_bounded_unit_blocked,
+            inputs.active_flow_mismatch,
+        ));
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
@@ -409,7 +428,10 @@ pub(crate) fn build_status_operator_contracts(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_status_operator_contracts, StatusOperatorContractInputs};
+    use super::{
+        build_status_operator_contracts, continuation_binding_next_actions,
+        StatusOperatorContractInputs,
+    };
     use std::fs;
 
     fn protocol_binding_summary(
@@ -448,6 +470,23 @@ mod tests {
             "global_blockers": [],
             "claim_conflicts": [],
         })
+    }
+
+    #[test]
+    fn continuation_binding_next_actions_distinguish_blocked_unit_from_session_mismatch() {
+        let blocked = continuation_binding_next_actions(true, false);
+        assert_eq!(blocked.len(), 1);
+        assert!(blocked[0].contains("blocked active bounded unit"));
+        assert!(blocked[0].contains("TaskFlow blocker"));
+
+        let session_mismatch = continuation_binding_next_actions(false, true);
+        assert_eq!(session_mismatch.len(), 1);
+        assert!(session_mismatch[0].contains("active session and TaskFlow ownership projection"));
+        assert!(session_mismatch[0].contains("do not continue by heuristic"));
+        assert!(!session_mismatch[0].contains("blocked active bounded unit"));
+
+        let both = continuation_binding_next_actions(true, true);
+        assert_eq!(both.len(), 2);
     }
 
     #[test]

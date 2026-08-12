@@ -6211,7 +6211,9 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             }
             match tokio::time::timeout(
                 std::time::Duration::from_secs(INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS),
-                build_taskflow_consume_bundle_payload(&store),
+                crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+                    &store,
+                ),
             )
             .await
             {
@@ -7791,7 +7793,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             }
             let bundle = match tokio::time::timeout(
                 std::time::Duration::from_secs(INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS),
-                build_taskflow_consume_bundle_payload(&store),
+                crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+                    &store,
+                ),
             )
             .await
             {
@@ -7892,7 +7896,12 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 };
-                match build_runtime_lane_selection_with_store(&store, request).await {
+                match crate::runtime_lane_summary::build_runtime_lane_selection_with_store_read_only(
+                    &store,
+                    request,
+                )
+                .await
+                {
                     Ok(selection) => {
                         if !selected_role_allowed_for_agent_init(&selection.selected_role) {
                             eprintln!(

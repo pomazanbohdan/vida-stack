@@ -7505,7 +7505,10 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
         .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
-            let activation_bundle = match crate::build_taskflow_consume_bundle_payload(&store).await
+            let activation_bundle = match crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload_read_only(
+                &store,
+            )
+            .await
             {
                 Ok(payload) => payload.activation_bundle,
                 Err(error) => {
@@ -7697,16 +7700,18 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     }
                 }
             }
-            let mut activation_bundle =
-                match crate::read_or_sync_launcher_activation_snapshot(&store).await {
-                    Ok(snapshot) => snapshot.compiled_bundle,
-                    Err(error) => {
-                        eprintln!(
-                            "Failed to load activation bundle for agent dispatch preview: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                };
+            let mut activation_bundle = match crate::launcher_activation_snapshot::
+                read_or_capture_launcher_activation_snapshot(&store)
+                .await
+            {
+                Ok(snapshot) => snapshot.compiled_bundle,
+                Err(error) => {
+                    eprintln!(
+                        "Failed to load activation bundle for agent dispatch preview: {error}"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
             let explicit_binding = if command.current_task_id.is_none() {
                 match store
                     .latest_explicit_run_graph_continuation_binding_for_current_session()

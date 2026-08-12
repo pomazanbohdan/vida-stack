@@ -241,7 +241,16 @@ pub(crate) async fn current_runtime_projection(
             stale_closed_status
         }
     };
-    let mut competing_run_id = (!explicit_binding_matches_current)
+    let global_status_matches_single_active_task = if let Some(global) = global_status.as_ref() {
+        let tasks = store.list_tasks(None, true).await?;
+        let candidates =
+            crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&tasks);
+        candidates.len() == 1 && candidates[0]["task_id"].as_str() == Some(global.task_id.as_str())
+    } else {
+        false
+    };
+    let mut competing_run_id = (!explicit_binding_matches_current
+        && !global_status_matches_single_active_task)
         .then_some(())
         .and_then(|_| global_status.as_ref())
         .and_then(|global| {
@@ -1494,7 +1503,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             closed_task_active_run_projection_mismatch:
                                 closed_task_active_run_projection_mismatch,
                             continuation_binding_ambiguous,
-                            active_bounded_unit_blocked: continuation_binding["active_bounded_unit"]
+                            active_bounded_unit_blocked: continuation_binding
+                                ["active_bounded_unit"]
                                 .get("task_status")
                                 .and_then(serde_json::Value::as_str)
                                 == Some("blocked"),

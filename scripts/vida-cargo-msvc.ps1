@@ -29,6 +29,13 @@ if ($cargoArgs.Count -eq 0) {
     throw "[vida-cargo-msvc] Pass cargo arguments, for example: test -p vida --bin vida status_surface"
 }
 
+# Deep VIDA async tests can exceed the platform test-thread default stack. Keep
+# the project proof default aligned with the 64 MiB runtime/test harness policy,
+# while preserving an explicit caller override for narrower environments.
+if ($cargoArgs[0] -eq "test" -and [string]::IsNullOrWhiteSpace($env:RUST_MIN_STACK)) {
+    $env:RUST_MIN_STACK = "67108864"
+}
+
 function Convert-VidaCargoTestArgs {
     param([string[]]$Arguments)
 

@@ -1206,6 +1206,15 @@ async fn lane_authorized_rework_route(
     let Some(status) = status else {
         return Ok(None);
     };
+    if summary
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .is_none()
+    {
+        return Ok(None);
+    }
     crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_context_from_receipt_fields(
         store,
         &status.run_id,
