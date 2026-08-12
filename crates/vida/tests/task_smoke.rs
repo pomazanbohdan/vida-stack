@@ -123,6 +123,17 @@ fn vida_dispatch_validator_matches_completion_validator_for_packet_path_spelling
         "packet_id": "packet-path",
         "packet_path": normal,
         "backend_id": "internal_subagents",
+        "carrier_id": "carrier-path",
+        "adapter_kind": "adapter-path",
+        "adapter_capability_id": "capability-path",
+        "invocation_mode": "direct",
+        "dispatch_transport": "host_bridge",
+        "receipt_mode": "required",
+        "adapter_contract_source": "contract-path",
+        "adapter_contract_hash": "hash-path",
+        "request_path": "requests/request.json",
+        "result_path": "results/result.json",
+        "receipt_path": "receipts/receipt.json",
     });
     let result = serde_json::json!({
         "request_id": "req-path",
@@ -133,13 +144,39 @@ fn vida_dispatch_validator_matches_completion_validator_for_packet_path_spelling
         "packet_id": "packet-path",
         "source_dispatch_packet_path": mixed,
         "selected_backend": "internal_subagents",
+        "carrier_id": "carrier-path",
+        "adapter_kind": "adapter-path",
+        "adapter_capability_id": "capability-path",
+        "invocation_mode": "direct",
+        "dispatch_transport": "host_bridge",
+        "receipt_mode": "required",
+        "adapter_contract_source": "contract-path",
+        "adapter_contract_hash": "hash-path",
+        "request_path": "requests/request.json",
+        "result_path": "results/result.json",
+        "receipt_path": "receipts/receipt.json",
         "completion_receipt_id": "completion-path",
     });
     let receipt = serde_json::json!({
         "request_id": "req-path",
         "run_id": "run-path",
+        "task_id": "task-path",
         "dispatch_target": "tester",
+        "attempt_id": "attempt-path",
+        "packet_id": "packet-path",
         "source_dispatch_packet_path": extended,
+        "selected_backend": "internal_subagents",
+        "carrier_id": "carrier-path",
+        "adapter_kind": "adapter-path",
+        "adapter_capability_id": "capability-path",
+        "invocation_mode": "direct",
+        "dispatch_transport": "host_bridge",
+        "receipt_mode": "required",
+        "adapter_contract_source": "contract-path",
+        "adapter_contract_hash": "hash-path",
+        "request_path": "requests/request.json",
+        "result_path": "results/result.json",
+        "receipt_path": "receipts/receipt.json",
         "completion_receipt_id": "completion-path",
         "receipt_backed": true,
     });
@@ -162,6 +199,18 @@ fn vida_dispatch_validator_matches_completion_validator_for_packet_path_spelling
         &request,
         &foreign,
         Some(&receipt),
+        "run-path",
+        "tester",
+        &normal
+    ));
+
+    // A receipt that belongs to a different request must fail closed.
+    let mut foreign_receipt = receipt.clone();
+    foreign_receipt["request_id"] = serde_json::json!("request-from-another-run");
+    assert!(!host_bridge_completion_identity_matches(
+        &request,
+        &result,
+        Some(&foreign_receipt),
         "run-path",
         "tester",
         &normal
