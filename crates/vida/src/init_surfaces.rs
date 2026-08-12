@@ -3702,7 +3702,7 @@ mod tests {
     pub(super) fn cli_tokio_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .thread_stack_size(64 * 1024 * 1024)
+            .thread_stack_size(crate::CLI_RUNTIME_THREAD_STACK_BYTES)
             .build()
             .expect("tokio runtime should initialize")
     }

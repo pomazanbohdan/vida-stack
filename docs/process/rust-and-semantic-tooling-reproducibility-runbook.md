@@ -300,13 +300,13 @@ concurrency claims in this slice.
 
 ### Stack Policy
 
-The VIDA CLI outer runtime thread and the deep async test harnesses use a
-64 MiB stack. This fixes the observed Windows test-thread overflow in
-resume/init regression paths while keeping the change bounded to the CLI
-carrier and explicit deep-test helpers. It does not set RUST_MIN_STACK, does
-not enlarge every Tokio worker thread, and does not change TaskFlow state or
-runtime semantics. If a new stack overflow appears, reproduce the smallest
-targeted test first; do not hide it with a global environment override.
+The VIDA CLI outer runtime thread, its Tokio worker threads, and the deep async
+test harnesses use a 64 MiB stack. This fixes the observed Windows
+test-thread overflow in resume/init regression paths and keeps the default
+CLI worker budget consistent. It does not set RUST_MIN_STACK, does not change
+TaskFlow state or runtime semantics, and the stack is reserved per worker
+thread. If a new stack overflow appears, reproduce the smallest targeted test
+first; do not hide it with a global environment override.
 
 ## Pre-push And Pre-commit
 

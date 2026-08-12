@@ -368,7 +368,7 @@ use taskflow_spec_bootstrap::{
 };
 use time::format_description::well_known::Rfc3339;
 
-const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn main() -> ExitCode {
     bootstrap_windows_host_environment();
@@ -379,6 +379,7 @@ fn main() -> ExitCode {
         .spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .thread_stack_size(CLI_RUNTIME_THREAD_STACK_BYTES)
                 .build()
                 .expect("tokio runtime should initialize");
             let _runtime_state_dir_parse_guard =
