@@ -2810,6 +2810,44 @@ fn create_run_graph_backing_task(state_dir: &str, task_id: &str) {
     assert_eq!(task["status"], "pass");
 }
 
+// Management-only fixture seam: persist the same projections as run-graph init
+// without invoking the dispatch-gated mutation surface.
+fn seed_management_run_graph_fixture(state_dir: &str, task_id: &str) {
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida").use_db("primary").await.expect("use namespace/database");
+        let run_id = task_id;
+        let projection = serde_json::json!({
+            "run_id": run_id, "task_id": task_id, "task_class": "implementation",
+            "active_node": "implementation", "next_node": null, "status": "pending",
+            "updated_at": "2026-06-01T00:00:00Z"
+        });
+        db.query("UPSERT type::record('execution_plan_state', $run) CONTENT $row")
+            .bind(("run", run_id)).bind(("row", projection)).await
+            .expect("seed execution plan state");
+        db.query("UPSERT type::record('routed_run_state', $run) CONTENT $row")
+            .bind(("run", run_id)).bind(("row", serde_json::json!({
+                "run_id": run_id, "route_task_class": "implementation",
+                "selected_backend": "unknown", "lane_id": "unassigned",
+                "lifecycle_stage": "initialized", "updated_at": "2026-06-01T00:00:00Z"
+            }))).await.expect("seed routed run state");
+        db.query("UPSERT type::record('governance_state', $run) CONTENT $row")
+            .bind(("run", run_id)).bind(("row", serde_json::json!({
+                "run_id": run_id, "policy_gate": "not_required", "handoff_state": "none",
+                "context_state": "open", "updated_at": "2026-06-01T00:00:00Z"
+            }))).await.expect("seed governance state");
+        db.query("UPSERT type::record('resumability_capsule', $run) CONTENT $row")
+            .bind(("run", run_id)).bind(("row", serde_json::json!({
+                "run_id": run_id, "checkpoint_kind": "none", "resume_target": "none",
+                "recovery_ready": false, "updated_at": "2026-06-01T00:00:00Z"
+            }))).await.expect("seed resumability capsule");
+        drop(db);
+    });
+}
+
 struct AgentStatusScenario {
     name: &'static str,
     seed_blocked_dispatch: bool,
@@ -4186,6 +4224,59 @@ fn task_close_spec_first_feature_keeps_parent_open_before_work_pool_exists_via_c
 
     let _ = fs::remove_dir_all(&state_dir);
 }
+#[test]
+fn task_list_help_and_parser_share_field_selector_contract() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_and_assert_success(&["task", "list", "--help"], &state_dir);
+    for expected in [
+        "Summary/compact:",
+        "id,display_id,status,title,priority,issue_type,work_item_kind,parent_id,parent_edge",
+        "Full view also accepts description",
+        "notes",
+    ] {
+        assert!(
+            help.contains(expected),
+            "task list help missing selector contract {expected}:\n{help}"
+        );
+    }
+
+    let valid = run_command_json(
+        &[
+            "task",
+            "list",
+            "--fields",
+            "id,display_id,status,title,priority,issue_type,work_item_kind,parent_id,parent_edge",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(valid["status"], "pass");
+    assert_eq!(
+        valid["fields"],
+        "id,display_id,status,title,priority,issue_type,work_item_kind,parent_id,parent_edge"
+    );
+
+    let invalid = run_command_capture(
+        &[
+            "task",
+            "list",
+            "--fields",
+            "id,status,title,description,notes",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!invalid.status.success());
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(stderr.contains("invalid field selector"));
+    assert!(stderr.contains("description"));
+    assert!(stderr.contains("notes"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
 
 #[test]
 fn task_list_fields_and_default_toon_shape_are_binary_visible() {
@@ -16169,10 +16260,7 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let run_id = "h22-missing-task";
     let task_id = run_id;
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
     let _ = run_and_assert_success(
         &[
             "taskflow",
@@ -16375,10 +16463,7 @@ fn lane_retire_rejects_recorded_exception_without_supersession_and_preserves_bin
         &state_dir,
     );
     assert_eq!(task["status"], "pass");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
     let _ = run_and_assert_success(
         &[
             "taskflow",
@@ -21628,10 +21713,7 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             &state_dir,
         );
         assert_eq!(created["status"], "pass");
-        let _ = run_and_assert_success(
-            &["taskflow", "run-graph", "init", task_id, "implementation"],
-            &state_dir,
-        );
+        seed_management_run_graph_fixture(&state_dir, task_id);
     }
 
     let runtime = Runtime::new().expect("create tokio runtime");
@@ -21936,10 +22018,7 @@ fn taskflow_settle_retires_closed_task_run_and_converges_runtime_surfaces() {
         &state_dir,
     );
     assert_eq!(created["status"], "pass");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
@@ -22071,10 +22150,7 @@ fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() 
         &state_dir,
     );
     assert_eq!(created["status"], "pass");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
@@ -22191,10 +22267,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         &state_dir,
     );
     assert_eq!(created["status"], "pass");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
     let cached_orchestrator_before_close = run_command_json(
         &["orchestrator-init", "--state-dir", &state_dir, "--json"],
         &state_dir,
@@ -22510,10 +22583,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
         &state_dir,
     );
     assert_eq!(created["status"], "pass");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
 
     let close = run_command_json(
         &[
@@ -22737,10 +22807,7 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
             &state_dir,
         );
         assert_eq!(created["status"], "pass");
-        let _ = run_and_assert_success(
-            &["taskflow", "run-graph", "init", task_id, "implementation"],
-            &state_dir,
-        );
+        seed_management_run_graph_fixture(&state_dir, task_id);
     }
 
     let runtime = Runtime::new().expect("create tokio runtime");
@@ -23151,10 +23218,7 @@ fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_
     );
     assert_eq!(created["status"], "pass");
     assert_eq!(created["task"]["status"], "closed");
-    let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", task_id, "implementation"],
-        &state_dir,
-    );
+    seed_management_run_graph_fixture(&state_dir, task_id);
     let _ = run_and_assert_success(
         &[
             "taskflow",

@@ -4,6 +4,21 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> serde_json::Value {
+    build_runtime_consumption_run_graph_bootstrap_with_persistence(store, role_selection, true).await
+}
+
+pub(crate) async fn build_runtime_consumption_run_graph_bootstrap_read_only(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    build_runtime_consumption_run_graph_bootstrap_with_persistence(store, role_selection, false).await
+}
+
+async fn build_runtime_consumption_run_graph_bootstrap_with_persistence(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    persist_state: bool,
+) -> serde_json::Value {
     let run_id = runtime_consumption_run_id(role_selection);
     if !role_selection.ok || role_selection.selected_role == "orchestrator" {
         let status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
@@ -16,7 +31,8 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
         } else {
             role_selection.reason.as_str()
         };
-        if let Err(error) = store.record_run_graph_status(&status).await {
+        if persist_state {
+            if let Err(error) = store.record_run_graph_status(&status).await {
             return serde_json::json!({
                 "status": "blocked",
                 "handoff_ready": false,
@@ -25,6 +41,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                 "fallback_reason": fallback_reason,
                 "record_error": format!("record_blocked_selection_failed: {error}"),
             });
+            }
         }
         return serde_json::json!({
             "status": "blocked",
@@ -49,22 +66,25 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                 serde_json::to_value(&seed_payload).unwrap_or(serde_json::Value::Null);
             let seed_status_json =
                 serde_json::to_value(&seed_payload.status).unwrap_or(serde_json::Value::Null);
-            if let Err(error) = store.record_run_graph_status(&seed_payload.status).await {
+            if persist_state {
+                if let Err(error) = store.record_run_graph_status(&seed_payload.status).await {
                 return serde_json::json!({
                     "status": "blocked",
                     "handoff_ready": false,
                     "run_id": run_id,
                     "reason": format!("record_seed_failed: {error}"),
                 });
+                }
             }
-            if let Err(error) = store
+            if persist_state {
+                if let Err(error) = store
                 .record_run_graph_dispatch_context(
                     &crate::taskflow_run_graph::run_graph_dispatch_context_from_seed_payload(
                         &seed_payload,
                     ),
                 )
                 .await
-            {
+                {
                 return serde_json::json!({
                     "status": "blocked",
                     "handoff_ready": false,
@@ -72,14 +92,16 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                     "seed": seed_payload_json,
                     "reason": format!("record_seed_context_failed: {error}"),
                 });
+                }
             }
-            if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+            if persist_state {
+                if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
                 store,
                 &seed_payload.status,
                 "runtime_consumption_seed",
             )
             .await
-            {
+                {
                 return serde_json::json!({
                     "status": "blocked",
                     "handoff_ready": false,
@@ -87,6 +109,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                     "seed": seed_payload_json,
                     "reason": format!("record_seed_binding_failed: {error}"),
                 });
+                }
             }
             let mut latest_status = seed_status_json.clone();
             let mut advanced_payload = serde_json::Value::Null;
@@ -102,7 +125,8 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                         let advanced_status = payload.status.clone();
                         let advanced_status_json = serde_json::to_value(&payload.status)
                             .unwrap_or(serde_json::Value::Null);
-                        if let Err(error) = store.record_run_graph_status(&payload.status).await {
+                        if persist_state {
+                            if let Err(error) = store.record_run_graph_status(&payload.status).await {
                             let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
                                 role_selection,
                                 &run_id,
@@ -125,18 +149,20 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                                     format!("record_advance_failed: {error}")
                                 },
                             });
+                            }
                         }
                         advanced_payload =
                             serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
                         latest_status = advanced_status_json;
-                        if let Err(error) =
+                        if persist_state {
+                            if let Err(error) =
                             crate::taskflow_continuation::sync_run_graph_continuation_binding(
                                 store,
                                 &advanced_status,
                                 "runtime_consumption_advance",
                             )
                             .await
-                        {
+                            {
                             return serde_json::json!({
                                 "status": "blocked",
                                 "handoff_ready": false,
@@ -144,6 +170,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                                 "seed": seed_payload_json,
                                 "reason": format!("record_advance_binding_failed: {error}"),
                             });
+                            }
                         }
                     }
                     Err(error) => {
@@ -182,13 +209,15 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                     &run_id,
                 );
             let latest_status = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
-            if let Err(record_error) = store.record_run_graph_status(&status).await {
+            if persist_state {
+                if let Err(record_error) = store.record_run_graph_status(&status).await {
                 return serde_json::json!({
                     "status": "blocked",
                     "handoff_ready": false,
                     "run_id": run_id,
                     "reason": format!("seed_failed: {error}; fallback_record_failed: {record_error}"),
                 });
+                }
             }
             serde_json::json!({
                 "status": "blocked",
@@ -205,7 +234,10 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
 
 #[cfg(test)]
 mod tests {
-    use super::build_runtime_consumption_run_graph_bootstrap;
+    use super::{
+        build_runtime_consumption_run_graph_bootstrap,
+        build_runtime_consumption_run_graph_bootstrap_read_only,
+    };
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
 
     #[tokio::test]
@@ -284,6 +316,15 @@ mod tests {
             execution_plan: serde_json::Value::Null,
             reason: "test".to_string(),
         };
+
+        let readonly_bootstrap =
+            build_runtime_consumption_run_graph_bootstrap_read_only(&store, &role_selection).await;
+        assert_eq!(readonly_bootstrap["status"], "blocked");
+        assert!(store
+            .latest_run_graph_status()
+            .await
+            .expect("read-only bootstrap status lookup should succeed")
+            .is_none());
 
         let bootstrap =
             build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;

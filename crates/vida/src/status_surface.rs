@@ -1494,6 +1494,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             closed_task_active_run_projection_mismatch:
                                 closed_task_active_run_projection_mismatch,
                             continuation_binding_ambiguous,
+                            active_bounded_unit_blocked: continuation_binding["active_bounded_unit"]
+                                .get("task_status")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("blocked"),
                             active_flow_mismatch: session_identity_ambiguous,
                             incomplete_release_admission_operator_evidence,
                             activation_truth: activation_truth.as_ref(),

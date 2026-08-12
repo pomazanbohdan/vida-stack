@@ -284,6 +284,54 @@ fn emit_consume_final_blocked_error(
     }
 }
 
+fn emit_consume_final_blocked_error_with_context(
+    as_json: bool,
+    blocker_code: &str,
+    error: impl std::fmt::Display,
+    mode: ConsumeFinalMode,
+    request_text: &str,
+) {
+    if as_json {
+        crate::print_json_pretty(&serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "blocked",
+            "blocker_codes": [blocker_code],
+            "error": error.to_string(),
+            "payload": {
+                "consume_final_mode": mode.as_str(),
+                "request_text": request_text,
+            },
+        }));
+    } else {
+        eprintln!("{error}");
+    }
+}
+
+fn emit_consume_final_blocked_error_with_owned_paths(
+    as_json: bool,
+    blocker_code: &str,
+    error: impl std::fmt::Display,
+    mode: ConsumeFinalMode,
+    request_text: &str,
+    owned_paths: serde_json::Value,
+) {
+    if as_json {
+        crate::print_json_pretty(&serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "blocked",
+            "blocker_codes": [blocker_code],
+            "error": error.to_string(),
+            "payload": {
+                "consume_final_mode": mode.as_str(),
+                "request_text": request_text,
+                "requested_owned_paths": owned_paths,
+            },
+        }));
+    } else {
+        eprintln!("{error}");
+    }
+}
+
 fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
     let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
         ["required_lanes"]
@@ -592,14 +640,36 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
         && super::taskflow_task_bridge::infer_project_root_from_state_root(&proxy_state_root)
             .is_none()
         && crate::resolve_runtime_project_root().is_ok();
-    if matches!(consume_subcommand, Some("final" | "continue" | "advance"))
+    let read_only_final_requested = consume_subcommand == Some("final")
+        && args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--preview" | "--validate-only"));
+    if (matches!(consume_subcommand, Some("continue" | "advance"))
+        || (consume_subcommand == Some("final") && !read_only_final_requested))
         && !dispatch_enabled
         && !allow_external_state_final_blocked_payload
     {
-        crate::print_json_pretty(&crate::taskflow_runtime::dispatch_runtime_disabled_payload(
-            "vida taskflow consume",
+        let surface = match consume_subcommand {
+            Some("final") => "vida taskflow consume final",
+            Some("continue") => "vida taskflow consume continue",
+            Some("advance") => "vida taskflow consume advance",
+            _ => "vida taskflow consume",
+        };
+        let mut payload = crate::taskflow_runtime::dispatch_runtime_disabled_payload(
+            surface,
             crate::taskflow_runtime::TaskRuntimeMode::ManagementOnly,
-        ));
+        );
+        if consume_subcommand == Some("final") {
+            let mode = if args.iter().any(|arg| arg == "--validate-only") {
+                "validate_only"
+            } else if args.iter().any(|arg| arg == "--preview") {
+                "preview"
+            } else {
+                "execute"
+            };
+            payload["payload"] = serde_json::json!({"consume_final_mode": mode});
+        }
+        crate::print_json_pretty(&payload);
         return ExitCode::from(1);
     }
 
@@ -941,6 +1011,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                 "blocker_codes": [blocker],
                                                 "task_id": task_id,
                                                 "selected_flow": null,
+                                                "payload": {
+                                                    "consume_final_mode": consume_final_mode.as_str(),
+                                                    "request_text": request_text,
+                                                },
                                             }));
                                         } else {
                                             eprintln!("{blocker}");
@@ -953,20 +1027,29 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     &mut role_selection,
                                     &runtime_bundle.activation_bundle,
                                 ) {
-                                    emit_consume_final_blocked_error(
+                                    emit_consume_final_blocked_error_with_context(
                                         as_json,
                                         "team_flow_authority_flow_normalization_failed",
                                         error,
+                                        consume_final_mode,
+                                        &request_text,
                                     );
                                     return ExitCode::from(1);
                                 }
                             }
-                            let run_graph_bootstrap =
-                            crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
-                                &store,
-                                &role_selection,
-                            )
-                            .await;
+                            let run_graph_bootstrap = if consume_final_mode.is_read_only() {
+                                crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap_read_only(
+                                    &store,
+                                    &role_selection,
+                                )
+                                .await
+                            } else {
+                                crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
+                                    &store,
+                                    &role_selection,
+                                )
+                                .await
+                            };
                             if let Err(error) =
                                 crate::apply_run_graph_runtime_assignment_to_selection(
                                     &mut role_selection,
@@ -975,10 +1058,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "run-graph role selection execution_plan is not an object",
                                 )
                             {
-                                emit_consume_final_blocked_error(
+                                emit_consume_final_blocked_error_with_owned_paths(
                                     as_json,
                                     "run_graph_runtime_assignment_failed",
                                     error,
+                                    consume_final_mode,
+                                    &request_text,
+                                    serde_json::Value::Array(
+                                        consume_final_requested_owned_paths(&store, &consume_final_args)
+                                            .await
+                                            .into_iter()
+                                            .map(serde_json::Value::String)
+                                            .collect(),
+                                    ),
                                 );
                                 return ExitCode::from(1);
                             }
@@ -989,10 +1081,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 ) {
                                     Ok(receipt) => receipt,
                                     Err(error) => {
-                                        emit_consume_final_blocked_error(
+                                        emit_consume_final_blocked_error_with_context(
                                             as_json,
                                             "run_graph_dispatch_receipt_build_failed",
                                             error,
+                                            consume_final_mode,
+                                            &request_text,
                                         );
                                         return ExitCode::from(1);
                                     }
@@ -1640,12 +1734,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         task_id,
                                     );
                                 }
-                                let run_graph_bootstrap =
-                                crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
-                                    &store,
-                                    &role_selection,
-                                )
-                                .await;
+                                let run_graph_bootstrap = if consume_final_mode.is_read_only() {
+                                    crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap_read_only(
+                                        &store,
+                                        &role_selection,
+                                    )
+                                    .await
+                                } else {
+                                    crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
+                                        &store,
+                                        &role_selection,
+                                    )
+                                    .await
+                                };
                                 let mut closure_admission = super::build_runtime_closure_admission(
                                     &bundle_check,
                                     &docflow_verdict,

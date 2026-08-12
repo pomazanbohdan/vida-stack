@@ -7,8 +7,11 @@ pub(crate) const MAX_DISPATCH_CACHE_AGE_SECONDS: u64 = u64::MAX / 1_000;
 const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida state reset --archive --reinit --json\n  vida docflow help\n  vida docs update --json";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
+const TASK_LIST_FIELDS_HELP: &str = "Comma-separated JSON task row fields to include. Summary/compact: id,display_id,status,title,priority,issue_type,work_item_kind,parent_id,parent_edge. Full view also accepts description and notes.";
+const TASK_RECONCILE_CLOSED_RUNS_LONG_ABOUT: &str = "Retire historical run-graph rows for already-closed tasks.\n\nThis command is the canonical repair for closed-task active-run projection drift. It reconciles up to --limit rows, preserving skipped runs when receipt authority or inspection is required.";
+const TASK_RECONCILE_CLOSED_RUNS_AFTER_HELP: &str = "Examples:\n  vida task reconcile-closed-runs --limit 25\n  vida task reconcile-closed-runs --limit 25 --json\n\nNext actions:\n  When skipped runs are reported, inspect each run with the emitted `vida taskflow run-graph status <run-id>` command before retrying reconciliation.\n\nOutput:\n  Default output is compact operator text.\n  Use --json for the release-1 operator contract and machine-readable summary/recommended_next_actions.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task steps --since 3h --with-parent\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nField/view/detail selection:\n  `vida task list` supports `--fields` and `--view compact|summary|full`.\n  `vida task show` supports `--view compact|summary|full`.\n  Task diagnostic surfaces that do not expose `--fields`, `--view`, or `--details` use fixed operator projections and document that scope in their help.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task steps --since 3h --with-parent\n  vida task reconcile --epics --dry-run\n  vida task reconcile-closed-runs --limit 25 --json\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nField/view/detail selection:\n  `vida task list` supports `--fields` and `--view compact|summary|full`.\n  `vida task show` supports `--view compact|summary|full`.\n  Task diagnostic surfaces that do not expose `--fields`, `--view`, or `--details` use fixed operator projections and document that scope in their help.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
 const TASK_STEPS_LONG_ABOUT: &str = "Explain execution-step records and active-step attribution.\n\nExecution steps are non-bounded child records under a task/subtask/defect. When a step is in_progress, orchestrator-init keeps the parent as active_bounded_unit and exposes active_step, active_parent_task, and active_epic for attribution.";
 const TASK_STEPS_AFTER_HELP: &str = "Examples:\n  vida task steps --since 3h --with-parent\n  vida task steps --parent-id <task-id> --status in_progress --json\n  vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic\n  vida doctor active-task-attribution --help\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable step rows.\n\nFields:\n  active_step          Current in-progress execution step, when one exists.\n  active_parent_task   Bounded task that owns the execution step.\n  active_epic          Nearest program-container ancestor for the active parent task.";
 
@@ -1991,7 +1994,11 @@ pub(crate) enum TaskCommand {
     PackFinalize(TaskPackFinalizeArgs),
     #[command(about = "reconcile open epics whose descendants are complete")]
     Reconcile(TaskReconcileArgs),
-    #[command(about = "retire historical run-graph rows for already-closed tasks")]
+    #[command(
+        about = "retire historical run-graph rows for already-closed tasks",
+        long_about = TASK_RECONCILE_CLOSED_RUNS_LONG_ABOUT,
+        after_help = TASK_RECONCILE_CLOSED_RUNS_AFTER_HELP
+    )]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
     #[command(
         name = "prune-closed-epics",
@@ -2443,7 +2450,7 @@ pub(crate) struct TaskListArgs {
 
     #[arg(
         long = "fields",
-        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+        help = TASK_LIST_FIELDS_HELP
     )]
     pub(crate) fields: Option<String>,
 
@@ -2499,7 +2506,7 @@ pub(crate) struct TaskSearchArgs {
 
     #[arg(
         long = "fields",
-        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+        help = TASK_LIST_FIELDS_HELP
     )]
     pub(crate) fields: Option<String>,
 
@@ -4284,7 +4291,7 @@ pub(crate) struct TaskReadyArgs {
 
     #[arg(
         long = "fields",
-        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+        help = TASK_LIST_FIELDS_HELP
     )]
     pub(crate) fields: Option<String>,
 
@@ -5048,6 +5055,38 @@ mod tests {
             "task help should list export-jsonl"
         );
         assert!(help.contains("import"), "task help should list import");
+        assert!(help.contains("vida task reconcile --epics --dry-run"));
+        assert!(help.contains("vida task reconcile-closed-runs --limit 25 --json"));
+    }
+
+    #[test]
+    fn task_reconcile_closed_runs_help_matches_live_next_action_surface() {
+        let error = Cli::try_parse_from(["vida", "task", "reconcile-closed-runs", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("vida task reconcile-closed-runs --limit 25"));
+        assert!(help.contains("vida task reconcile-closed-runs --limit 25 --json"));
+        assert!(help.contains("vida taskflow run-graph status <run-id>"));
+        assert!(help.contains("recommended_next_actions"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "reconcile-closed-runs",
+            "--limit",
+            "25",
+            "--json",
+        ])
+        .expect("live reconcile-closed-runs command should parse shared next-action invocation");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::ReconcileClosedRuns(command) = task_args.command else {
+            panic!("reconcile-closed-runs command should parse");
+        };
+        assert_eq!(command.limit, 25);
+        assert!(command.json);
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
     pub(crate) closed_task_active_run_projection_mismatch: bool,
     pub(crate) continuation_binding_ambiguous: bool,
+    pub(crate) active_bounded_unit_blocked: bool,
     pub(crate) active_flow_mismatch: bool,
     pub(crate) incomplete_release_admission_operator_evidence: bool,
     pub(crate) activation_truth:
@@ -140,6 +141,11 @@ pub(crate) fn build_status_operator_contracts(
     if inputs.continuation_binding_ambiguous {
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::ContinuationBindingAmbiguous).to_string());
+    }
+    if inputs.active_bounded_unit_blocked {
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::ContinuationBindingMismatch).to_string(),
+        );
     }
     if inputs.active_flow_mismatch {
         operator_blocker_codes
@@ -303,6 +309,15 @@ pub(crate) fn build_status_operator_contracts(
     {
         operator_next_actions.push(
             crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::ContinuationBindingMismatch))
+    {
+        operator_next_actions.push(
+            "Inspect the blocked active bounded unit and resolve its TaskFlow blocker before continuing."
+                .to_string(),
         );
     }
     if operator_blocker_codes.iter().any(|code| {
@@ -513,6 +528,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_bounded_unit_blocked: false,
             active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -594,6 +610,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_bounded_unit_blocked: false,
             active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -690,6 +707,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: true,
+            active_bounded_unit_blocked: false,
             active_flow_mismatch: true,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -781,6 +799,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: true,
             continuation_binding_ambiguous: false,
+            active_bounded_unit_blocked: false,
             active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -890,6 +909,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_bounded_unit_blocked: false,
             active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
