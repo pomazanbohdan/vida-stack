@@ -247,6 +247,34 @@ mod tests {
     }
 
     #[test]
+    fn missing_task_stale_blocked_run_rejects_incomplete_packet_ready_receipt() {
+        let receipt = StaleRunGraphReceipt {
+            dispatch_status: "executed",
+            lane_status: "lane_open",
+            downstream_dispatch_status: Some("packet_ready"),
+        };
+
+        assert!(!missing_task_stale_blocked_run_can_retire(
+            &active_status(),
+            &receipt
+        ));
+    }
+
+    #[test]
+    fn missing_task_stale_blocked_run_rejects_blocked_nonrunning_lane_receipt() {
+        let receipt = StaleRunGraphReceipt {
+            dispatch_status: "blocked",
+            lane_status: "lane_open",
+            downstream_dispatch_status: None,
+        };
+
+        assert!(!missing_task_stale_blocked_run_can_retire(
+            &active_status(),
+            &receipt
+        ));
+    }
+
+    #[test]
     fn stale_run_retire_admissibility_matches_task_state_and_receipt_shape() {
         let retireable_receipt = StaleRunGraphReceipt {
             dispatch_status: "blocked",
@@ -299,7 +327,17 @@ mod tests {
             StaleRunRetireAdmissibility::BlockedTaskNotClosed.blocker_code(),
             Some("lane_retire_task_not_closed")
         );
+        assert_eq!(
+            StaleRunRetireAdmissibility::BlockedTerminalRun.blocker_code(),
+            Some("lane_retire_terminal_run")
+        );
+        assert_eq!(
+            StaleRunRetireAdmissibility::BlockedMissingTaskReceiptShape.blocker_code(),
+            Some("lane_retire_missing_task_receipt_not_retireable")
+        );
         assert!(StaleRunRetireAdmissibility::AllowedClosedTask.is_allowed());
+        assert_eq!(StaleRunRetireAdmissibility::AllowedMissingTask.blocker_code(), None);
+        assert_eq!(StaleRunRetireAdmissibility::AllowedClosedTask.blocker_code(), None);
     }
 
     #[test]
