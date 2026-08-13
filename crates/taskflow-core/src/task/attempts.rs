@@ -316,17 +316,16 @@ mod tests {
             "observed_facts": "fact"
         });
 
-        assert!(
-            validate_stage_attempt_artifact_identity(
-                &invalid,
-                "attempt-a",
-                "task-a",
-                "analysis",
-                "artifact-a.json"
-            )
-            .unwrap_err()
-            .contains("observed_facts")
-        );
+        let invalid_error = validate_stage_attempt_artifact_identity(
+            &invalid,
+            "attempt-a",
+            "task-a",
+            "analysis",
+            "artifact-a.json",
+        )
+        .unwrap_err();
+        assert!(invalid_error.contains("observed_facts"));
+        assert!(invalid_error.contains("artifact-a.json"));
 
         let invalid_useful_array = json!({
             "schema_version": "stage-attempt-v1",
@@ -366,7 +365,9 @@ mod tests {
                 .expect("required fields should be array")
                 .contains(&serde_json::json!("attempt_id"))
         );
-        assert!(stage_attempt_artifact_contract_hint(65_536).contains("observed_facts or facts"));
+        let hint = stage_attempt_artifact_contract_hint(65_536);
+        assert!(hint.contains("observed_facts or facts"));
+        assert!(hint.contains("65536 bytes"));
     }
 
     #[test]
@@ -401,6 +402,33 @@ mod tests {
             .unwrap_err()
             .contains("outside task owned_paths")
         );
+        assert!(
+            validate_attempt_artifact_changed_files_scope(
+                &outside,
+                "artifact-a.json",
+                &[]
+            )
+            .unwrap_err()
+            .contains("artifact-a.json")
+        );
+
+        let missing_owned_paths = json!({"changed_files": ["crates/vida/src/other.rs"]});
+        assert!(
+            validate_attempt_artifact_changed_files_scope(
+                &missing_owned_paths,
+                "artifact-a.json",
+                &[]
+            )
+            .unwrap_err()
+            .contains("require task owned_paths")
+        );
+        let no_changed_files = json!({"changed_files": []});
+        assert!(validate_attempt_artifact_changed_files_scope(
+            &no_changed_files,
+            "artifact-a.json",
+            &[]
+        )
+        .is_ok());
     }
 
     #[test]
@@ -409,6 +437,8 @@ mod tests {
             normalize_attempt_artifact_repo_path("./crates/vida/src/task_surface.rs").as_deref(),
             Some("crates/vida/src/task_surface.rs")
         );
+        assert!(normalize_attempt_artifact_repo_path("").is_none());
+        assert_eq!(normalize_attempt_artifact_repo_path("/"), None);
         assert!(normalize_attempt_artifact_repo_path("/tmp/file").is_none());
         assert!(normalize_attempt_artifact_repo_path("crates/../vida").is_none());
         assert!(normalize_attempt_artifact_repo_path("crates//vida").is_none());
@@ -426,5 +456,17 @@ mod tests {
         push_unique(&mut values, "fact-b");
 
         assert_eq!(values, ["fact-a", "fact-b"]);
+    }
+
+    #[test]
+    fn attempt_artifact_refs_validation_returns_normalized_values() {
+        assert_eq!(
+            validate_attempt_artifact_refs(&[
+                " artifact-a.json ".to_string(),
+                "artifact-a.json".to_string(),
+            ])
+            .expect("non-empty refs should validate"),
+            vec!["artifact-a.json"]
+        );
     }
 }
