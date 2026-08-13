@@ -420,8 +420,23 @@ mod tests {
         );
 
         assert_eq!(left.schema_version, EFFECT_INTENT_SCHEMA_VERSION);
+        assert_eq!(left.bounded_unit_id, "run-1");
+        assert_eq!(left.sequence, 1);
+        assert_eq!(left.idempotency_key, "effect_idempotency:effect_intent:run-1:1:host_dispatch:developer:packet-1");
         assert_eq!(left.intent_id, right.intent_id);
         assert!(intent_is_idempotent(&left, &right));
+
+        let next_sequence = EffectIntent::new(
+            "run-1",
+            2,
+            EffectIntentKind::HostDispatch {
+                dispatch_target: "developer".to_string(),
+                packet_id: "packet-1".to_string(),
+            },
+            &generator,
+        );
+        assert_ne!(left.intent_id, next_sequence.intent_id);
+        assert_ne!(left.idempotency_key, next_sequence.idempotency_key);
     }
 
     #[test]
@@ -489,6 +504,18 @@ mod tests {
             conflicting.blocker_codes,
             vec!["effect_idempotency_conflict"]
         );
+
+        let mut key_conflict = intent.clone();
+        key_conflict.idempotency_key.push_str(":different");
+        let key_conflicting = decide_effect_processing(
+            Some(&first.record),
+            EffectProcessingCommand::Enqueue { intent: key_conflict },
+        );
+        assert!(!key_conflicting.admitted);
+        assert_eq!(
+            key_conflicting.blocker_codes,
+            vec!["effect_idempotency_conflict"]
+        );
     }
 
     #[test]
@@ -511,6 +538,11 @@ mod tests {
         assert!(leased.admitted);
         assert_eq!(leased.record.status, EffectLifecycleStatus::Leased);
         assert_eq!(leased.record.attempt_count, 1);
+        assert_eq!(leased.record.lease_owner.as_deref(), Some("worker-1"));
+        assert_eq!(
+            leased.record.lease_expires_at.as_deref(),
+            Some("2026-06-22T00:05:00Z")
+        );
         assert_eq!(
             leased.events,
             vec![EffectProcessingEvent::LeaseGranted {
@@ -530,6 +562,12 @@ mod tests {
         assert_eq!(
             completed.record.receipt_ref.as_deref(),
             Some("receipts/effect-1.json")
+        );
+        assert_eq!(
+            completed.events,
+            vec![EffectProcessingEvent::Completed {
+                receipt_ref: "receipts/effect-1.json".to_string()
+            }]
         );
 
         let duplicate_complete = decide_effect_processing(
@@ -568,6 +606,7 @@ mod tests {
             retryable.record.status,
             EffectLifecycleStatus::FailedRetryable
         );
+        assert_eq!(retryable.record.failure_code.as_deref(), Some("transient_io"));
 
         let leased_again = decide_effect_processing(
             Some(&retryable.record),
@@ -596,6 +635,10 @@ mod tests {
         assert_eq!(
             compensated.record.status,
             EffectLifecycleStatus::Compensated
+        );
+        assert_eq!(
+            compensated.record.receipt_ref.as_deref(),
+            Some("receipts/compensate-1.json")
         );
     }
 
