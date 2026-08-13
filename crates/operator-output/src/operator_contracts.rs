@@ -1031,6 +1031,14 @@ mod tests {
             json!("missing_gate_evidence")
         );
         assert_eq!(
+            gate_result["issues"],
+            json!([{"code": "insufficient_evidence"}])
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["artifact_refs"]["task_id"],
+            json!("task-1")
+        );
+        assert_eq!(
             gate_result["operator_contracts"]["status"],
             json!("blocked")
         );
@@ -1161,14 +1169,20 @@ mod tests {
         let gate_result = render_vida_gate_result_from_operator_contracts(
             "consume-final",
             operator_contracts.clone(),
+            vec!["Warning_Code".to_string()],
             vec![],
-            vec![],
-            vec![],
+            vec![json!({"code": "warning_code"})],
             vec!["resolve migration".to_string()],
             operator_contracts["artifact_refs"].clone(),
         );
 
         assert_eq!(gate_result["operator_contracts"], operator_contracts);
+        assert_eq!(gate_result["gate_id"], json!("consume-final"));
+        assert_eq!(gate_result["warning_codes"], json!(["warning_code"]));
+        assert_eq!(
+            gate_result["issues"],
+            json!([{"code": "warning_code"}])
+        );
         assert_eq!(gate_result["status"], json!("blocked"));
         assert_eq!(gate_result["ready"], json!(false));
     }
@@ -1343,6 +1357,10 @@ mod tests {
             ),
             "blocked"
         );
+        assert_eq!(
+            operator_contract_status_for_blockers(&RELEASE1_OPERATOR_CONTRACT_SPEC, &[]),
+            "pass"
+        );
     }
 
     #[test]
@@ -1368,6 +1386,18 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn generic_consistency_rejects_unknown_status() {
+        let error = operator_contracts_consistency_error(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            "unknown",
+            &[],
+            &[],
+        )
+        .expect("unknown status should fail closed");
+        assert!(error.contains("status must be"));
     }
 
     #[test]
@@ -1514,6 +1544,10 @@ mod tests {
             result["operator_contracts"]["next_actions"],
             json!(["repair failure"])
         );
+        assert_eq!(
+            result["operator_contracts"]["artifact_refs"]["trace_id"],
+            json!("trace-rewritten")
+        );
         assert_eq!(result["trace_id"], serde_json::Value::Null);
         assert_eq!(result["workflow_class"], serde_json::Value::Null);
         assert_eq!(result["risk_tier"], serde_json::Value::Null);
@@ -1548,6 +1582,29 @@ mod tests {
         assert_eq!(result["trace_id"], "trace-contract");
         assert_eq!(result["workflow_class"], "recovery");
         assert_eq!(result["risk_tier"], "high");
+    }
+
+    #[test]
+    fn gate_result_from_operator_contracts_keeps_pass_without_failures() {
+        let operator_contracts = render_operator_contract_envelope(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            "pass",
+            vec![],
+            vec![],
+            json!({"source": "original"}),
+        );
+        let result = render_vida_gate_result_from_operator_contracts(
+            "consume-final",
+            operator_contracts.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            json!({"source": "caller"}),
+        );
+
+        assert_eq!(result["operator_contracts"], operator_contracts);
+        assert_eq!(result["status"], json!("pass"));
     }
 
     #[test]
@@ -1591,6 +1648,13 @@ mod tests {
                     .expect("invalid contract shape should report an error");
             assert!(error.contains(expected), "{error}");
         }
+        let error = release1_operator_contracts_consistency_error(
+            "blocked",
+            &["migration_required".to_string()],
+            &[" next".to_string()],
+        )
+        .expect("non-canonical next actions should fail closed");
+        assert!(error.contains("shared string arrays must contain only canonical"));
         assert_eq!(
             release1_operator_contracts_consistency_error(
                 "blocked",
@@ -1741,5 +1805,28 @@ mod tests {
 
         let mut payload = json!([]);
         assert!(replace_release1_operator_output_artifact_refs(&mut payload, json!({})).is_err());
+
+        let error = build_release1_operator_output_payload(
+            "vida task ready",
+            vec!["migration_required".to_string()],
+            vec!["resolve migration".to_string()],
+            json!({}),
+            json!({"status": "pass"}),
+        )
+        .expect_err("extra fields must not break contract parity");
+        assert!(!error.is_empty());
+
+        let mut payload = build_release1_operator_output_payload(
+            "vida task ready",
+            vec!["migration_required".to_string()],
+            vec!["resolve migration".to_string()],
+            json!({}),
+            json!({}),
+        )
+        .expect("payload should build");
+        payload["status"] = json!("pass");
+        let error = replace_release1_operator_output_artifact_refs(&mut payload, json!({}))
+            .expect_err("artifact replacement must preserve contract parity");
+        assert!(!error.is_empty());
     }
 }
