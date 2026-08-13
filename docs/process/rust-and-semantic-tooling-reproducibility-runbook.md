@@ -31,16 +31,17 @@ cargo test --manifest-path tests/model/Cargo.toml --locked
 
 The unscoped `cargo test --workspace --all-targets --locked` command also enters the
 VIDA runtime test contour. The latest serialized Windows VIDA binary run on
-2026-08-12 completed 3267 tests in 1115.82s: 2866 passed, 400 failed, and 1 was
-ignored. The remaining failures are the pre-existing runtime selection/TeamFlow
-fixture debt (for example missing `role_selection.fallback_role` and replay
-identity fields); they are not semantic-gate evidence. Semantic work must not
-weaken the fail-closed runtime guard or treat the unscoped result as green. Re-open
-runtime triage as a separate bounded task if that scope changes.
+2026-08-13 (commit `8089999d3`) completed 3267 tests in 1014.72s: 2873 passed,
+393 failed, and 1 was ignored. The remaining failures are the pre-existing runtime
+selection/TeamFlow fixture debt (for example missing `role_selection.fallback_role`,
+replay identity fields, and authority-backed inclusion evidence); they are not
+semantic-gate evidence. Semantic work must not weaken the fail-closed runtime guard
+or treat the unscoped result as green. Re-open runtime triage as a separate bounded
+task if that scope changes.
 
-The 400 baseline failures were distributed as follows (the remainder was spread
+The 393 baseline failures were distributed as follows (the remainder was spread
 across smaller modules): `runtime_dispatch_state` 107, `taskflow_consume_resume`
-50, `agent_dispatch_surface` 49, `runtime_dispatch_execution` 42,
+50, `agent_dispatch_surface` 47, `runtime_dispatch_execution` 37,
 `taskflow_run_graph` 31, `lane_surface` 27, `state_store` 13, `init_surfaces` 13,
 `taskflow_consume` 13, and `compiled_agent_extension_bundle` 8. Representative
 failures reproduce on the clean parent commit `18a4cbba8` and include
