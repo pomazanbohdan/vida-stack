@@ -51,6 +51,23 @@ separate runtime-contract remediation packet: repair producers/fixtures and add
 authority-backed evidence; do not infer missing identity or weaken the fail-closed
 guards merely to raise the test percentage.
 
+### Latest Runtime Remediation Run
+
+Commit `549d60bae` corrected canonical `implementer` admission mapping, made
+route-scoped runtime assignment authoritative over legacy executor hints, and
+expanded diagnostic direct-route discovery. The same serialized Windows command
+completed on 2026-08-13 in 955.39s with 3268 tests: 2896 passed, 371 failed,
+and 1 was ignored (88.6% of executed tests). Compared with the preceding
+`8089999d3` run, this is +23 passed and -22 failed tests; the remaining failures
+are still concentrated in the pre-existing runtime/TeamFlow contract clusters.
+
+The only failure newly present in the aggregate was the Windows descendant
+process-tree probe; its exact targeted rerun passed 1/1 in 2.98s, so it is
+classified as a full-suite timing flake rather than a confirmed product defect.
+The latest semantic-focused artifact
+`.vida/tmp/semantic-testing/20260813T063639148Z-f64f5124/summary.json` is green:
+7/7 operations pass with ZOMBIE-D R/P/C evidence refs.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
