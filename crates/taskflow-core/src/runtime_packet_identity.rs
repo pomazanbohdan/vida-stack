@@ -205,7 +205,12 @@ mod tests {
             validate_runtime_packet_run_id_component("run-1").expect("valid run id"),
             "run-1"
         );
-        assert!(validate_runtime_packet_run_id_component(" ").is_err());
+        let empty_error = validate_runtime_packet_run_id_component(" ")
+            .expect_err("empty run id should fail closed");
+        assert_eq!(
+            empty_error,
+            "Failed to write dispatch packet: receipt.run_id is empty"
+        );
         assert!(validate_runtime_packet_run_id_component("run/1").is_err());
         assert!(validate_runtime_packet_run_id_component(r"run\1").is_err());
         assert!(validate_runtime_packet_run_id_component("..").is_err());
@@ -254,6 +259,29 @@ mod tests {
         })
         .expect_err("packet path mismatch should fail closed");
         assert!(path_error.contains("expects dispatch_packet_path"));
+
+        let downstream_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&downstream_dir).expect("create downstream packet dir");
+        let downstream_packet = downstream_dir.join("downstream.json");
+        fs::write(&downstream_packet, "{}").expect("write downstream packet");
+        let downstream_packet_string = downstream_packet.display().to_string();
+        validate_runtime_packet_receipt_identity(RuntimePacketReceiptIdentity {
+            receipt_run_id: "run-identity",
+            receipt_dispatch_packet_path: Some(&packet_path_string),
+            receipt_downstream_dispatch_packet_path: Some(&downstream_packet_string),
+            packet_run_id: Some("run-identity"),
+            packet_path: &downstream_packet_string,
+            packet_label: "dispatch packet",
+        })
+        .expect("matching downstream packet identity should validate");
+
+        let outside_dir = root.join("other/dispatch-packets");
+        fs::create_dir_all(&outside_dir).expect("create outside packet dir");
+        let outside_packet = outside_dir.join("outside.json");
+        fs::write(&outside_packet, "{}").expect("write outside packet");
+        let outside_error = canonical_runtime_packet_identity(&outside_packet.display().to_string())
+            .expect_err("packet outside runtime-consumption should fail closed");
+        assert!(outside_error.contains("outside VIDA runtime packet directories"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -316,5 +344,9 @@ mod tests {
         let right =
             packet_path_components_for_platform("packets/a/b.json", PacketPathPlatform::Posix);
         assert_ne!(left, right);
+        assert!(!runtime_packet_paths_equivalent(
+            "missing-packet.json",
+            "missing-packet.json"
+        ));
     }
 }
