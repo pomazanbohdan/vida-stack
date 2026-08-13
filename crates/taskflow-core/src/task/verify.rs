@@ -738,6 +738,107 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
     }
 
     #[test]
+    fn proof_evidence_note_preserves_optional_fields_and_projects_recorded_status() {
+        let note = append_task_proof_evidence_note_with_timestamp(
+            Some("existing note"),
+            " cargo test -p taskflow-core verify ",
+            Some(" cargo test -p taskflow-core verify "),
+            " PASSED ",
+            " command ",
+            Some(" artifacts/verify.json "),
+            &[" evidence one ".to_string(), "".to_string()],
+            123,
+        );
+
+        assert!(note.starts_with("existing note\n\ntask_proof_evidence:"));
+        assert!(note.contains("recorded_at_unix_nanos: 123"));
+        assert!(note.contains("proof_target: cargo test -p taskflow-core verify"));
+        assert!(note.contains("command: cargo test -p taskflow-core verify"));
+        assert!(note.contains("result: passed"));
+        assert!(note.contains("evidence_kind: command"));
+        assert!(note.contains("artifact_ref: artifacts/verify.json"));
+        assert!(note.contains("evidence: evidence one"));
+
+        let status = structured_task_proof_evidence_status(
+            Some(&note),
+            "cargo test -p taskflow-core verify",
+        )
+        .expect("structured status should project the optional fields");
+        assert_eq!(status.result, "pass");
+        assert_eq!(status.artifact_status, "recorded");
+        assert!(status.evidence_detail.contains("command"));
+
+        let empty_evidence_note = append_task_proof_evidence_note_with_timestamp(
+            None,
+            "cargo test -p taskflow-core verify",
+            None,
+            "pass",
+            "command",
+            None,
+            &[],
+            456,
+        );
+        assert!(empty_evidence_note.contains("recorded_at_unix_nanos: 456"));
+        assert!(!empty_evidence_note.contains("\n  evidence:"));
+    }
+
+    #[test]
+    fn verify_edge_cases_cover_empty_optional_and_timestamp_branches() {
+        assert!(TaskBrowserProofArtifact::new("", "pass", None, None, &[]).is_none());
+
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
+            "pass",
+            Some(" My Tasks "),
+            None,
+            &[" console clean ".to_string(), " ".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let note = append_task_browser_proof_note_with_timestamp(Some("existing"), &artifact, 42);
+        assert!(note.starts_with("existing\n\ntask_browser_proof:"));
+        assert!(note.contains("recorded_at_unix_nanos: 42"));
+        assert!(note.contains("expect: My Tasks"));
+        assert!(note.contains("evidence: console clean"));
+
+        let empty_artifact = TaskBrowserProofArtifact::new("/odoo", "pass", None, None, &[])
+            .expect("browser proof artifact should build without evidence");
+        let empty_note = append_task_browser_proof_note_with_timestamp(None, &empty_artifact, 42);
+        assert!(!empty_note.contains("evidence:"));
+
+        let fallback_notes = "task_proof_evidence:\n  proof_target: fallback\n  result: pass";
+        let fallback_status = structured_task_proof_evidence_status(Some(fallback_notes), "fallback")
+            .expect("structured fallback status should project");
+        assert!(fallback_status.evidence_detail.contains("task_proof_evidence"));
+        assert!(structured_task_proof_evidence_status(Some(fallback_notes), "").is_none());
+
+        let verify_note = append_task_verify_note_with_timestamp(
+            None,
+            true,
+            true,
+            false,
+            None,
+            &[],
+            987,
+        );
+        assert!(verify_note.contains("recorded_at_unix_nanos: 987"));
+        assert!(verify_note.contains("tests_green: true"));
+        assert!(!verify_note.contains("\n  evidence:"));
+
+        assert_eq!(
+            canonical_task_verify_label("source-fixed"),
+            Some("source-fixed")
+        );
+        assert_eq!(
+            canonical_task_verify_label("tests-green"),
+            Some("tests-green")
+        );
+        assert_eq!(
+            verify_proof_targets_for_empty_existing(&[], true, None, &[]),
+            None
+        );
+    }
+
+    #[test]
     fn verify_labels_and_runtime_blocker_detection_match_cli_contract() {
         assert_eq!(
             task_verify_labels(true, true, true),
