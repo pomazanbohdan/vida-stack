@@ -84,6 +84,17 @@ The post-commit semantic-focused gate also completed all 9 recorded operations
 with `pass`; its reproducible summary is
 `.vida/tmp/semantic-testing/20260813T073848142Z-a74e9fe0/summary.json`.
 
+### Latest Serialized VIDA Rerun
+
+Commit `29f9cef71` reran the serialized Windows VIDA binary suite in 956.68s:
+3268 tests, 2898 passed, 369 failed, and 1 ignored (88.71% of executed
+tests). Compared with commit `549d60bae`, this is +2 passed and -2 failed.
+Failure-name set comparison found zero new failures; the resolved failures were
+`runtime_dispatch_state::tests::dispatch_handoff_timeout_seconds_treats_internal_host_carrier_role_id_as_internal`
+and the Windows descendant process-tree probe. The remaining 369 failures are
+the pre-existing runtime/TeamFlow/activation fixture contour and are not
+semantic-gate evidence.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
