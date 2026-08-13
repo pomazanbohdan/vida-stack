@@ -95,6 +95,24 @@ and the Windows descendant process-tree probe. The remaining 369 failures are
 the pre-existing runtime/TeamFlow/activation fixture contour and are not
 semantic-gate evidence.
 
+### Current Non-Runtime Verification
+
+Commit `0b638561d` was verified on 2026-08-13 with the runtime contour excluded
+as required by this slice. The scoped workspace command
+`cargo test --workspace --all-targets --exclude vida --locked --no-fail-fast`
+completed 54 test binaries with 1183 passed, 0 failed, and 1 ignored (the
+explicit redb replay benchmark). The full `vida-test-support` package passed
+32 tests, `taskflow-state-fs` passed 8, and `taskflow-state-redb` passed 43 with
+that same one ignored benchmark.
+
+The focused P0/P1 gate passed all seven operations and emitted
+`.vida/tmp/semantic-testing/20260813T091814955Z-bd7c0a0e/summary.json` with
+ZOMBIE-D R/P/C evidence refs. Direct WSL manual proof also passed: five pure
+fuzz targets at 64 runs each with no crashes, Loom 1/1, pinned Miri path-policy
+7/7, and Kani 1/1 successful harness. These commands only exercise test state,
+pure parsers, or bounded proof harnesses; no VIDA activation, dispatch,
+authoritative receipt/effect, or production-state write was used.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
@@ -422,10 +440,10 @@ $HOME, repository-relative paths, and explicit WSL mounts for reproduction.
 artifact_path: process/rust-and-semantic-tooling-reproducibility-runbook
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-08-12'
+artifact_revision: '2026-08-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/rust-and-semantic-tooling-reproducibility-runbook.md
 created_at: '2026-08-12T00:00:00+03:00'
-updated_at: '2026-08-12T00:00:00+03:00'
+updated_at: '2026-08-13T12:40:14+03:00'
 changelog_ref: rust-and-semantic-tooling-reproducibility-runbook.changelog.jsonl
