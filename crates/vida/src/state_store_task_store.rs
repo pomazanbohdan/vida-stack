@@ -1450,6 +1450,9 @@ impl StateStore {
         &self,
         task_id: &str,
     ) -> Result<bool, StateStoreError> {
+        if !crate::taskflow_runtime::taskflow_dispatch_enabled_for_state_root(self.root()) {
+            return Ok(false);
+        }
         let Some(run_id) = self.latest_run_graph_run_id_for_task(task_id).await? else {
             return Ok(false);
         };

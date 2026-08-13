@@ -2948,11 +2948,13 @@ fn preserve_isolated_worktree_manifest_evidence(
     source: Option<&serde_json::Value>,
     normalized: &mut serde_json::Value,
 ) -> Result<(), Vec<String>> {
+    let contract_invalid =
+        taskflow_contracts::BlockerCode::ImplementationArtifactContractInvalid.as_str();
     if artifact_kind != "isolated_worktree_manifest" {
         return Ok(());
     }
     let Some(source) = source.and_then(serde_json::Value::as_object) else {
-        return Err(vec!["implementation_artifact_contract_invalid".to_string()]);
+        return Err(vec![contract_invalid.to_string()]);
     };
     if source
         .get("artifact_kind")
@@ -2960,7 +2962,7 @@ fn preserve_isolated_worktree_manifest_evidence(
         .map(str::trim)
         != Some("isolated_worktree_manifest")
     {
-        return Err(vec!["implementation_artifact_contract_invalid".to_string()]);
+        return Err(vec![contract_invalid.to_string()]);
     }
 
     let unchanged = source
@@ -2992,7 +2994,7 @@ fn preserve_isolated_worktree_manifest_evidence(
     }
 
     let Some(normalized) = normalized.as_object_mut() else {
-        return Err(vec!["implementation_artifact_contract_invalid".to_string()]);
+        return Err(vec![contract_invalid.to_string()]);
     };
     normalized.insert(
         "canonical_worktree_unchanged".to_string(),

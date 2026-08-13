@@ -85,8 +85,6 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | "host_bridge_request_task_mismatch"
             | "host_bridge_capability_blocked"
             | "host_agent_execution_failed"
-            | "host_agent_capacity_unavailable"
-            | "host_tool_capability_missing"
             | "host_tool_bridge_adapter_required"
             | "host_bridge_adapter_required"
     ) || matches!(
@@ -101,6 +99,8 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | Ok(taskflow_contracts::BlockerCode::ImplementationAttemptScopeGuardViolation)
             | Ok(taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch)
             | Ok(taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired)
+            | Ok(taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable)
+            | Ok(taskflow_contracts::BlockerCode::HostToolCapabilityMissing)
     )
 }
 
@@ -108,8 +108,8 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
 fn host_agent_adapter_blockers_are_retryable_completion_evidence() {
     for blocker_code in [
         "host_agent_execution_failed",
-        "host_agent_capacity_unavailable",
-        "host_tool_capability_missing",
+        taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
+        taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
         "host_tool_bridge_adapter_required",
         "host_bridge_adapter_required",
     ] {
@@ -1813,7 +1813,9 @@ mod tests {
         assert_eq!(
             host_bridge_request_status_after_completion(&[
                 "host_agent_execution_failed".to_string(),
-                "host_tool_capability_missing".to_string(),
+                taskflow_contracts::BlockerCode::HostToolCapabilityMissing
+                    .as_str()
+                    .to_string(),
             ]),
             "retryable_blocked"
         );

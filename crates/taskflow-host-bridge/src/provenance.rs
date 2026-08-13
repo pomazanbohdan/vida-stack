@@ -76,12 +76,6 @@ pub fn host_bridge_provenance_public_blocker_code(blocker_code: &str) -> &str {
         "request_status_not_admissible" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestNotPending.as_str()
         }
-        "authoritative_state_store_locked" => {
-            taskflow_contracts::BlockerCode::AuthoritativeStateStoreLocked.as_str()
-        }
-        "authoritative_state_store_open_failed" => {
-            taskflow_contracts::BlockerCode::AuthoritativeStateStoreOpenFailed.as_str()
-        }
         "run_id_mismatch" | "task_id_mismatch" | "dispatch_target_mismatch" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestIdentityMismatch.as_str()
         }

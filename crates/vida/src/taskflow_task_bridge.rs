@@ -74,9 +74,11 @@ pub(crate) fn infer_project_root_from_native_state_root_shape(
         .parent()?
         .file_name()?
         .to_string_lossy();
-    (state == "state" && data == "data" && vida == ".vida")
-        .then(|| state_root.parent()?.parent()?.parent().map(PathBuf::from))
-        .flatten()
+    if state != "state" || data != "data" || vida != ".vida" {
+        return None;
+    }
+    let project_root = state_root.parent()?.parent()?.parent()?.to_path_buf();
+    super::looks_like_project_root(&project_root).then_some(project_root)
 }
 
 fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Value, String> {
