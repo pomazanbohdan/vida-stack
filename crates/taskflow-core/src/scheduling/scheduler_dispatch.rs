@@ -410,12 +410,34 @@ mod tests {
             PrimaryReadySelectionSource::ExplicitRunGraphContinuationBindingNotReady
         );
 
+        let explicit_ready = select_primary_ready_task(&candidates, None, Some("b"));
+        assert_eq!(explicit_ready.index, Some(1));
+        assert_eq!(
+            explicit_ready.source,
+            PrimaryReadySelectionSource::ExplicitRunGraphContinuationBinding
+        );
+
         let critical = select_primary_ready_task(&candidates, None, None);
         assert_eq!(critical.index, Some(1));
         assert_eq!(
             critical.source,
             PrimaryReadySelectionSource::CriticalPathReadyHead
         );
+
+        let requested_missing = select_primary_ready_task(&candidates, Some("missing"), None);
+        assert_eq!(requested_missing.index, None);
+        assert_eq!(
+            requested_missing.source,
+            PrimaryReadySelectionSource::RequestedCurrentTaskNotReady
+        );
+
+        let fallback = select_primary_ready_task(&[ready("fallback", false)], None, None);
+        assert_eq!(fallback.index, Some(0));
+        assert_eq!(fallback.source, PrimaryReadySelectionSource::ReadyHeadFallback);
+
+        let none = select_primary_ready_task(&[], None, None);
+        assert_eq!(none.index, None);
+        assert_eq!(none.source, PrimaryReadySelectionSource::NoReadyPrimary);
     }
 
     #[test]
@@ -449,6 +471,27 @@ mod tests {
                 PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH,
             ]
         );
+    }
+
+    #[test]
+    fn parallel_blockers_report_each_execution_and_domain_missing_case() {
+        let candidate_unsafe = parallel_blockers_against_current(
+            parallel_input("candidate", Some("serial"), Some("wave-a"), None, Some("candidate-domain"), &["crates/candidate/src"]),
+            Some(parallel_input("current", Some("parallel_safe"), Some("wave-a"), None, Some("current-domain"), &["crates/current/src"])),
+        );
+        assert!(candidate_unsafe.contains(&PARALLEL_BLOCKER_EXECUTION_MODE_NOT_PARALLEL_SAFE.to_string()));
+
+        let current_unsafe = parallel_blockers_against_current(
+            parallel_input("candidate", Some("parallel_safe"), Some("wave-a"), None, Some("candidate-domain"), &["crates/candidate/src"]),
+            Some(parallel_input("current", Some("serial"), Some("wave-a"), None, Some("current-domain"), &["crates/current/src"])),
+        );
+        assert!(current_unsafe.contains(&PARALLEL_BLOCKER_CURRENT_EXECUTION_MODE_NOT_PARALLEL_SAFE.to_string()));
+
+        let missing_domain = parallel_blockers_against_current(
+            parallel_input("candidate", Some("parallel_safe"), Some("wave-a"), None, None, &["crates/candidate/src"]),
+            Some(parallel_input("current", Some("parallel_safe"), Some("wave-a"), None, None, &["crates/current/src"])),
+        );
+        assert!(missing_domain.contains(&PARALLEL_BLOCKER_MISSING_CONFLICT_DOMAIN.to_string()));
     }
 
     #[test]
@@ -588,5 +631,9 @@ mod tests {
         assert_eq!(summary.conflict_rejected_count, 1);
         assert_eq!(summary.unsafe_ready_rejected_count, 1);
         assert_eq!(summary.rejected_candidate_count, 2);
+
+        let blocked = fanout_guard_summary(&[], 0, &[], &["unsafe_parallel".to_string()]);
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(blocked.rejected_candidate_count, 0);
     }
 }
