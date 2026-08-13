@@ -203,6 +203,33 @@ mod tests {
     }
 
     #[test]
+    fn task_create_semantics_requested_detects_each_independent_field() {
+        assert!(!task_create_semantics_requested(
+            TaskExecutionSemanticsInput::default()
+        ));
+        for requested in [
+            TaskExecutionSemanticsInput {
+                execution_mode: Some("parallel_safe"),
+                ..TaskExecutionSemanticsInput::default()
+            },
+            TaskExecutionSemanticsInput {
+                order_bucket: Some("feature-x"),
+                ..TaskExecutionSemanticsInput::default()
+            },
+            TaskExecutionSemanticsInput {
+                parallel_group: Some("dev-pack"),
+                ..TaskExecutionSemanticsInput::default()
+            },
+            TaskExecutionSemanticsInput {
+                conflict_domain: Some("task-ensure-semantics"),
+                ..TaskExecutionSemanticsInput::default()
+            },
+        ] {
+            assert!(task_create_semantics_requested(requested));
+        }
+    }
+
+    #[test]
     fn task_create_semantics_accepts_exact_matches_and_reports_single_field_drift() {
         let existing = TaskExecutionSemanticsInput {
             execution_mode: Some("parallel_safe"),
