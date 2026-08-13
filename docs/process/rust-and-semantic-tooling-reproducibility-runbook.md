@@ -68,6 +68,18 @@ The latest semantic-focused artifact
 `.vida/tmp/semantic-testing/20260813T063639148Z-f64f5124/summary.json` is green:
 7/7 operations pass with ZOMBIE-D R/P/C evidence refs.
 
+### Focused Runtime Timeout Proof
+
+Commit `4f80e81a6` fixes timeout-window precedence for internal host handoffs:
+execution-plan overrides win first, then the active project route/host
+configuration, then compiled-bundle route data, then the built-in default.
+The focused timeout matrix completed 20 tests with 13 passing; the 5 timeout
+window tests all passed, including
+`dispatch_handoff_timeout_seconds_treats_internal_host_carrier_role_id_as_internal`
+(`max_runtime_seconds: 37` → bounded `39` seconds). The other 7 failures are
+the pre-existing activation/TeamFlow fixture contour and remain outside this
+timeout proof. `vida docflow check` for the updated timeout contract passed.
+
 ## Bootstrap Read Order
 
 When an agent starts a Rust, TaskFlow-test, semantic-gate, or verification task:
