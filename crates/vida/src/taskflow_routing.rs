@@ -144,6 +144,9 @@ fn direct_development_flow_entry_is_route(route_id: &str, route: &serde_json::Va
         || route
             .get("runtime_assignment")
             .is_some_and(serde_json::Value::is_object)
+        || route.get("executor_backend").is_some()
+        || route.get("fallback_executor_backend").is_some()
+        || route.get("fanout_executor_backends").is_some()
 }
 
 fn development_flow_route_dispatch_target(route_id: &str, route: &serde_json::Value) -> String {

@@ -2445,26 +2445,56 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     if requested_dispatch_target.is_empty() {
         return None;
     }
-    let catalog =
-        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].as_object()?;
-    if let Some(route) = catalog.get(requested_dispatch_target) {
-        return Some(route);
-    }
     let canonical = canonical_dispatch_target_name(requested_dispatch_target);
-    if let Some(route) = catalog.get(&canonical) {
-        return Some(route);
+    if let Some(catalog) =
+        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].as_object()
+    {
+        if let Some(route) = catalog.get(requested_dispatch_target) {
+            return Some(route);
+        }
+        if let Some(route) = catalog.get(&canonical) {
+            return Some(route);
+        }
+        let mut matches = catalog.values().filter(|route| {
+            ["dispatch_target", "dispatch_alias", "lane_id", "node_id"]
+                .iter()
+                .filter_map(|field| route.get(*field).and_then(serde_json::Value::as_str))
+                .any(|value| {
+                    value == requested_dispatch_target
+                        || canonical_dispatch_target_name(value) == canonical
+                })
+        });
+        if let Some(route) = matches.next() {
+            if matches.next().is_none() {
+                return Some(route);
+            }
+        }
     }
-    let mut matches = catalog.values().filter(|route| {
-        ["dispatch_target", "dispatch_alias", "lane_id", "node_id"]
-            .iter()
-            .filter_map(|field| route.get(*field).and_then(serde_json::Value::as_str))
-            .any(|value| {
-                value == requested_dispatch_target
-                    || canonical_dispatch_target_name(value) == canonical
-            })
-    });
-    let route = matches.next()?;
-    matches.next().is_none().then_some(route)
+
+    // Effective posture/receipt summaries also accept the diagnostic-only
+    // direct development-flow projection when no unique catalog route exists.
+    // This does not authorize dispatch; executable callers still require the
+    // TeamFlow authority and inclusion gate before launch.
+    let requested_backend_key =
+        crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+            requested_dispatch_target,
+            None,
+        )
+        .into_string();
+    let mut direct_matches =
+        crate::taskflow_routing::direct_development_flow_route_entries(execution_plan)
+            .into_iter()
+            .filter(|(target, _)| {
+                target == requested_dispatch_target
+            || canonical_dispatch_target_name(target) == canonical
+            || crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+                target, None,
+            )
+            .as_str()
+                == requested_backend_key
+            });
+    let (_, route) = direct_matches.next()?;
+    direct_matches.next().is_none().then_some(route)
 }
 
 fn canonical_runtime_assignment_for_route(route: &serde_json::Value) -> Option<serde_json::Value> {
@@ -2839,6 +2869,25 @@ fn route_selected_backend_for_dispatch_target(
             execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
                 .and_then(|route| route_selected_backend(execution_plan, route))
         })
+        .or_else(|| {
+            let (target_assignment, _) =
+                dispatch_target_runtime_assignment(execution_plan, dispatch_target);
+            let execution_assignment = runtime_assignment_from_execution_plan(execution_plan);
+            [target_assignment, execution_assignment.clone()]
+                .iter()
+                .flat_map(|assignment| {
+                    [
+                        "effective_selected_backend",
+                        "selected_dispatch_backend_id",
+                        "dispatch_backend_id",
+                        "selected_backend_id",
+                        "selected_backend",
+                    ]
+                    .iter()
+                    .filter_map(|key| json_string(assignment.get(*key)))
+                })
+                .next()
+        })
 }
 
 fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_json::Value) -> bool {
@@ -2903,18 +2952,18 @@ fn admissible_backend_candidates_for_dispatch_target(
         }
     }
     if prefer_route_backends_first {
-        if !strict_required {
-            if let Some(runtime_assignment_backend) = runtime_assignment_backend
-                .as_ref()
-                .filter(|_| has_explicit_runtime_assignment_backend)
-            {
-                candidates.push(runtime_assignment_backend.clone());
-            }
+        if let Some(runtime_assignment_backend) = runtime_assignment_backend
+            .as_ref()
+            .filter(|_| has_explicit_runtime_assignment_backend)
+        {
+            // A route-scoped runtime assignment is authoritative over legacy
+            // executor hints, but it still must pass the strict matrix below.
+            candidates.push(runtime_assignment_backend.clone());
         }
         if let Some(primary) = route_primary.as_ref() {
             candidates.push(primary.clone());
         }
-        if strict_required {
+        if strict_required && !has_explicit_runtime_assignment_backend {
             if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
                 candidates.push(runtime_assignment_backend.clone());
             }
@@ -11281,6 +11330,10 @@ mod tests {
     const FIXTURE_ROLE_B: &str = "fixture-role-b";
     const FIXTURE_TASK_A: &str = "fixture-task-a";
     const FIXTURE_TASK_B: &str = "fixture-task-b";
+    // Backend admissibility is keyed by the canonical task-class vocabulary;
+    // keep fixture ids separate from the policy keys used by these plans.
+    const FIXTURE_TASK_CLASS_A: &str = "implementation";
+    const FIXTURE_TASK_CLASS_B: &str = "verification";
     const FIXTURE_TARGET_A: &str = "fixture-target-a";
     const FIXTURE_TARGET_B: &str = "fixture-target-b";
     const FIXTURE_TARGET_C: &str = "fixture-target-c";
@@ -20860,6 +20913,7 @@ steps:
                         "specification_activation": {
                             "selected_dispatch_backend_id": "middle",
                             "activation_agent_type": "middle",
+                            "selected_model_profile_id": "fixture-specification-profile",
                         },
                     }
             }
@@ -21031,7 +21085,8 @@ steps:
             "runtime_assignment": {
                 "selected_dispatch_backend_id": "junior",
                 "selected_tier": "junior",
-                "activation_agent_type": "junior"
+                "activation_agent_type": "junior",
+                "selected_model_profile_id": "fixture-analysis-profile"
             }
         });
 
@@ -25976,19 +26031,19 @@ steps:
                     "lane_catalog": {
                         (FIXTURE_TARGET_A): {
                             "node_id": FIXTURE_TARGET_A, "dispatch_target": FIXTURE_TARGET_A,
-                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "next_node": FIXTURE_TARGET_B
                         },
                         (FIXTURE_TARGET_B): {
                             "node_id": FIXTURE_TARGET_B, "dispatch_target": FIXTURE_TARGET_B,
-                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "next_node": FIXTURE_TARGET_C
                         },
                         (FIXTURE_TARGET_C): {
                             "node_id": FIXTURE_TARGET_C, "dispatch_target": FIXTURE_TARGET_C,
-                            "runtime_role": FIXTURE_ROLE_B, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_B, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "terminal": true
                         }
@@ -26051,25 +26106,25 @@ steps:
                     "lane_catalog": {
                         (FIXTURE_TARGET_A): {
                             "node_id": FIXTURE_TARGET_A, "dispatch_target": FIXTURE_TARGET_A,
-                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "next_node": FIXTURE_TARGET_B
                         },
                         (FIXTURE_TARGET_B): {
                             "node_id": FIXTURE_TARGET_B, "dispatch_target": FIXTURE_TARGET_B,
-                            "runtime_role": FIXTURE_ROLE_B, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_B, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "next_node": FIXTURE_TARGET_C
                         },
                         (FIXTURE_TARGET_C): {
                             "node_id": FIXTURE_TARGET_C, "dispatch_target": FIXTURE_TARGET_C,
-                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "next_node": FIXTURE_ROLE_B
                         },
                         (FIXTURE_ROLE_B): {
                             "node_id": FIXTURE_ROLE_B, "dispatch_target": FIXTURE_ROLE_B,
-                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_A,
+                            "runtime_role": FIXTURE_ROLE_A, "task_class": FIXTURE_TASK_CLASS_A,
                             "inclusion_rule": "always", "included": true, "required": true,
                             "terminal": true
                         }
@@ -30822,14 +30877,14 @@ agent_system:
                     "backend_id": FIXTURE_BACKEND_A,
                     "backend_class": "fixture-external",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_A): true
+                        (FIXTURE_TASK_CLASS_A): true
                     }
                 },
                 {
                     "backend_id": FIXTURE_BACKEND_B,
                     "backend_class": "fixture-internal",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_A): true
+                        (FIXTURE_TASK_CLASS_A): true
                     }
                 }
             ],
@@ -30843,7 +30898,9 @@ agent_system:
                         (FIXTURE_TARGET_B): {
                             "node_id": FIXTURE_TARGET_B,
                             "dispatch_target": FIXTURE_TARGET_B,
-                            "task_class": FIXTURE_TASK_A
+                            "task_class": FIXTURE_TASK_CLASS_A,
+                            "executor_backend": FIXTURE_BACKEND_A,
+                            "fallback_executor_backend": FIXTURE_BACKEND_B
                         }
                     }
                 }
@@ -30882,7 +30939,17 @@ agent_system:
                         (FIXTURE_TARGET_B): {
                             "node_id": FIXTURE_TARGET_B,
                             "dispatch_target": FIXTURE_TARGET_B,
-                            "task_class": FIXTURE_TASK_A
+                            "task_class": FIXTURE_TASK_CLASS_A,
+                            "executor_backend": FIXTURE_BACKEND_B,
+                            "fallback_executor_backend": FIXTURE_BACKEND_B,
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "selected_backend_id": FIXTURE_BACKEND_A,
+                                "selected_carrier_id": FIXTURE_CARRIER_A,
+                                "selected_model_profile_id": FIXTURE_TASK_A,
+                                "activation_agent_type": FIXTURE_CARRIER_A,
+                                "activation_runtime_role": FIXTURE_ROLE_A
+                            }
                         }
                     }
                 }
@@ -30892,14 +30959,14 @@ agent_system:
                     "backend_id": FIXTURE_BACKEND_B,
                     "backend_class": "fixture-internal",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_A): true
+                        (FIXTURE_TASK_CLASS_A): true
                     }
                 },
                 {
                     "backend_id": FIXTURE_BACKEND_A,
                     "backend_class": "fixture-external",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_A): true
+                        (FIXTURE_TASK_CLASS_A): true
                     }
                 }
             ]
@@ -30924,15 +30991,15 @@ agent_system:
                     "backend_id": FIXTURE_BACKEND_A,
                     "backend_class": "internal",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_B): true,
-                        (FIXTURE_TASK_A): false
+                        (FIXTURE_TASK_CLASS_B): true,
+                        (FIXTURE_TASK_CLASS_A): false
                     }
                 },
                 {
                     "backend_id": FIXTURE_BACKEND_B,
                     "backend_class": "internal",
                     "lane_admissibility": {
-                        (FIXTURE_TASK_A): true
+                        (FIXTURE_TASK_CLASS_A): true
                     }
                 }
             ],
@@ -30943,7 +31010,7 @@ agent_system:
                         (FIXTURE_TARGET_A): {
                             "node_id": FIXTURE_TARGET_A,
                             "dispatch_target": FIXTURE_TARGET_A,
-                            "task_class": FIXTURE_TASK_A
+                            "task_class": FIXTURE_TASK_CLASS_A
                         }
                     }
                 }

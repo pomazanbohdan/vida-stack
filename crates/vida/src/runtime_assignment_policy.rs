@@ -423,13 +423,15 @@ pub(crate) fn backend_admissibility_key_for_dispatch_target(
     }
 
     match canonical_target.as_str() {
-        crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION => {
+        crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION
+        | crate::runtime_contract_vocab::DISPATCH_TARGET_IMPLEMENTER => {
             BackendAdmissibilityKey::Implementation
         }
         crate::runtime_contract_vocab::TASK_CLASS_VERIFICATION => {
             BackendAdmissibilityKey::Verification
         }
-        crate::runtime_contract_vocab::TASK_CLASS_ARCHITECTURE => {
+        crate::runtime_contract_vocab::TASK_CLASS_ARCHITECTURE
+        | crate::runtime_contract_vocab::DISPATCH_TARGET_EXECUTION_PREPARATION => {
             BackendAdmissibilityKey::Architecture
         }
         crate::runtime_contract_vocab::TASK_CLASS_SPECIFICATION => {
@@ -906,6 +908,14 @@ mod tests {
         assert_eq!(
             backend_admissibility_key_for_dispatch_target("tester", None).as_str(),
             "tester"
+        );
+    }
+
+    #[test]
+    fn implementer_dispatch_target_uses_implementation_admissibility_key() {
+        assert_eq!(
+            backend_admissibility_key_for_dispatch_target("implementer", None).as_str(),
+            "implementation"
         );
     }
 
