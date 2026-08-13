@@ -344,6 +344,7 @@ mod tests {
                 " scheduler_agent_init_activation_view_only ".to_string(),
                 "scheduler_agent_init_activation_view_only".to_string(),
                 "".to_string(),
+                "   ".to_string(),
             ]),
             vec!["scheduler_agent_init_activation_view_only"]
         );
@@ -368,6 +369,57 @@ mod tests {
             &reservation,
             "2026-06-22T00:00:00Z"
         ));
+    }
+
+    #[test]
+    fn scheduler_reservation_expiry_checks_empty_equal_and_future_timestamps() {
+        let mut reservation = SchedulerReservationActiveInput {
+            reservation_id: "reservation-1".to_string(),
+            task_id: "task-1".to_string(),
+            conflict_domain: None,
+            lease_status: "reserved".to_string(),
+            lease_expires_at: String::new(),
+        };
+        assert!(!super::scheduler_reservation_is_expired(
+            &reservation,
+            "2026-06-22T00:00:00Z"
+        ));
+
+        reservation.lease_expires_at = "2026-06-22T00:00:00Z".to_string();
+        assert!(super::scheduler_reservation_is_expired(
+            &reservation,
+            "2026-06-22T00:00:00Z"
+        ));
+
+        reservation.lease_expires_at = "2026-06-23T00:00:00Z".to_string();
+        assert!(!super::scheduler_reservation_is_expired(
+            &reservation,
+            "2026-06-22T00:00:00Z"
+        ));
+
+        let mut request = SchedulerReservationRequestInput {
+            reservation_id: "reservation-2".to_string(),
+            task_id: "task-2".to_string(),
+            conflict_domain: Some(String::new()),
+        };
+        let active = SchedulerReservationActiveInput {
+            reservation_id: "reservation-1".to_string(),
+            task_id: "task-1".to_string(),
+            conflict_domain: Some(String::new()),
+            lease_status: "reserved".to_string(),
+            lease_expires_at: "2026-06-23T00:00:00Z".to_string(),
+        };
+        assert!(decide_scheduler_reservation_collision(&request, &[active.clone()]).is_none());
+
+        request.conflict_domain = Some("domain-b".to_string());
+        assert!(decide_scheduler_reservation_collision(
+            &request,
+            &[SchedulerReservationActiveInput {
+                conflict_domain: Some("domain-a".to_string()),
+                ..active
+            }]
+        )
+        .is_none());
     }
 
     #[test]
@@ -434,6 +486,9 @@ mod tests {
                 .map(|conflict| conflict.blocker_code),
             Some("orchestrator_claim_conflict_conflict_domain".to_string())
         );
+        let domain_conflict =
+            decide_orchestrator_claim_conflict(&domain_request, &active).expect("domain conflict");
+        assert_eq!(domain_conflict.conflict_domain.as_deref(), Some("domain-a"));
 
         let mut request =
             claim_request("claim-4", "exclusive", None, "task-4", "run-4", "domain-b");
@@ -455,6 +510,24 @@ mod tests {
             "crates/vida/src2",
             "crates/vida/src/taskflow_proxy.rs"
         ));
+        assert!(!claim_paths_intersect("foobar", "foo"));
+        assert!(!claim_paths_intersect("foo", "foobar"));
+        assert!(claim_paths_intersect(
+            "crates/vida/src/taskflow_proxy.rs",
+            "crates/vida/src"
+        ));
+    }
+
+    #[test]
+    fn claim_path_intersection_rejects_non_boundary_prefixes() {
+        assert!(!claim_paths_intersect("foobar", "foo"));
+        assert!(!claim_paths_intersect("foo", "foobar"));
+
+        let mut request = claim_request("claim-2", "exclusive", None, "task-2", "run-2", "domain-b");
+        request.owned_paths = vec!["foobar".to_string()];
+        let mut active = claim("claim-1", "exclusive", None, "task-1", "run-1", "domain-a");
+        active.owned_paths = vec!["foo".to_string()];
+        assert!(decide_orchestrator_claim_conflict(&request, &active).is_none());
     }
 
     #[test]
@@ -469,6 +542,17 @@ mod tests {
         let claim = claim("claim-1", "exclusive", None, "task-1", "run-1", "domain-a");
         assert!(super::claim_is_expired(&claim, "2026-06-23T00:00:00Z"));
         assert!(!super::claim_is_expired(&claim, "2026-06-21T00:00:00Z"));
+
+        let mut boundary_claim = claim.clone();
+        assert!(super::claim_is_expired(
+            &boundary_claim,
+            "2026-06-22T00:00:00Z"
+        ));
+        boundary_claim.lease_expires_at = String::new();
+        assert!(!super::claim_is_expired(
+            &boundary_claim,
+            "2026-06-23T00:00:00Z"
+        ));
     }
 
     #[test]
@@ -488,6 +572,83 @@ mod tests {
         assert!(super::claim_is_active("active"));
         assert!(super::claim_is_active("renewed"));
         assert!(!super::claim_is_active("released"));
+    }
+
+    #[test]
+    fn orchestrator_claim_classifies_run_and_read_path_conflicts() {
+        let active = claim("claim-1", "exclusive", None, "task-1", "run-1", "domain-a");
+        let request = claim_request("claim-2", "exclusive", None, "task-2", "run-1", "domain-b");
+        let run_conflict =
+            decide_orchestrator_claim_conflict(&request, &active).expect("run conflict");
+        assert_eq!(run_conflict.blocker_code, "orchestrator_claim_conflict_run");
+        assert_eq!(run_conflict.run_id.as_deref(), Some("run-1"));
+
+        let mut read_request = claim_request(
+            "claim-3",
+            "exclusive",
+            None,
+            "task-3",
+            "run-3",
+            "domain-b",
+        );
+        read_request.owned_paths = vec!["crates/other/src/lib.rs".to_string()];
+        read_request.read_only_paths = vec!["./crates/vida/src/taskflow_proxy.rs".to_string()];
+        let owned_conflict = decide_orchestrator_claim_conflict(&read_request, &active)
+            .expect("read-only path against owned path should conflict");
+        assert_eq!(owned_conflict.conflict_kind, "owned_path");
+        assert_eq!(
+            owned_conflict.path.as_deref(),
+            Some("crates/vida/src/taskflow_proxy.rs")
+        );
+
+        let mut readonly_active = active.clone();
+        readonly_active.owned_paths = vec!["crates/other/src".to_string()];
+        readonly_active.read_only_paths = vec!["docs/shared".to_string()];
+        let mut owned_request = claim_request(
+            "claim-4",
+            "exclusive",
+            None,
+            "task-4",
+            "run-4",
+            "domain-b",
+        );
+        owned_request.owned_paths = vec!["docs/shared/file.md".to_string()];
+        let readonly_conflict = decide_orchestrator_claim_conflict(&owned_request, &readonly_active)
+            .expect("owned path against active read-only path should conflict");
+        assert_eq!(readonly_conflict.conflict_kind, "read_only_path");
+        assert_eq!(
+            readonly_conflict.path.as_deref(),
+            Some("docs/shared/file.md")
+        );
+    }
+
+    #[test]
+    fn orchestrator_claim_classifies_process_conflicts() {
+        let active = claim("claim-1", "exclusive", Some(42), "task-1", "run-1", "domain-a");
+        let request = claim_request("claim-2", "exclusive", Some(42), "task-2", "run-2", "domain-b");
+        let conflict =
+            decide_orchestrator_claim_conflict(&request, &active).expect("process conflict");
+
+        assert_eq!(conflict.conflict_kind, "process");
+        assert_eq!(conflict.blocker_code, "orchestrator_claim_conflict_process");
+        assert_eq!(conflict.claim_id, "claim-1");
+    }
+
+    #[test]
+    fn orchestrator_claim_ignores_empty_matching_conflict_domains() {
+        let mut request = claim_request(
+            "claim-2",
+            "exclusive",
+            None,
+            "task-2",
+            "run-2",
+            "",
+        );
+        request.owned_paths = vec!["crates/request/src".to_string()];
+        let mut active = claim("claim-1", "exclusive", None, "task-1", "run-1", "");
+        active.owned_paths = vec!["crates/active/src".to_string()];
+
+        assert!(decide_orchestrator_claim_conflict(&request, &active).is_none());
     }
 
     fn claim_request(
