@@ -331,7 +331,9 @@ fn exception_takeover_receipt() -> DispatchReceiptSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::verify_domain_conformance;
+    use super::{
+        DomainConformanceReport, DomainConformanceScenarioResult, verify_domain_conformance,
+    };
 
     #[test]
     fn domain_conformance_corpus_is_clean_without_state_store() {
@@ -374,5 +376,30 @@ mod tests {
                 .iter()
                 .all(|scenario| scenario.passed && !scenario.detail.trim().is_empty())
         );
+    }
+
+    #[test]
+    fn domain_conformance_report_counts_failed_scenarios() {
+        let report = DomainConformanceReport {
+            schema_version: 1,
+            scenario_results: vec![
+                DomainConformanceScenarioResult {
+                    name: "passing",
+                    semantic_area: "task_lifecycle",
+                    passed: true,
+                    detail: "ok".to_string(),
+                },
+                DomainConformanceScenarioResult {
+                    name: "failing",
+                    semantic_area: "run_graph",
+                    passed: false,
+                    detail: "blocked".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(report.scenario_count(), 2);
+        assert_eq!(report.error_count(), 1);
+        assert!(!report.clean());
     }
 }
