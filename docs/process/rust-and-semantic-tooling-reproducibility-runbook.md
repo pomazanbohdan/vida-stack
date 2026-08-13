@@ -314,6 +314,11 @@ The profile owner is scripts/vida-dev-gate.ps1. Every run writes JSON summary,
 timings, evidence refs, and command logs under
 .vida/tmp/semantic-testing/<run-id>/.
 
+The semantic-focused profile runs the complete `vida-test-support` package
+(not only its library target), and its compact evidence parser aggregates every
+Cargo `test result` line. This keeps package-level test counts and failure
+classification aligned with the archived stdout/stderr logs.
+
 ~~~powershell
 # P0/P1, automatic pre-push profile
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode semantic-focused -Json

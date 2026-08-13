@@ -501,10 +501,10 @@ function New-CompactTestOutputSummary {
     $lines = @()
     $lines += Read-TextFileLinesSafe -Path $StdoutPath
     $lines += Read-TextFileLinesSafe -Path $StderrPath
-    $passedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<passed>\d+)\s+passed' -GroupName "passed"
-    $failedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<failed>\d+)\s+failed' -GroupName "failed"
-    $ignoredCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<ignored>\d+)\s+ignored' -GroupName "ignored"
-    $filteredCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<filtered>\d+)\s+filtered out' -GroupName "filtered"
+    $passedCount = Get-RegexIntTotal -Lines $lines -Pattern '(?<passed>\d+)\s+passed' -GroupName "passed"
+    $failedCount = Get-RegexIntTotal -Lines $lines -Pattern '(?<failed>\d+)\s+failed' -GroupName "failed"
+    $ignoredCount = Get-RegexIntTotal -Lines $lines -Pattern '(?<ignored>\d+)\s+ignored' -GroupName "ignored"
+    $filteredCount = Get-RegexIntTotal -Lines $lines -Pattern '(?<filtered>\d+)\s+filtered out' -GroupName "filtered"
     if ($null -eq $failedCount) {
         $failedCount = 0
     }
@@ -1244,7 +1244,7 @@ function Invoke-SemanticFocused {
         @("cargo", "test", "-p", "taskflow-state", "--lib", "--locked"),
         @("cargo", "test", "-p", "taskflow-state-fs", "--lib", "--locked"),
         @("cargo", "test", "-p", "taskflow-state-redb", "--lib", "--locked"),
-        @("cargo", "test", "-p", "vida-test-support", "--lib", "--locked"),
+        @("cargo", "test", "-p", "vida-test-support", "--locked"),
         @("cargo", "test", "--manifest-path", "tests/model/Cargo.toml", "--locked")
     )
     $index = 0
@@ -1835,6 +1835,28 @@ function Get-FirstRegexInt {
         if ($match.Success) {
             return [int]$match.Groups[$GroupName].Value
         }
+    }
+    return $null
+}
+
+function Get-RegexIntTotal {
+    param(
+        [string[]]$Lines,
+        [string]$Pattern,
+        [string]$GroupName
+    )
+
+    $total = 0
+    $found = $false
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, $Pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            $total += [int]$match.Groups[$GroupName].Value
+            $found = $true
+        }
+    }
+    if ($found) {
+        return $total
     }
     return $null
 }

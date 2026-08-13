@@ -25,6 +25,12 @@ Describe 'VIDA semantic local gates' {
         $script | Should -Match 'summary\.json'
     }
 
+    It 'aggregates every cargo test result into compact evidence' {
+        $script = Get-Content (Join-Path $PSScriptRoot '..\vida-dev-gate.ps1') -Raw
+        $script | Should -Match 'function Get-RegexIntTotal'
+        $script | Should -Match 'Get-RegexIntTotal -Lines \$lines -Pattern'
+    }
+
     It 'keeps all fuzz targets bounded and tied to the semantic artifact run' {
         $script = Get-Content (Join-Path $PSScriptRoot '..\vida-dev-gate.ps1') -Raw
         $script | Should -Match 'foreach \(\$target in @\("config_json", "jsonl_decoder", "cli_parser", "workflow_payload", "toon_render"\)\)'
