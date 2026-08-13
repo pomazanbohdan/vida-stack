@@ -6007,7 +6007,13 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             .and_then(|output| output.result_text.as_deref()),
         required_proof_outputs,
     );
-    let strict_evidence_missing = !required_proof_outputs.is_empty()
+    let explicit_provider_error = !output.status.success()
+        || parsed_output
+            .as_ref()
+            .is_some_and(external_provider_output_indicates_error);
+    let strict_evidence_missing = output.status.success()
+        && !explicit_provider_error
+        && !required_proof_outputs.is_empty()
         && (!strict_result_blockers.is_empty() || provider_result_json.is_none());
     let output_mode = configured_external_dispatch_output_mode(&backend_entry);
     let success = output.status.success()
@@ -13089,6 +13095,12 @@ agent_system:
             }),
             reason: "test".to_string(),
         };
+        let mut canonical_role_selection = external_test_role_selection("hermes_cli");
+        canonical_role_selection.execution_plan["backend_admissibility_matrix"] =
+            role_selection.execution_plan["backend_admissibility_matrix"].clone();
+        canonical_role_selection.execution_plan["development_flow"]["implementation"] =
+            role_selection.execution_plan["development_flow"]["implementation"].clone();
+        let role_selection = canonical_role_selection;
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-1".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -13381,6 +13393,14 @@ agent_system:
             }),
             reason: "test".to_string(),
         };
+        let mut canonical_role_selection = external_test_role_selection("opencode_cli");
+        canonical_role_selection.execution_plan["backend_admissibility_matrix"] =
+            role_selection.execution_plan["backend_admissibility_matrix"].clone();
+        canonical_role_selection.execution_plan["development_flow"]["implementation"] =
+            role_selection.execution_plan["development_flow"]["implementation"].clone();
+        canonical_role_selection.execution_plan["runtime_assignment"] =
+            role_selection.execution_plan["runtime_assignment"].clone();
+        let role_selection = canonical_role_selection;
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-1".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -13704,42 +13724,80 @@ agent_system:
     }
 
     fn external_test_role_selection(backend_id: &str) -> RuntimeConsumptionLaneSelection {
-        RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "Run the bounded external dispatch".to_string(),
-            selected_role: "worker".to_string(),
-            conversational_mode: None,
-            single_task_only: false,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec![],
-            compiled_bundle:
-                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
-            execution_plan: serde_json::json!({
-                "backend_admissibility_matrix": [
-                    {
-                        "backend_id": backend_id,
-                        "backend_class": "external_cli",
-                        "lane_admissibility": {
-                            "implementation": true
-                        }
-                    }
-                ],
-                "development_flow": {
-                    "implementation": {
-                        "executor_backend": backend_id
-                    }
-                },
-                "runtime_assignment": {
-                    "selected_backend_id": backend_id
+        let mut selection = crate::runtime_dispatch_state::repository_team_flow_test_selection();
+        selection.compiled_bundle =
+            crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle();
+        let authority =
+            crate::runtime_dispatch_state::require_team_flow_authority_for_selection(&selection)
+                .expect("canonical TeamFlow authority should compile");
+        let selected_flow_id = authority.projection().snapshot.flow_ref.clone();
+        let selected_node = authority
+            .projection()
+            .nodes
+            .iter()
+            .filter(|node| node.node.included)
+            .find(|node| node.dispatch_alias == "development_implementer")
+            .or_else(|| {
+                authority
+                    .projection()
+                    .nodes
+                    .iter()
+                    .filter(|node| node.node.included)
+                    .find(|node| node.node.node_id == "coder")
+            })
+            .or_else(|| {
+                authority
+                    .projection()
+                    .nodes
+                    .iter()
+                    .filter(|node| node.node.included)
+                    .find(|node| node.node.task_class == "implementation")
+            })
+            .expect("canonical TeamFlow authority should expose implementation node");
+        let selected_node_id = selected_node.node.node_id.clone();
+        selection.selected_role = selected_node.node.runtime_role.clone();
+        selection.matched_terms = vec![format!("dev_team_flow_id:{selected_flow_id}")];
+        selection.execution_plan = serde_json::json!({
+            "team_flow_authority_selected_flow_id": selected_flow_id,
+            "team_flow_authority_selected_node_id": selected_node_id,
+            "selected_flow_contract": {
+                "flow_id": selected_flow_id,
+                "selected_node_id": selected_node_id
+            },
+            "team_flow_authority": {
+                "selected_flow_id": selected_flow_id
+            },
+            "development_flow": {
+                "dispatch_contract": {
+                    "selected_flow_set": selected_flow_id,
+                    "selected_node_id": selected_node_id,
+                    "team_flow_authority_selected_node_id": selected_node_id
                 }
-            }),
-            reason: "test".to_string(),
-        }
+            }
+        });
+        let mut execution_plan =
+            crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+                &selection.compiled_bundle,
+                &selection,
+            );
+        execution_plan["backend_admissibility_matrix"] = serde_json::json!([{
+            "backend_id": backend_id,
+            "backend_class": "external_cli",
+            "lane_admissibility": {"implementation": true}
+        }]);
+        execution_plan["runtime_assignment"] = serde_json::json!({
+            "selected_backend_id": backend_id
+        });
+        let implementation = execution_plan["development_flow"]
+            .get_mut("implementation")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("fresh TeamFlow plan should expose implementation flow");
+        implementation.insert(
+            "executor_backend".to_string(),
+            serde_json::Value::String(backend_id.to_string()),
+        );
+        selection.execution_plan = execution_plan;
+        selection
     }
 
     fn external_test_receipt(backend_id: &str) -> crate::state_store::RunGraphDispatchReceipt {
@@ -13778,95 +13836,58 @@ agent_system:
 
     #[test]
     fn readiness_fallback_internal_backend_uses_admissible_internal_fallback() {
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "Review the bounded implementation".to_string(),
-            selected_role: "coach".to_string(),
-            conversational_mode: None,
-            single_task_only: false,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec![],
-            compiled_bundle:
-                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "coach": {
-                        "executor_backend": "hermes_cli",
-                        "fallback_executor_backend": "internal_subagents"
-                    }
-                },
-                "backend_admissibility_matrix": [
-                    {
-                        "backend_id": "hermes_cli",
-                        "backend_class": "external_cli",
-                        "lane_admissibility": {
-                            "coach": true
-                        }
-                    },
-                    {
-                        "backend_id": "internal_subagents",
-                        "backend_class": "internal",
-                        "lane_admissibility": {
-                            "coach": true
-                        }
-                    }
-                ]
-            }),
-            reason: "test".to_string(),
-        };
-
+        let mut role_selection = external_test_role_selection("hermes_cli");
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            ["implementer"] = serde_json::json!({
+            "dispatch_target": "implementer",
+            "dispatch_alias": "development_implementer",
+            "lane_id": "implementation",
+            "node_id": "coder",
+            "executor_backend": "hermes_cli",
+            "fallback_executor_backend": "internal_subagents"
+        });
+        role_selection.execution_plan["development_flow"]["implementation"] = serde_json::json!({
+            "executor_backend": "hermes_cli",
+            "fallback_executor_backend": "internal_subagents"
+        });
+        role_selection.execution_plan["backend_admissibility_matrix"] = serde_json::json!([
+            {"backend_id": "hermes_cli", "backend_class": "external_cli", "lane_admissibility": {"implementation": true}},
+            {"backend_id": "internal_subagents", "backend_class": "internal", "lane_admissibility": {"implementation": true}}
+        ]);
         assert_eq!(
-            super::readiness_fallback_internal_backend(&role_selection, "coach", "hermes_cli"),
+            super::readiness_fallback_internal_backend(
+                &role_selection,
+                "implementer",
+                "hermes_cli"
+            ),
             Some("internal_subagents".to_string())
         );
     }
 
     #[test]
     fn readiness_fallback_internal_backend_rejects_inadmissible_internal_fallback() {
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "Verify the bounded implementation".to_string(),
-            selected_role: "verifier".to_string(),
-            conversational_mode: None,
-            single_task_only: false,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec![],
-            compiled_bundle:
-                crate::team_flow_authority_adapter::test_support::canonical_compiled_bundle(),
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "verification": {
-                        "executor_backend": "hermes_cli",
-                        "fallback_executor_backend": "internal_subagents"
-                    }
-                },
-                "backend_admissibility_matrix": [
-                    {
-                        "backend_id": "internal_subagents",
-                        "backend_class": "internal",
-                        "lane_admissibility": {
-                            "verification": false
-                        }
-                    }
-                ]
-            }),
-            reason: "test".to_string(),
-        };
+        let mut role_selection = external_test_role_selection("hermes_cli");
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            ["implementer"] = serde_json::json!({
+            "dispatch_target": "implementer",
+            "dispatch_alias": "development_implementer",
+            "lane_id": "implementation",
+            "node_id": "coder",
+            "executor_backend": "hermes_cli",
+            "fallback_executor_backend": "internal_subagents"
+        });
+        role_selection.execution_plan["development_flow"]["implementation"] = serde_json::json!({
+            "executor_backend": "hermes_cli",
+            "fallback_executor_backend": "internal_subagents"
+        });
+        role_selection.execution_plan["backend_admissibility_matrix"] = serde_json::json!([
+            {"backend_id": "internal_subagents", "backend_class": "internal", "lane_admissibility": {"implementation": false}}
+        ]);
 
         assert_eq!(
             super::readiness_fallback_internal_backend(
                 &role_selection,
-                "verification",
+                "implementer",
                 "hermes_cli"
             ),
             None
