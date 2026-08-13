@@ -595,6 +595,30 @@ mod tests {
     }
 
     #[test]
+    fn progress_counts_duplicate_statuses_and_in_progress_children() {
+        let rows = vec![
+            row("parent", "open", "task", None),
+            row("child-a", "in_progress", "task", Some("parent")),
+            row("child-b", "in_progress", "task", Some("parent")),
+            row("child-c", "closed", "task", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.in_progress_count, 2);
+        assert_eq!(summary.closed_count, 1);
+        assert_eq!(summary.status_counts.get("in_progress"), Some(&2));
+        assert_eq!(summary.status_counts.get("closed"), Some(&1));
+    }
+
+    #[test]
     fn progress_excludes_step_and_todo_execution_rows_from_denominators() {
         let rows = vec![
             row("parent", "open", "epic", None),
