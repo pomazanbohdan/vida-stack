@@ -384,6 +384,12 @@ does not make production/runtime state authoritative.
 Miri is not a replacement for Loom and is not expanded to unsafe/FFI or
 concurrency claims in this slice.
 
+Latest sequential manual run (2026-08-13, WSL, pinned toolchains) passed all
+profiles: the five fuzz targets completed 64 runs each with no crash artifacts;
+Loom completed 1/1; Kani reported one verified harness, 0 failures; and Miri
+completed 7/7 path-policy tests. Logs are retained under
+`.vida/tmp/semantic-testing/manual-20260813-p2` through `manual-20260813-p4`.
+
 ### Stack Policy
 
 The VIDA CLI outer runtime thread, its Tokio worker threads, and the deep async
