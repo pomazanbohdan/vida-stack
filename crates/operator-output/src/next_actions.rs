@@ -691,6 +691,10 @@ mod tests {
             "vida taskflow consume continue --run-id 'run with space'"
         );
         assert_eq!(
+            consume_continue_command(None),
+            "vida taskflow consume continue"
+        );
+        assert_eq!(
             human_run_graph_status_command("run>pwned"),
             "vida taskflow run-graph status 'run>pwned'"
         );
@@ -705,6 +709,10 @@ mod tests {
         assert_eq!(
             human_closed_run_reconcile_command(),
             "vida task reconcile-closed-runs --limit 25"
+        );
+        assert_eq!(
+            recovery_latest_command(),
+            "vida taskflow recovery latest"
         );
     }
 
@@ -938,10 +946,14 @@ mod tests {
         assert_eq!(reduced.packet_refs.result_path.as_deref(), Some("packet-result"));
         assert_eq!(reduced.packet_refs.receipt_path.as_deref(), Some("receipt-path"));
         assert_eq!(reduced.packet_refs.source_refs, vec!["source-surface"]);
+        assert_eq!(reduced.context_refs.run_id.as_deref(), Some("dispatch-run"));
+        assert_eq!(reduced.context_refs.task_id.as_deref(), Some("unit-id"));
         assert_eq!(
             reduced.context_refs.source_refs,
             vec!["scope-task", "admissible", "projection-source"]
         );
+        assert_eq!(reduced.schema_version, NEXT_ACTION_REDUCER_SCHEMA_VERSION);
+        assert_eq!(reduced.status, "ready");
         assert_eq!(reduced.blocker_codes, vec!["blocked_code"]);
         assert_eq!(reduced.next_actions, vec!["Resolve blocker"]);
         let action = reduced.next_action.expect("action should be present");
