@@ -656,4 +656,42 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn role_step_state_lifecycle_preserves_refs_outcome_and_blockers() {
+        let definition = flow("lifecycle");
+        let mut state = TaskRoleStepState::from_first_step(&definition).expect("first step");
+
+        state.mark_ready().expect("ready");
+        assert_eq!(state.status, TaskRoleStepStatus::Ready);
+        state.plan_packet("packet-1").expect("packet");
+        assert_eq!(state.packet_ref.as_deref(), Some("packet-1"));
+        assert_eq!(state.status, TaskRoleStepStatus::PacketPlanned);
+        state.mark_packet_ready().expect("packet ready");
+        state.dispatch("attempt-1").expect("dispatch");
+        assert_eq!(state.attempt_ref.as_deref(), Some("attempt-1"));
+        state.receive_result("receipt-1", "accepted").expect("result");
+        assert_eq!(state.receipt_ref.as_deref(), Some("receipt-1"));
+        assert_eq!(state.outcome.as_deref(), Some("accepted"));
+        state.validate().expect("validate");
+        state.block("needs_review").expect("block");
+        assert_eq!(state.blockers, vec!["needs_review"]);
+        assert_eq!(state.status, TaskRoleStepStatus::Blocked);
+    }
+
+    #[test]
+    fn task_role_step_constructors_normalize_tokens_and_closure() {
+        let custom = TaskRoleStep::new(" Analyst ", " worker ", " implementation ", " build ");
+        assert_eq!(custom.role_id, "analyst");
+        assert_eq!(custom.runtime_role, "worker");
+        assert_eq!(custom.task_class, "implementation");
+        assert_eq!(custom.lifecycle_stage, "build");
+        assert_eq!(custom.state_name(), "role_analyst");
+        assert!(!custom.closes_workflow);
+
+        assert_eq!(TaskRoleStep::planning().role_id, "planning");
+        assert_eq!(TaskRoleStep::developer().runtime_role, "worker");
+        assert_eq!(TaskRoleStep::tester().task_class, "verification");
+        assert!(TaskRoleStep::closure().closes_workflow);
+    }
 }
