@@ -288,6 +288,22 @@ mod tests {
     }
 
     #[test]
+    fn task_attempt_rollup_deduplicates_requested_partial_attempt_ids() {
+        let decision = decide_task_attempt_rollup(TaskAttemptRollupInput {
+            task_updated_at: "task-v1".to_string(),
+            attempts: vec![TaskAttemptRollupAttempt {
+                attempt_id: "partial-a".to_string(),
+                status: "partially_accepted".to_string(),
+                freshness: "task-v1".to_string(),
+            }],
+            requested_partial_attempt_ids: vec!["partial-a".to_string()],
+            conflicts: Vec::new(),
+        });
+
+        assert_eq!(decision.partial_attempt_ids, vec!["partial-a"]);
+    }
+
+    #[test]
     fn task_attempt_rollup_marks_all_attempts_conflicting_when_conflicts_exist() {
         let decision = decide_task_attempt_rollup(TaskAttemptRollupInput {
             task_updated_at: "task-v1".to_string(),
@@ -340,6 +356,7 @@ mod tests {
         assert_eq!(decision.status_counts["accepted"], 1);
         assert_eq!(decision.status_counts["rejected"], 1);
         assert_eq!(decision.latest_attempt_id.as_deref(), Some("attempt-b"));
+        assert_eq!(decision.latest_attempt_status.as_deref(), Some("accepted"));
         assert_eq!(
             decision.latest_consolidation_receipt_id.as_deref(),
             Some("receipt-b")
@@ -420,6 +437,9 @@ mod tests {
                 Ok((*status).to_string())
             );
         }
-        assert!(normalize_task_attempt_status("  ").is_err());
+        assert_eq!(
+            normalize_task_attempt_status("  ").expect_err("blank status should fail"),
+            "task attempt field `status` must be non-empty"
+        );
     }
 }
