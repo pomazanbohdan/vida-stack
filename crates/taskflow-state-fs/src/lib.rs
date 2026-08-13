@@ -504,6 +504,38 @@ mod tests {
     }
 
     #[test]
+    fn file_journal_create_reopens_existing_journal_without_resetting_history() {
+        let path = temp_snapshot_path();
+        let stream = VidaStreamRef("semantic-stream".to_string());
+        let mut journal =
+            FileOperationalJournal::create(&path).expect("create filesystem journal");
+        journal
+            .append(semantic_append_request())
+            .expect("append initial event");
+        let expected_events = journal.load_stream(&stream).len();
+        assert!(expected_events > 0);
+        drop(journal);
+
+        let reopened =
+            FileOperationalJournal::create(&path).expect("create should reopen existing journal");
+        assert_eq!(reopened.load_stream(&stream).len(), expected_events);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("bak"));
+    }
+
+    #[test]
+    fn file_journal_create_materializes_missing_parent_directory() {
+        let parent = temp_snapshot_path().with_extension("nested");
+        let path = parent.join("journal.json");
+        let journal =
+            FileOperationalJournal::create(&path).expect("create should materialize parent");
+        assert!(path.is_file());
+        assert!(journal.persistence_error().is_none());
+        drop(journal);
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
     fn partial_append_restarts_from_filesystem_journal_and_rejects_stale_retry() {
         let path = temp_snapshot_path();
         let stream = VidaStreamRef("semantic-stream".to_string());
