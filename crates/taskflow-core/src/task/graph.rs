@@ -605,6 +605,14 @@ mod tests {
             view.children_for("parent"),
             Some(&vec!["child".to_string()])
         );
+
+        let mut dependent = row("dependent", "open", "task");
+        dependent.dependencies = vec![blocks("dependent", "parent")];
+        let dependency_view = TaskGraphView::from_rows([dependent, row("parent", "open", "task")]);
+        assert_eq!(
+            dependency_view.non_parent_dependencies.get("dependent"),
+            Some(&vec![("parent".to_string(), "blocks".to_string())])
+        );
     }
 
     #[test]
@@ -640,6 +648,47 @@ mod tests {
             [("task-b", " task-a "), ("missing", "task-a")],
         );
         assert_eq!(deduped.topological_order, vec!["task-b", "task-a"]);
+
+        let missing_edge_before_valid_edge = analyze_directed_dependencies(
+            ["task-a", "task-b"],
+            [("missing", "task-a"), ("task-b", "task-a")],
+        );
+        assert_eq!(
+            missing_edge_before_valid_edge.topological_order,
+            vec!["task-b", "task-a"]
+        );
+
+        let missing_edge_before_ordering_edge = analyze_directed_dependencies(
+            ["task-a", "task-b", "task-c"],
+            [("missing", "task-a"), ("task-c", "task-a")],
+        );
+        let task_a_position = missing_edge_before_ordering_edge
+            .topological_order
+            .iter()
+            .position(|node| node == "task-a")
+            .expect("task-a should be in the topological order");
+        let task_c_position = missing_edge_before_ordering_edge
+            .topological_order
+            .iter()
+            .position(|node| node == "task-c")
+            .expect("task-c should be in the topological order");
+        assert!(task_c_position < task_a_position);
+
+        let missing_edge_before_reverse_ordering_edge = analyze_directed_dependencies(
+            ["task-a", "task-b", "task-c"],
+            [("missing", "task-a"), ("task-a", "task-c")],
+        );
+        let task_a_position = missing_edge_before_reverse_ordering_edge
+            .topological_order
+            .iter()
+            .position(|node| node == "task-a")
+            .expect("task-a should be in the topological order");
+        let task_c_position = missing_edge_before_reverse_ordering_edge
+            .topological_order
+            .iter()
+            .position(|node| node == "task-c")
+            .expect("task-c should be in the topological order");
+        assert!(task_a_position < task_c_position);
     }
 
     #[test]
