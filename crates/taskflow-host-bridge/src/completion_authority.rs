@@ -1227,6 +1227,25 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_includes_each_capability_dimension_and_blocker_code() {
+        let request = json!({
+            "backend_fingerprint": "backend-fingerprint",
+            "backend_id": "backend-id",
+            "carrier_fingerprint": "carrier-fingerprint",
+            "carrier_id": "carrier-id",
+            "capability_fingerprint": "capability-fingerprint",
+            "adapter_capability_id": "adapter-capability-id",
+            "blocker_fingerprint": "blocker-fingerprint"
+        });
+        let blockers = vec!["blocker-a".to_string(), "blocker-b".to_string()];
+
+        assert_eq!(
+            fingerprint(&request, &blockers),
+            "backend-fingerprint|backend-id|carrier-fingerprint|carrier-id|capability-fingerprint|adapter-capability-id|blocker-fingerprint|blocker-a|blocker-b"
+        );
+    }
+
+    #[test]
     fn implementation_attempt_admission_fails_closed_for_empty_scope_and_churn() {
         let request = implementation_request();
         let artifacts = json!([{
