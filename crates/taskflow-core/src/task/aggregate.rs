@@ -597,6 +597,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closed_snapshot_preserves_constructor_fields_and_defaults() {
+        let snapshot = TaskAggregateTaskSnapshot::closed("child", "100", Some("parent".into()));
+
+        assert_eq!(snapshot.id, "child");
+        assert_eq!(snapshot.status, "closed");
+        assert_eq!(snapshot.updated_at, "100");
+        assert_eq!(snapshot.closed_at, Some("100".to_string()));
+        assert_eq!(snapshot.close_reason, None);
+        assert_eq!(snapshot.parent_id, Some("parent".to_string()));
+    }
+
+    #[test]
     fn task_aggregate_plans_close_task_event_and_mutation() {
         let plan = plan_close_task(TaskCloseCommand {
             task: TaskAggregateTaskSnapshot::closed("child", "100", Some("parent".to_string())),
@@ -645,6 +657,19 @@ mod tests {
             },
         ];
 
+        let added_projection = replay_task_events(&events[..3]);
+        assert_eq!(
+            added_projection.dependencies["task"].len(),
+            2,
+            "duplicate dependency additions must remain deduplicated before removal"
+        );
+        assert_eq!(
+            added_projection.dependencies["task"]
+                .iter()
+                .filter(|edge| edge.depends_on_id == "dep-b" && edge.edge_type == "blocks")
+                .count(),
+            1
+        );
         let projection = replay_task_events(&events);
         assert_eq!(
             projection.dependencies["task"],
@@ -676,6 +701,16 @@ mod tests {
                 reason: "all direct child tasks closed after closing `child`".to_string(),
                 occurred_at: "100".to_string(),
                 source_child_id: "child".to_string(),
+            }
+        );
+        assert_eq!(
+            plan.mutations[1],
+            TaskAggregateMutation::AutoCloseParent {
+                task_id: "parent".to_string(),
+                status: "closed".to_string(),
+                updated_at: "100".to_string(),
+                closed_at: "100".to_string(),
+                close_reason: "all direct child tasks closed after closing `child`".to_string(),
             }
         );
         assert_eq!(plan.touched_task_ids, vec!["child", "parent"]);
@@ -711,11 +746,47 @@ mod tests {
             TaskAggregateEvent::ParentAutoClosed { reason, .. }
                 if reason == "all direct child tasks closed after closing `child`"
         ));
+        assert_eq!(
+            plan.events,
+            vec![
+                TaskAggregateEvent::TaskStatusUpdated {
+                    task_id: "child".to_string(),
+                    status: "closed".to_string(),
+                    occurred_at: "101".to_string(),
+                },
+                TaskAggregateEvent::ParentAutoClosed {
+                    task_id: "parent".to_string(),
+                    reason: "all direct child tasks closed after closing `child`".to_string(),
+                    occurred_at: "101".to_string(),
+                    source_child_id: "child".to_string(),
+                },
+            ]
+        );
         assert!(matches!(
             &plan.mutations[1],
             TaskAggregateMutation::AutoCloseParent { closed_at, .. }
                 if closed_at == "101"
         ));
+        assert_eq!(
+            plan.mutations[0],
+            TaskAggregateMutation::SetTaskStatus {
+                task_id: "child".to_string(),
+                status: "closed".to_string(),
+                updated_at: "101".to_string(),
+                closed_at: Some("101".to_string()),
+                close_reason: Some("done".to_string()),
+            }
+        );
+        assert_eq!(
+            plan.mutations[1],
+            TaskAggregateMutation::AutoCloseParent {
+                task_id: "parent".to_string(),
+                status: "closed".to_string(),
+                updated_at: "101".to_string(),
+                closed_at: "101".to_string(),
+                close_reason: "all direct child tasks closed after closing `child`".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -752,6 +823,23 @@ mod tests {
                     task_id: "parent".to_string(),
                     occurred_at: "101".to_string(),
                     source_child_id: "child".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            plan.mutations,
+            vec![
+                TaskAggregateMutation::SetTaskStatus {
+                    task_id: "child".to_string(),
+                    status: "in_progress".to_string(),
+                    updated_at: "101".to_string(),
+                    closed_at: None,
+                    close_reason: None,
+                },
+                TaskAggregateMutation::AutoReopenParent {
+                    task_id: "parent".to_string(),
+                    status: "in_progress".to_string(),
+                    updated_at: "101".to_string(),
                 },
             ]
         );
@@ -792,6 +880,22 @@ mod tests {
                     task_id: "parent".to_string(),
                     occurred_at: "102".to_string(),
                     source_child_id: "child".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            plan.mutations,
+            vec![
+                TaskAggregateMutation::CreateTask {
+                    task_id: "child".to_string(),
+                    status: "open".to_string(),
+                    updated_at: "102".to_string(),
+                    closed_at: None,
+                },
+                TaskAggregateMutation::AutoReopenParent {
+                    task_id: "parent".to_string(),
+                    status: "in_progress".to_string(),
+                    updated_at: "102".to_string(),
                 },
             ]
         );
@@ -837,6 +941,24 @@ mod tests {
                 occurred_at: "103".to_string(),
                 source_child_id: "source".to_string(),
             }
+        );
+        assert_eq!(
+            plan.mutations,
+            vec![
+                TaskAggregateMutation::ReparentTask {
+                    task_id: "child".to_string(),
+                    parent_id: Some("target".to_string()),
+                    updated_at: "103".to_string(),
+                },
+                TaskAggregateMutation::AutoCloseParent {
+                    task_id: "source".to_string(),
+                    status: "closed".to_string(),
+                    updated_at: "103".to_string(),
+                    closed_at: "103".to_string(),
+                    close_reason: "all direct child tasks moved from `source` to `target`"
+                        .to_string(),
+                },
+            ]
         );
         assert_eq!(plan.touched_task_ids, vec!["child", "source", "target"]);
     }
@@ -892,6 +1014,70 @@ mod tests {
             projection.parent_ids.get("child"),
             Some(&Some("target".to_string()))
         );
+    }
+
+    #[test]
+    fn replay_task_events_projects_each_status_and_parent_event_variant() {
+        let projection = replay_task_events(&[
+            TaskAggregateEvent::TaskClosed {
+                task_id: "closed".to_string(),
+                reason: "done".to_string(),
+                occurred_at: "1".to_string(),
+            },
+            TaskAggregateEvent::ParentAutoClosed {
+                task_id: "auto-closed".to_string(),
+                reason: "children".to_string(),
+                occurred_at: "2".to_string(),
+                source_child_id: "child".to_string(),
+            },
+            TaskAggregateEvent::TaskStatusUpdated {
+                task_id: "status".to_string(),
+                status: "review".to_string(),
+                occurred_at: "3".to_string(),
+            },
+            TaskAggregateEvent::ParentAutoReopened {
+                task_id: "reopened".to_string(),
+                occurred_at: "4".to_string(),
+                source_child_id: "child".to_string(),
+            },
+            TaskAggregateEvent::TaskCreated {
+                task_id: "created".to_string(),
+                status: "open".to_string(),
+                parent_id: Some("parent".to_string()),
+                occurred_at: "5".to_string(),
+            },
+            TaskAggregateEvent::TaskReparented {
+                task_id: "moved".to_string(),
+                from_parent_id: "old-parent".to_string(),
+                to_parent_id: "new-parent".to_string(),
+                occurred_at: "6".to_string(),
+            },
+            TaskAggregateEvent::TaskMetadataUpdated {
+                task_id: "metadata".to_string(),
+                occurred_at: "7".to_string(),
+            },
+        ]);
+
+        assert_eq!(projection.statuses.get("closed"), Some(&"closed".to_string()));
+        assert_eq!(
+            projection.statuses.get("auto-closed"),
+            Some(&"closed".to_string())
+        );
+        assert_eq!(projection.statuses.get("status"), Some(&"review".to_string()));
+        assert_eq!(
+            projection.statuses.get("reopened"),
+            Some(&"in_progress".to_string())
+        );
+        assert_eq!(projection.statuses.get("created"), Some(&"open".to_string()));
+        assert_eq!(
+            projection.parent_ids.get("created"),
+            Some(&Some("parent".to_string()))
+        );
+        assert_eq!(
+            projection.parent_ids.get("moved"),
+            Some(&Some("new-parent".to_string()))
+        );
+        assert!(!projection.statuses.contains_key("metadata"));
     }
 
     #[test]
@@ -1004,6 +1190,24 @@ mod tests {
         .expect_err("empty event plan must not cover persistence");
 
         assert_eq!(error.blocker_code, TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_EVENTS);
+        assert_eq!(error.expected_task_ids, vec!["task-a"]);
+        assert!(error.actual_task_ids.is_empty());
+
+        let error = ensure_task_mutation_plan_covers_persistence(
+            &TaskMutationPlan {
+                events: vec![TaskAggregateEvent::TaskMetadataUpdated {
+                    task_id: "task-a".to_string(),
+                    occurred_at: "100".to_string(),
+                }],
+                mutations: Vec::new(),
+                touched_task_ids: vec!["task-a".to_string()],
+            },
+            &persisted_task_ids,
+        )
+        .expect_err("empty mutation plan must not cover persistence");
+        assert_eq!(error.blocker_code, TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_MUTATIONS);
+        assert_eq!(error.expected_task_ids, vec!["task-a"]);
+        assert!(error.actual_task_ids.is_empty());
     }
 
     #[test]
@@ -1024,6 +1228,7 @@ mod tests {
             error.blocker_code,
             TASK_AGGREGATE_PLAN_BLOCKER_TOUCH_MISMATCH
         );
+        assert_eq!(error.expected_task_ids, vec!["task-a"]);
         assert_eq!(error.actual_task_ids, vec!["task-a", "task-b"]);
     }
 }
