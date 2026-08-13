@@ -696,6 +696,19 @@ mod tests {
     }
 
     #[test]
+    fn request_task_class_prefers_direct_non_blank_value() {
+        let request = serde_json::json!({
+            "task_class": " implementation ",
+            "delivery_task_packet": {"handoff_task_class": "nested"}
+        });
+
+        assert_eq!(
+            host_bridge_request_task_class(&request),
+            Some("implementation")
+        );
+    }
+
+    #[test]
     fn request_owned_paths_falls_back_to_implementation_isolation() {
         let request = serde_json::json!({
             "implementation_isolation": {
@@ -706,6 +719,19 @@ mod tests {
         assert_eq!(
             host_bridge_request_owned_paths(&request),
             vec![PathBuf::from("crates/vida")]
+        );
+    }
+
+    #[test]
+    fn request_owned_paths_prefers_direct_paths_over_nested_isolation() {
+        let request = serde_json::json!({
+            "owned_paths": ["crates/direct"],
+            "implementation_isolation": {"owned_paths": ["crates/nested"]}
+        });
+
+        assert_eq!(
+            host_bridge_request_owned_paths(&request),
+            vec![PathBuf::from("crates/direct")]
         );
     }
 
@@ -798,10 +824,22 @@ mod tests {
         assert_eq!(effective["adapter_kind"], "configured_adapter");
         assert_eq!(effective["adapter_capability_id"], "configured_capability");
         assert_eq!(effective["invocation_mode"], "configured_parent");
+        assert_eq!(effective["dispatch_transport"], "configured_transport");
+        assert_eq!(effective["receipt_mode"], "configured_receipt");
+        assert_eq!(effective["adapter_contract_source"], "configured_registry");
         assert_eq!(
             effective["adapter_operations"]["operations"]["spawn"],
             "configured.spawn"
         );
+        assert_eq!(
+            effective["adapter_operations"]["operations"]["wait"],
+            "configured.wait"
+        );
+        assert_eq!(
+            effective["adapter_operations"]["operations"]["dispose"],
+            "configured.dispose"
+        );
+        assert_eq!(effective["adapter_operations"]["dispose_policy"], "configured");
     }
 
     #[test]
@@ -829,6 +867,42 @@ mod tests {
             Some("alpha_rework")
         );
         assert!(host_bridge_blocked_result_contract_is_retryable(contract));
+    }
+
+    #[test]
+    fn blocked_result_contract_retryability_requires_each_independent_signal() {
+        let cases = [
+            (serde_json::json!({
+                "allowed_next_node": "alpha_rework",
+                "decision": "rework_required",
+                "verdict": "rework_required"
+            }), true),
+            (serde_json::json!({
+                "allowed_next_node": "alpha_rework",
+                "decision": "approved",
+                "verdict": "rework_required"
+            }), false),
+            (serde_json::json!({
+                "allowed_next_node": "alpha_rework",
+                "decision": "rework_required",
+                "verdict": "approved"
+            }), false),
+            (serde_json::json!({
+                "allowed_next_node": "next",
+                "decision": "rework_required",
+                "verdict": "rework_required"
+            }), false),
+        ];
+
+        for (contract, expected) in cases {
+            assert_eq!(
+                host_bridge_blocked_result_contract_is_retryable(
+                    contract.as_object().expect("contract object")
+                ),
+                expected,
+                "unexpected retryability for {contract}"
+            );
+        }
     }
 
     #[test]
@@ -976,6 +1050,48 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn read_request_rejects_oversized_payload_with_exact_path() {
+        let root = temp_root("oversized-payload");
+        let request = root
+            .join("host-tool-bridge")
+            .join("requests")
+            .join("request.json");
+        let payload = vec![b'x'; (MAX_HOST_BRIDGE_REQUEST_BYTES + 1) as usize];
+        std::fs::write(&request, payload).unwrap();
+
+        let err =
+            read_host_bridge_request(&HostBridgeRequestPath::new(&root, &request)).unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                HostBridgeError::Oversized { path, max_bytes }
+                    if path.ends_with(request.file_name().expect("request filename"))
+                        && *max_bytes == MAX_HOST_BRIDGE_REQUEST_BYTES
+            ),
+            "unexpected oversized-payload error: {err:?}"
+        );
+    }
+
+
+    #[test]
+    fn read_request_accepts_exact_size_before_json_validation() {
+        let root = temp_root("exact-size-payload");
+        let request = root
+            .join("host-tool-bridge")
+            .join("requests")
+            .join("request.json");
+        let payload = vec![b'x'; MAX_HOST_BRIDGE_REQUEST_BYTES as usize];
+        std::fs::write(&request, payload).unwrap();
+
+        let err =
+            read_host_bridge_request(&HostBridgeRequestPath::new(&root, &request)).unwrap_err();
+
+        assert!(matches!(err, HostBridgeError::Json { .. }));
+    }
+
     #[test]
     fn request_required_result_fields_cannot_downgrade_canonical_contract() {
         let request = serde_json::json!({
@@ -1091,5 +1207,52 @@ mod tests {
         assert!(!legacy_internal_subagents_host_bridge_request(
             &non_internal
         ));
+    }
+
+
+    #[test]
+    fn legacy_ingress_requires_both_non_blank_adapter_tools() {
+        let mut base = complete_current_request();
+        let object = base.as_object_mut().unwrap();
+        object.remove("adapter_operations");
+        object.insert(
+            "adapter_kind".to_string(),
+            Value::String("unconfigured_host_agent_adapter".to_string()),
+        );
+        object.insert(
+            "adapter_capability_id".to_string(),
+            Value::String("unconfigured_host_agent_capability".to_string()),
+        );
+        object.insert(
+            "invocation_mode".to_string(),
+            Value::String("configured_host_capability_required".to_string()),
+        );
+        object.insert(
+            "adapter_params".to_string(),
+            serde_json::json!({"spawn_tool": "legacy.spawn", "wait_tool": "legacy.wait"}),
+        );
+        assert!(legacy_internal_subagents_host_bridge_request(&base));
+
+        let mut operation_present = base.clone();
+        operation_present["adapter_operations"] = serde_json::json!({});
+        assert!(!legacy_internal_subagents_host_bridge_request(&operation_present));
+
+        let mut missing_params = base.clone();
+        missing_params
+            .as_object_mut()
+            .expect("request object")
+            .remove("adapter_params");
+        assert!(!legacy_internal_subagents_host_bridge_request(&missing_params));
+
+        for params in [
+            serde_json::json!({"wait_tool": "legacy.wait"}),
+            serde_json::json!({"spawn_tool": "legacy.spawn"}),
+            serde_json::json!({"spawn_tool": " ", "wait_tool": "legacy.wait"}),
+            serde_json::json!({"spawn_tool": "legacy.spawn", "wait_tool": " "}),
+        ] {
+            let mut candidate = base.clone();
+            candidate["adapter_params"] = params;
+            assert!(!legacy_internal_subagents_host_bridge_request(&candidate));
+        }
     }
 }
