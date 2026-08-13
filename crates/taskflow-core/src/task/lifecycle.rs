@@ -419,6 +419,48 @@ mod tests {
     }
 
     #[test]
+    fn task_lifecycle_status_parse_error_preserves_input_and_display() {
+        let error = TaskLifecycleStatus::try_from("mystery").expect_err("status should reject");
+
+        assert_eq!(error.value, "mystery");
+        assert_eq!(
+            error.to_string(),
+            "unknown task lifecycle status `mystery`"
+        );
+    }
+
+    #[test]
+    fn task_lifecycle_parent_events_preserve_task_id_and_next_status() {
+        let extend = decide_task_lifecycle(TaskLifecycleInput::new(
+            "parent-a",
+            TaskLifecycleEvent::ExtendParent,
+        ));
+        assert!(extend.admitted);
+        assert_eq!(extend.next_status, Some(TaskLifecycleStatus::Open));
+        assert_eq!(
+            extend.effects,
+            vec![TaskLifecycleEffect::ReopenParent {
+                task_id: "parent-a".to_string()
+            }]
+        );
+        assert_eq!(extend.touched_task_ids, vec!["parent-a"]);
+
+        let empty = decide_task_lifecycle(TaskLifecycleInput::new(
+            "parent-a",
+            TaskLifecycleEvent::EmptyParent,
+        ));
+        assert!(empty.admitted);
+        assert_eq!(empty.next_status, Some(TaskLifecycleStatus::Closed));
+        assert_eq!(
+            empty.effects,
+            vec![TaskLifecycleEffect::CloseParent {
+                task_id: "parent-a".to_string()
+            }]
+        );
+        assert_eq!(empty.touched_task_ids, vec!["parent-a"]);
+    }
+
+    #[test]
     fn task_lifecycle_matrix_preserves_status_and_blocker_contracts() {
         struct Case {
             event: TaskLifecycleEvent,
