@@ -99,6 +99,14 @@ Will implement / choose:
   - Enable only the outer timeout for internal host dispatch.
   - Rejected because it can abandon a stuck blocking task without guaranteeing prompt cleanup or truthful direct return semantics.
 
+### 3. Resolve timeout windows from the active project before compiled-bundle fallback
+Will implement / choose:
+- Resolve the dispatch timeout window in this order: execution-plan route override, active project route/host configuration, compiled-bundle route value, then the built-in default.
+- Why
+  - A project-local `vida.config.yaml` is the active operator configuration. A stale or repository-derived compiled-bundle route must not mask a local host runtime limit.
+- Regression proof
+  - `runtime_dispatch_state::tests::dispatch_handoff_timeout_seconds_treats_internal_host_carrier_role_id_as_internal` verifies a project `max_runtime_seconds: 37` yields the bounded `39` second handoff window even when the compiled bundle contains another route value.
+
 ## Technical Design
 
 ### Core Components

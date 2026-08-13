@@ -455,13 +455,15 @@ pub(crate) fn internal_host_runtime_window_seconds(
         &receipt.dispatch_target,
     )
     .or_else(|| {
+        configured_route_runtime_window_seconds(project_root, &receipt.dispatch_target)
+    })
+    .or_else(|| configured_internal_host_handoff_timeout_seconds(project_root))
+    .or_else(|| {
         compiled_bundle_route_runtime_window_seconds(
             &role_selection.compiled_bundle,
             &receipt.dispatch_target,
         )
     })
-    .or_else(|| configured_route_runtime_window_seconds(project_root, &receipt.dispatch_target))
-    .or_else(|| configured_internal_host_handoff_timeout_seconds(project_root))
     .unwrap_or(DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS)
 }
 
