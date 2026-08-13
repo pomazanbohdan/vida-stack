@@ -598,6 +598,8 @@ mod tests {
             ["child", "parent"]
         );
         assert!(view.contains_task("parent"));
+        assert_eq!(view.task("parent").map(|task| task.id.as_str()), Some("parent"));
+        assert_eq!(view.task("child").map(|task| task.status.as_str()), Some("open"));
         assert_eq!(view.task("missing"), None);
         assert_eq!(
             view.children_for("parent"),
@@ -628,6 +630,16 @@ mod tests {
 
         assert!(analysis.cycle_node_id.is_none());
         assert_eq!(analysis.topological_order.len(), 3);
+        assert!(analysis
+            .topological_order
+            .iter()
+            .all(|node| ["task-a", "task-b", "task-c"].contains(&node.as_str())));
+
+        let deduped = analyze_directed_dependencies(
+            [" task-a ", "task-a", "", "task-b"],
+            [("task-b", " task-a "), ("missing", "task-a")],
+        );
+        assert_eq!(deduped.topological_order, vec!["task-b", "task-a"]);
     }
 
     #[test]
@@ -642,5 +654,8 @@ mod tests {
             Some("task-a" | "task-b")
         ));
         assert!(analysis.topological_order.is_empty());
+
+        let self_cycle = analyze_directed_dependencies(["task-a"], [("task-a", "task-a")]);
+        assert_eq!(self_cycle.cycle_node_id.as_deref(), Some("task-a"));
     }
 }
