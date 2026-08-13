@@ -79,6 +79,10 @@ window tests all passed, including
 (`max_runtime_seconds: 37` → bounded `39` seconds). The other 7 failures are
 the pre-existing activation/TeamFlow fixture contour and remain outside this
 timeout proof. `vida docflow check` for the updated timeout contract passed.
+The post-commit semantic-focused gate also completed all 9 recorded operations
+(`stale-target-process-cleanup`, seven package checks, and `semantic-summary`)
+with `pass`; its reproducible summary is
+`.vida/tmp/semantic-testing/20260813T073848142Z-a74e9fe0/summary.json`.
 
 ## Bootstrap Read Order
 
