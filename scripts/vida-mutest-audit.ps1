@@ -1077,6 +1077,9 @@ function Get-ExecutionBlocker {
     if ($value -match '(?i)cannot find target in Cargo package metadata') {
         return [ordered]@{ code = "mutest_driver_target_metadata"; family = "mutest_tool"; reason = "mutest-driver target lookup did not match Cargo metadata on Windows"; next_action = "upgrade or rebuild mutest-rs with Windows path normalization, then rerun the file" }
     }
+    if ($value -match '(?is)mutest-runtime[^\r\n]*(thread_pool|harness)|thread_pool\.rs[^\r\n]*Option::unwrap|harness\.rs[^\r\n]*unreachable') {
+        return [ordered]@{ code = "mutest_runtime_panic"; family = "mutation_tool"; reason = "mutest runtime panicked before completing mutation evaluation"; next_action = "upgrade or rebuild mutest-rs runtime, then rerun the file" }
+    }
     if ($value -match '(?i)compiler unexpectedly panicked|internal compiler error|rustc.*ICE') {
         return [ordered]@{ code = "rustc_internal_compiler_error"; family = "rust_toolchain"; reason = "nightly rustc panicked while compiling the mutest target"; next_action = "pin or update the nightly/toolchain and rerun the file" }
     }
@@ -1321,9 +1324,9 @@ function Complete-MutestWorker {
     $stats = Get-MutestStats -MetadataPath $Worker.metadata_dir
     $stderrText = if (Test-Path -LiteralPath $Worker.stderr) { Get-Content -LiteralPath $Worker.stderr -Raw } else { "" }
     $stdoutText = if (Test-Path -LiteralPath $Worker.stdout) { Get-Content -LiteralPath $Worker.stdout -Raw } else { "" }
-    $noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
+    $noEvaluation = [int]$stats.evaluated -eq 0
     $toolFailure = ($stderrText + "`n" + $stdoutText) -match '(?i)(compiler unexpectedly|internal compiler error|cannot find target|could not compile|error: aborting|panic)'
-    $status = if ($Worker.timed_out) { "timeout" } elseif ($noEvidence -and $toolFailure) { "blocked" } elseif ($exitCode -eq 0 -or [int]$stats.evaluated -gt 0) { "completed" } else { "blocked" }
+    $status = if ($Worker.timed_out) { "timeout" } elseif ($noEvaluation) { "blocked" } elseif ($exitCode -eq 0) { "completed" } else { "blocked" }
     $blocker = if ($status -eq "blocked") { Get-ExecutionBlocker -Text ($stderrText + "`n" + $stdoutText) } else { $null }
     $report = [ordered]@{
         package = $Worker.package; path = $Worker.path; wave_id = $Worker.wave_id; category = Get-PackageCategory $Worker.package; status = $status; exit_code = $exitCode; timed_out = [bool]$Worker.timed_out
@@ -1743,7 +1746,7 @@ foreach ($queuedRecord in @($QueueFiles | Where-Object { [string](Get-OptionalPr
     $fileRecord.updated_at = [DateTime]::UtcNow.ToString("o")
     $lowCoverage = ($null -eq $fileRecord.mutation_score) -or ([double]$fileRecord.mutation_score -le $Threshold) -or ([int]$fileRecord.no_coverage -gt 0)
     $stderrText = if ($fileReport.stderr -and (Test-Path -LiteralPath $fileReport.stderr)) { Get-Content -LiteralPath $fileReport.stderr -Raw } else { "" }
-    $noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0
+    $noEvaluation = [int]$stats.evaluated -eq 0
     $compilerError = $stderrText -match '(?i)(internal compiler error|rustc.*panic|compiler unexpectedly|could not compile)'
     if ($fileReport.status -ne "completed" -or $compilerError) {
         $blocker = Get-ExecutionBlocker -Text $stderrText
@@ -1758,7 +1761,7 @@ foreach ($queuedRecord in @($QueueFiles | Where-Object { [string](Get-OptionalPr
     } elseif ($lowCoverage) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true; $fileRecord.needs_rerun = $false; $fileRecord.needs_rescan = $false
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
-        $defectRecord = [ordered]@{ type = if ($noEvidence) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
+        $defectRecord = [ordered]@{ type = if ($noEvaluation) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" }
         $currentDefects = @(Set-CurrentFileDefects -FileRecord $fileRecord -Defects @($defectRecord) -ObservedHash $fileRecord.hash -WaveId $WaveId)
         foreach ($currentDefect in $currentDefects) { [void]$Defects.Add($currentDefect) }
         $update = Invoke-TestUpdateHook -FileRecord $fileRecord -RunEvidenceRoot $RunEvidenceRoot -EventPath $EventPath
@@ -1790,7 +1793,7 @@ foreach ($fileRecord in @($RescanFiles.ToArray())) {
     $rescanStderrPath = [string](Get-OptionalProperty $rescan "stderr" "")
     $rescanStdoutPath = [string](Get-OptionalProperty $rescan "stdout" "")
     $rescanStderrText = if (-not [string]::IsNullOrWhiteSpace($rescanStderrPath) -and (Test-Path -LiteralPath $rescanStderrPath)) { Get-Content -LiteralPath $rescanStderrPath -Raw } else { [string](Get-OptionalProperty $rescan "error" "") }
-    $rescanNoEvidence = [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0
+    $rescanNoEvaluation = [int]$rescanStats.evaluated -eq 0
     $rescanCompilerError = $rescanStderrText -match '(?i)(internal compiler error|rustc.*panic|compiler unexpectedly|could not compile|cannot find target)'
     $rescanDefects = New-Object System.Collections.Generic.List[object]
     if ([bool](Get-OptionalProperty $rescan "timed_out" $false) -or [string]$rescan.status -ne "completed" -or $rescanCompilerError) {
@@ -1805,7 +1808,7 @@ foreach ($fileRecord in @($RescanFiles.ToArray())) {
     } elseif (($null -eq $score) -or ([double]$score -le $Threshold) -or $fileRecord.no_coverage -gt 0) {
         $fileRecord.status = "needs_tests"; $fileRecord.wave_status = "needs_tests"; $fileRecord.needs_tests = $true
         $fileRecord.recommendations = @("apply ZOMBIE-D focused test update", "rescan after test update")
-        [void]$rescanDefects.Add([ordered]@{ type = if ($rescanNoEvidence) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" })
+        [void]$rescanDefects.Add([ordered]@{ type = if ($rescanNoEvaluation) { "mutation_no_evidence" } elseif ($fileRecord.no_coverage -gt 0) { "no_coverage" } else { "survived_mutants" }; path = $fileRecord.path; package = $fileRecord.package; wave_id = $WaveId; observed_hash = $fileRecord.hash; mutation_identity = "file-level"; score_percent = $fileRecord.mutation_score; killed = $fileRecord.killed; survived = $fileRecord.survived; no_coverage = $fileRecord.no_coverage; recommendation = "add focused tests, then rescan this file" })
     } else {
         $fileRecord.status = "completed"; $fileRecord.wave_status = "completed"; $fileRecord.test_update_status = "completed"
         $fileRecord.blocker_code = $null; $fileRecord.blocker_family = $null; $fileRecord.blocker_reason = $null; $fileRecord.next_action = $null

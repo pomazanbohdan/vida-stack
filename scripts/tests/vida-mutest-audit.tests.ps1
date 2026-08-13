@@ -117,11 +117,21 @@ Add-Case "continuous_refill_and_report_contract" {
 
 Add-Case "zero_mutation_evidence_is_followup" {
     $source = Get-Content -LiteralPath $ScriptPath -Raw
-    Assert-True ($source.Contains('$noEvidence = [int]$stats.generated -eq 0 -and [int]$stats.evaluated -eq 0')) "zero-evidence detection is not independent of metadata file count"
-    Assert-True ($source.Contains('$rescanNoEvidence = [int]$rescanStats.generated -eq 0 -and [int]$rescanStats.evaluated -eq 0')) "rescan zero-evidence detection is missing"
-    Assert-True ($source.Contains('type = if ($noEvidence) { "mutation_no_evidence" }')) "zero-evidence defect classification is missing"
-    Assert-True ($source.Contains('type = if ($rescanNoEvidence) { "mutation_no_evidence" }')) "rescan zero-evidence defect classification is missing"
-    Assert-True (-not $source.Contains('$fileReport.status -ne "completed" -or $noEvidence -or $compilerError')) "zero evidence is still treated as a runtime blocker after a successful worker"
+    Assert-True ($source.Contains('$noEvaluation = [int]$stats.evaluated -eq 0')) "zero-evaluation detection is missing"
+    Assert-True ($source.Contains('$rescanNoEvaluation = [int]$rescanStats.evaluated -eq 0')) "rescan zero-evaluation detection is missing"
+    Assert-True ($source.Contains('elseif ($noEvaluation) { "blocked" }')) "zero-evaluation worker is not fail-closed"
+    Assert-True ($source.Contains('type = if ($noEvaluation) { "mutation_no_evidence" }')) "zero-evaluation defect classification is missing"
+    Assert-True ($source.Contains('type = if ($rescanNoEvaluation) { "mutation_no_evidence" }')) "rescan zero-evaluation defect classification is missing"
+    Assert-True (-not $source.Contains('$fileReport.status -ne "completed" -or $noEvidence -or $compilerError')) "legacy zero-evidence guard still present"
+}
+
+Add-Case "mutest_runtime_panic_is_blocked" {
+    $source = Get-Content -LiteralPath $ScriptPath -Raw
+    Assert-True ($source.Contains('mutest_runtime_panic')) "mutest runtime panic blocker code is missing"
+    Assert-True ($source.Contains('thread_pool')) "thread-pool panic signature is missing"
+    Assert-True ($source.Contains('Option::unwrap')) "thread-pool unwrap signature is missing"
+    Assert-True ($source.Contains('harness')) "harness panic signature is missing"
+    Assert-True ($source.Contains('upgrade or rebuild mutest-rs runtime')) "runtime panic remediation is missing"
 }
 
 Add-Case "finalization_updates_canonical_rows" {

@@ -50,9 +50,11 @@ contributes `stats.total_mutations_count` to `generated`, while the latest
 detected, undetected, timed-out, and crashed counts to `evaluated`, `killed`,
 `survived`, `timeout`, and `compile_error`. Unknown JSON retains the generic
 recursive fallback parser; a zero killed/survived denominator remains a failed
-coverage result rather than a green score. A successful worker with zero
-`generated` and zero `evaluated` is recorded as `needs_tests` with a
-`mutation_no_evidence` defect, even when metadata files were emitted.
+coverage result rather than a green score. Any worker with zero
+`evaluated` mutations is blocked and queued for rerun; it cannot be recorded as
+completed even when `generated` metadata files were emitted. A zero-`evaluated`
+worker carries a `mutation_no_evidence` defect until the mutest runtime/toolchain
+produces evaluable evidence.
 
 ## Provenance and resume
 
