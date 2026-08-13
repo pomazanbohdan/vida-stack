@@ -737,6 +737,20 @@ mod tests {
     }
 
     #[test]
+    fn unknown_operator_status_fails_closed_to_blocked_contract() {
+        let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+            "unexpected-status",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            json!({"request_path": "request.json"}),
+        );
+
+        assert_eq!(shared_fields["status"], "blocked");
+        assert_eq!(operator_contracts["status"], "blocked");
+    }
+
+    #[test]
     fn implementation_artifacts_suppress_attach_and_keep_completion_action() {
         let mut request = request();
         request["dispatch_target"] = json!("implementer");
