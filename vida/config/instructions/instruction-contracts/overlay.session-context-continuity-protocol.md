@@ -13,7 +13,7 @@ It owns:
 3. bounded cross-step smell detection,
 4. scope preservation across turns,
 5. post-step reconciliation and state update,
-6. the interface between session continuity and step-scoped thinking algorithms.
+6. the interface between session continuity, step-scoped thinking algorithms, and change-producing solution minimality.
 
 It does not replace the step reasoning canon.
 
@@ -21,12 +21,17 @@ Step-local reasoning remains owned by:
 
 1. `instruction-contracts/overlay.step-thinking-protocol`
 
+Change-producing candidate minimality remains owned by:
+
+1. `instruction-contracts/overlay.solution-minimality-protocol`
+
 ## Core Separation Rule
 
 1. Session continuity answers: "what state must remain true across steps?"
 2. Step thinking answers: "how should the current step be reasoned through?"
-3. Session continuity must not absorb the named step algorithms.
-4. Step thinking must not silently take ownership of long-lived session state.
+3. Solution minimality answers: "what is the first complete, correct, and safe change candidate?"
+4. Session continuity must not absorb the named step algorithms or minimality ladder.
+5. Step thinking and solution minimality must not silently take ownership of long-lived session state.
 
 ## Activation Class
 
@@ -59,6 +64,7 @@ Optional fields:
 2. `rejected_paths`
 3. `regression_watch`
 4. `next_step_hints`
+5. `solution_minimality_receipt`
 
 Rules:
 
@@ -181,6 +187,7 @@ Minimum handoff surface:
 9. `rejected_paths` when available
 10. `regression_watch` when available
 11. `validated_receipts` when available
+12. `solution_minimality_receipt` when a prior change-producing decision remains active
 
 Handoff compactness rule:
 
@@ -192,12 +199,13 @@ Handoff compactness rule:
 
 After the step algorithm returns:
 
-1. compare proposed changes against `protected_scope`,
-2. verify that `must_do` constraints remain satisfied,
-3. verify that `must_not` constraints remain unbroken,
-4. update `fixed_facts` only when the step produced explicit evidence,
-5. record new rejected paths when the step proved them invalid,
-6. add regression watches when local success may threaten adjacent behavior.
+1. for a change-producing result, require an admissible selection from `instruction-contracts/overlay.solution-minimality-protocol`,
+2. compare proposed changes against `protected_scope`,
+3. verify that `must_do` constraints remain satisfied,
+4. verify that `must_not` constraints remain unbroken,
+5. update `fixed_facts` only when the step produced explicit evidence,
+6. record new rejected paths when the step proved them invalid,
+7. add regression watches when local success may threaten adjacent behavior.
 
 ### Phase 5. Session Update
 
@@ -226,7 +234,8 @@ Step thinking returns:
 4. new confirmed facts,
 5. violated constraints if any,
 6. residual risks,
-7. next-step hint.
+7. `solution_minimality_receipt` when triggered,
+8. next-step hint.
 
 ## Allowed Smell Prevention Behavior
 
@@ -293,15 +302,16 @@ Each non-trivial session update should retain a concise receipt containing:
 
 ## Integration Rule
 
-When both protocols are active:
+When the relevant protocols are active:
 
 1. run session continuity first,
 2. then run the selected step-thinking algorithm,
-3. then reconcile and refresh the session packet.
+3. for a change-producing decision, run solution minimality after trace/constraint gates and before implementation selection,
+4. then reconcile and refresh the session packet.
 
 Compact form:
 
-1. `Capture -> Normalize -> Gate -> Step Think -> Reconcile -> Update`
+1. `Capture -> Normalize -> Gate -> Step Think -> Solution Minimality when triggered -> Reconcile -> Update`
 
 ## Closure Rule
 
@@ -322,5 +332,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md
 created_at: '2026-03-11T13:10:00+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-08-15T18:51:05+03:00
 changelog_ref: overlay.session-context-continuity-protocol.changelog.jsonl

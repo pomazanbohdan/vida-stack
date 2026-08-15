@@ -6,14 +6,16 @@ Boundary rule:
 
 1. this file is a compact projection, not the owner of step-thinking law,
 2. the canonical owner remains `instruction-contracts/overlay.step-thinking-protocol`,
-3. when ambiguity, escalation, or uncommon flow composition appears, consult the owner sections directly.
+3. change-producing candidate minimality remains owned by `instruction-contracts/overlay.solution-minimality-protocol`,
+4. when ambiguity, escalation, or uncommon flow composition appears, consult the owner sections directly.
 
 ## Core Use
 
 1. choose the smallest lawful thinking mode for the current step,
 2. keep reasoning step-scoped rather than replaying large narrative context,
 3. preserve impact analysis and fail-closed routing,
-4. do not expose chain-of-thought in user-facing output.
+4. run solution minimality after trace/constraint gates and before implementation selection for every change-producing decision,
+5. do not expose chain-of-thought in user-facing output.
 
 ## Runtime Selection
 
@@ -46,9 +48,14 @@ Mandatory overrides:
 
 1. run the selector before expanding into heavier reasoning,
 2. load only the selected algorithm section(s) from the owner file when needed,
-3. keep web/internet validation tied to `work.web-validation-protocol.md`,
-4. use reasoning modules only when the selected algorithm or step explicitly benefits,
-5. expand from compact mode only when conflict, uncertainty, preservation risk, or admissibility pressure requires it.
+3. load `instruction-contracts/overlay.solution-minimality-protocol` when a code, configuration, documentation, or process change is being selected,
+4. apply its compact reflex budget: `reuse current evidence -> one batched lookup round -> first admissible rung -> stop`,
+5. expand that lookup budget only for material ownership, correctness, safety, compatibility, or proof uncertainty; it is not a hard one-tool-call limit,
+6. apply its safe-default formula: `one reversible admissible option + preserved scope/safety/authority + known rollback -> proceed; otherwise ask only for a material or irreversible choice`,
+7. resolve equal candidates by `deletion -> reuse -> fewer files -> fewer dependencies -> fewer calls -> lower cognitive load`, then scan the current candidate/diff only for single-implementation interfaces, one-product factories, unused configuration, delegating wrappers, and speculative scaffold,
+8. keep web/internet validation tied to `work.web-validation-protocol.md`,
+9. use reasoning modules only when the selected algorithm or step explicitly benefits,
+10. expand from compact mode only when conflict, uncertainty, preservation risk, or admissibility pressure requires it.
 
 ## Owner Sections
 
@@ -63,6 +70,7 @@ When deeper semantics are required, read:
 7. `overlay.step-thinking-protocol.md#section-bug-reasoning` (`TRACE`)
 8. `overlay.step-thinking-protocol.md#section-web-search`
 9. `overlay.step-thinking-protocol.md#section-reasoning-modules`
+10. `instruction-contracts/overlay.solution-minimality-protocol`
 
 -----
 artifact_path: config/instructions/instruction-contracts/overlay.step-thinking-runtime-capsule
@@ -73,5 +81,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.step-thinking-runtime-capsule.md
 created_at: '2026-03-13T21:50:00+02:00'
-updated_at: '2026-03-13T21:50:00+02:00'
+updated_at: 2026-08-15T16:59:19.2673012Z
 changelog_ref: overlay.step-thinking-runtime-capsule.changelog.jsonl

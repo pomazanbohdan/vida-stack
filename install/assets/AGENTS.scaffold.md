@@ -12,7 +12,7 @@ Core rule:
 3. Use bounded framework canonical ids through `vida protocol view <id>` only when the runtime init surfaces leave an edge case unresolved.
 4. In host-agent execution, treat agent ids as execution carriers (model/tier/cost/effectiveness), while runtime role remains a separate activation state.
 5. Runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it, then select by capability/admissibility, local score/telemetry guard, and cheapest eligible carrier.
-6. L0 thinking activation: keep `instruction-contracts/overlay.step-thinking-protocol` and `instruction-contracts/overlay.session-context-continuity-protocol` active for orchestrator lanes; worker lanes activate them only when the packet/runtime explicitly requires them.
+6. L0 decision activation: keep `instruction-contracts/overlay.step-thinking-protocol` and `instruction-contracts/overlay.session-context-continuity-protocol` active for orchestrator lanes; for every change-producing code, configuration, documentation, or process decision, invoke `instruction-contracts/overlay.solution-minimality-protocol` after trace/context gates and before implementation selection; worker lanes invoke it when their packet/runtime authorizes change-producing work.
 7. For normal write-producing development work, "agent mode" means the project runtime's delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier/executor details and do not replace the canonical VIDA/TaskFlow delegation path.
 7a. Project configuration or runtime init reporting agent-only/default orchestration is not user authorization to launch configured carriers or host bridge execution. Treat it as routing preference only; require an explicit user request for agent-first/parallel-agent execution before using configured agent carriers.
 8. Host-local write capability, shell access, or direct patch tools do not authorize root-lane implementation; while the root-session write guard is active, lawful write ownership still routes through `vida agent-init` unless runtime status reports `local_exception_takeover_state=active` and `root_local_write_allowed=true` for the same active packet. A recorded exception-path receipt by itself is only `receipt_recorded` and does not authorize local write.
@@ -55,7 +55,7 @@ Host CLI rule:
    - `vida orchestrator-init`
    - or `vida agent-init`
 3. If the init surface reports `pending_activation`, run `vida project-activator` before ordinary work.
-4. Keep the L0 thinking activation rule active from Core rule before continuing lane-specific work.
+4. Keep the L0 thinking and solution-minimality activation rule active from Core rule before continuing lane-specific work.
 5. Prefer project-local operating rules and docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
 6. Open deeper framework protocol surfaces only on demand through canonical shorthand ids interpreted via `vida protocol view`.
 
@@ -68,7 +68,7 @@ Host CLI rule:
    - `why_this_unit`
    - `sequential_vs_parallel_posture`
 4. If any of those fields are missing, ambiguous, or stale relative to the current runtime evidence, fail closed to diagnosis/bind/recovery and do not continue implementation heuristically.
-5. Keep the session and step thinking overlays active across compact boundaries; re-open the bounded overlay/runtime surfaces when the compact may have weakened confidence in the active thinking mode or task-class selection.
+5. Keep the session and step-thinking overlays active and preserve the solution-minimality trigger across compact boundaries; re-open the bounded overlay/runtime surfaces when the compact may have weakened confidence in the active thinking mode, task-class selection, or change-candidate selection.
 6. Do not duplicate full thinking algorithms into this bootstrap carrier; this file should enforce the mandatory re-entry contract and point back to the canonical runtime/init surfaces for the algorithms themselves.
 
 ## User-Facing Thinking Label Rule
@@ -137,5 +137,5 @@ schema_version: '1'
 status: canonical
 source_path: install/assets/AGENTS.scaffold.md
 created_at: '2026-03-14T18:10:00+02:00'
-updated_at: 2026-04-30T22:15:50.5483113Z
+updated_at: 2026-08-15T18:51:05+03:00
 changelog_ref: AGENTS.scaffold.changelog.jsonl

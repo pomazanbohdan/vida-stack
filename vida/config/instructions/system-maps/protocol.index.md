@@ -89,6 +89,7 @@ Registry boundary: discovery registry, not owner-layer taxonomy; row text routes
 | Orchestrator entry contract | `agent-definitions/entry.orchestrator-entry` | `AGENTS.md`, `instruction-contracts/core.orchestration-protocol`, `command-instructions/routing.use-case-packs-protocol` |
 | Step thinking algorithms | `instruction-contracts/overlay.step-thinking-protocol` | `references/algorithms.one-screen-reference`, `references/algorithms.quick-reference` |
 | Session context continuity | `instruction-contracts/overlay.session-context-continuity-protocol` | `instruction-contracts/overlay.step-thinking-protocol`, `agent-definitions/entry.orchestrator-entry`, `instruction-contracts/bridge.instruction-activation-protocol` |
+| Change-producing solution minimality | `instruction-contracts/overlay.solution-minimality-protocol` | `instruction-contracts/overlay.step-thinking-protocol`, `instruction-contracts/overlay.session-context-continuity-protocol`, `instruction-contracts/bridge.instruction-activation-protocol`, `AGENTS.md` |
 | Runtime orchestration | `instruction-contracts/core.orchestration-protocol` | `AGENTS.md`, `instruction-contracts/core.agent-system-protocol`, `runtime-instructions/core.capability-registry-protocol`, `runtime-instructions/core.context-governance-protocol`, `runtime-instructions/core.run-graph-protocol`, `command-instructions/routing.use-case-packs-protocol`, `system-maps/migration.runtime-transition-map`, `system-maps/framework.core-protocols-map` |
 | Runtime-visible lawful-next / replan / parallelization loop | `instruction-contracts/core.orchestration-protocol` | `runtime-instructions/work.execution-priority-protocol`, `instruction-contracts/core.packet-decomposition-protocol`, `agent-definitions/entry.orchestrator-entry`, `docs/process/project-orchestrator-session-start-protocol.md` |
 | Change-impact reconciliation | `runtime-instructions/work.change-impact-reconciliation-protocol` | `instruction-contracts/core.orchestration-protocol`, `command-instructions/planning.form-task-protocol`, `command-instructions/execution.implement-execution-protocol`, `command-instructions/operator.vida-spec-guide` |
@@ -145,13 +146,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/protocol.index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-07-03T13:08:00+03:00
+updated_at: 2026-08-15T18:51:05+03:00
 changelog_ref: protocol.index.changelog.jsonl
 protocol_authoring_gate: enforced
 protocol_compression_status: audit_passed
-protocol_compression_algorithm: registry-prose-compaction+protected-reference-validation
-protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/system-maps/protocol.index.md
-protocol_compression_audit_at: 2026-07-03T13:08:00+03:00
-protocol_compression_before_tokens: 7202
-protocol_compression_after_tokens: 7200
-protocol_compression_content_sha256: 712d4e26291b10f80d8c31217d8d0d2f5c1768d28e0a74005b5747b1db4d99d7
+protocol_compression_algorithm: registry-prose-compaction+protected-reference-validation+solution-minimality-registration
+protocol_compression_baseline_ref: HEAD:vida/config/instructions/system-maps/protocol.index.md
+protocol_compression_audit_at: 2026-08-15T18:51:05+03:00
+protocol_compression_before_tokens: 7261
+protocol_compression_after_tokens: 7322
+protocol_compression_content_sha256: 49d7f2245ea0c3f6dd50ddd9ab857f6cbd46e033573b6d4c2b126f774a116a15

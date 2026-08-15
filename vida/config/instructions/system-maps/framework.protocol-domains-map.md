@@ -115,15 +115,17 @@ Purpose:
 
 1. step-scoped reasoning algorithms,
 2. cross-step continuity,
-3. worker-safe thinking subset,
-4. reasoning-time external validation triggers.
+3. change-producing solution minimality and semantic-owner selection,
+4. worker-safe thinking subset,
+5. reasoning-time external validation triggers.
 
 Canonical owner artifacts:
 
 1. `instruction-contracts/overlay.step-thinking-protocol`
 2. `instruction-contracts/overlay.session-context-continuity-protocol`
-3. `instruction-contracts/role.worker-thinking`
-4. `runtime-instructions/work.web-validation-protocol`
+3. `instruction-contracts/overlay.solution-minimality-protocol`
+4. `instruction-contracts/role.worker-thinking`
+5. `runtime-instructions/work.web-validation-protocol`
 
 ### 5. Bootstrap, Activation, And Overlay Binding
 
@@ -226,5 +228,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.protocol-domains-map.md
 created_at: '2026-03-12T10:59:09+02:00'
-updated_at: '2026-03-13T23:35:00+02:00'
+updated_at: 2026-08-15T18:51:05+03:00
 changelog_ref: framework.protocol-domains-map.changelog.jsonl

@@ -2,7 +2,7 @@
 
 Purpose: canonical algorithms for one orchestrator-reasoning step.
 
-Shared rules: embedded section anchors below are canonical algorithm owners; boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`; web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`; user-facing reporting must not expose intermediate chain-of-thought and `Thinking mode` is only a reporting label; required user-facing reports must expose concise external reasoning summary covering dominant evidence, decision path, or blocker; this protocol governs one active reasoning step only, while cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`; PR-CoT, MAR, 5-SOL, and META must preserve impact analysis for affected scope, contract impact, operational impact, follow-up, and residual risks; named algorithms are canonical flow templates over reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default; compact-triggered execution is default, expanding evidence/packets/categories/rubrics only for conflict, uncertainty, preservation risk, or admissibility pressure and preferring compact receipts unless escalation, closure proof, or user request requires expansion.
+Shared rules: embedded section anchors below are canonical algorithm owners; boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`; web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`; change-producing candidate minimality, semantic-owner selection, and minimum proof are owned by `instruction-contracts/overlay.solution-minimality-protocol`; user-facing reporting must not expose intermediate chain-of-thought and `Thinking mode` is only a reporting label; required user-facing reports must expose concise external reasoning summary covering dominant evidence, decision path, or blocker; this protocol governs one active reasoning step only, while cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`; PR-CoT, MAR, 5-SOL, and META must preserve impact analysis for affected scope, contract impact, operational impact, follow-up, and residual risks; named algorithms are canonical flow templates over reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default; compact-triggered execution is default, expanding evidence/packets/categories/rubrics only for conflict, uncertainty, preservation risk, or admissibility pressure and preferring compact receipts unless escalation, closure proof, or user request requires expansion.
 
 ## Embedded Algorithms (Canonical Sections)
 
@@ -113,7 +113,8 @@ STEPS:
      - If META: assemble the smallest lawful block flow from the registry below
      - Named algorithms may be used inside META only as exact template shortcuts
   6. If external facts affect the decision, delegate web validation to `runtime-instructions/work.web-validation-protocol`
-  7. Preserve concise execution receipts: selected blocks, gates, impact analysis, and any escalation reason
+   7. If the step selects a code, configuration, documentation, or process change, run `instruction-contracts/overlay.solution-minimality-protocol` after trace and constraint gates and before implementation selection
+   8. Preserve concise execution receipts: selected blocks, gates, impact analysis, any solution-minimality result, and any escalation reason
 ```
 
 ---
@@ -2359,13 +2360,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: 2026-07-03T13:30:00+03:00
+updated_at: 2026-08-15T18:51:05+03:00
 changelog_ref: overlay.step-thinking-protocol.changelog.jsonl
 protocol_authoring_gate: enforced
 protocol_compression_status: audit_passed
-protocol_compression_algorithm: coarse-to-fine-wrapper-compaction+scoring-table-normalization+algorithm-body-preserve-exact
-protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
-protocol_compression_audit_at: 2026-07-03T13:30:00+03:00
-protocol_compression_before_tokens: 19324
-protocol_compression_after_tokens: 19320
-protocol_compression_content_sha256: 2c35272af6397e165910de2576ecf0b688a1475d4ac78f574472ce53b95f3215
+protocol_compression_algorithm: coarse-to-fine-wrapper-compaction+scoring-table-normalization+algorithm-body-preserve-exact+solution-minimality-owner-routing
+protocol_compression_baseline_ref: HEAD:vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
+protocol_compression_audit_at: 2026-08-15T18:51:05+03:00
+protocol_compression_before_tokens: 19312
+protocol_compression_after_tokens: 19399
+protocol_compression_content_sha256: 87eeb8decaf49b1b254e6d0f7b687cf3de99d3ece50e4b490f29f1b14d226e9d
