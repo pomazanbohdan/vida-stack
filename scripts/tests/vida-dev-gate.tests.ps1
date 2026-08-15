@@ -14,6 +14,20 @@ Describe 'vida-dev-gate quality modes' {
         $script | Should -Match 'metric_blocker'
     }
 
+    It 'writes quality artifacts through the reparse-safe state writer' {
+        $script = Get-Content (Join-Path $PSScriptRoot '..\vida-dev-gate.ps1') -Raw
+        $qualityWriter = [regex]::Match(
+            $script,
+            '(?s)function New-QualityGateReport \{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Invoke-QualitySequence',
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+        ).Groups['body'].Value
+
+        $qualityWriter | Should -Not -BeNullOrEmpty
+        $qualityWriter | Should -Match '\| Write-SafeStateFile -Path \$planPath'
+        $qualityWriter | Should -Match '\| Write-SafeStateFile -Path \$reportPath'
+        $qualityWriter | Should -Not -Match 'Set-Content'
+    }
+
     It 'orchestrates one-pass quality proof sequence' {
         $script = Get-Content (Join-Path $PSScriptRoot '..\vida-dev-gate.ps1') -Raw
         $script | Should -Match 'quality-script-check'
