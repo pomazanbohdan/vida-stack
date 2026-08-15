@@ -213,6 +213,10 @@ mod tests {
             ),
             Some(ExceptionTakeoverStateLabel::AdmissibleNotActive)
         );
+        assert!(!exception_takeover_is_lawfully_active(
+            Some(&receipt),
+            Some(&recovery("blocked_open_delegated_cycle"))
+        ));
     }
 
     #[test]

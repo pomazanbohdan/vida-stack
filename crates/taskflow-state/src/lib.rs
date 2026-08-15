@@ -926,10 +926,12 @@ fn projection_checkpoint_cursor_number(cursor: &VidaEventCursor) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
-        JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
-        RunWorkflowJournalRepository, TaskStore, TaskflowStateError, run_workflow_snapshot_record,
-        validate_run_workflow_snapshot_record, verify_run_workflow_repository_conformance,
+        InMemoryOperationalJournal, InMemoryTaskStore, JournalAggregateSnapshotRecord,
+        JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
+        JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxState,
+        JournalProjectionFailure, OperationalJournal, RunWorkflowJournalRepository, TaskStore,
+        TaskflowStateError, run_workflow_snapshot_record, validate_run_workflow_snapshot_record,
+        verify_run_workflow_repository_conformance,
         verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use taskflow_contracts::{
@@ -1344,6 +1346,55 @@ mod tests {
         assert_eq!(report.run_id, "run-031");
         assert_eq!(report.event_count, 2);
         assert!(!report.final_snapshot_hash.is_empty());
+    }
+
+    #[test]
+    fn conformance_reports_exact_state_mismatch_for_empty_replay() {
+        let mut journal = NoReplayJournal;
+
+        let error = verify_run_workflow_repository_conformance(&mut journal, "run-empty-replay")
+            .expect_err("an empty replay must fail the conformance state check");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::Storage("run workflow repository replay state mismatch".into())
+        );
+    }
+
+    #[test]
+    fn corrupt_payload_guard_preserves_correlation_metadata() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let run_id = "run-corrupt-correlation";
+
+        verify_run_workflow_repository_corrupt_payload_fails_closed(&mut journal, run_id)
+            .expect("corrupt payload should fail closed with a decode error");
+        assert!(
+            journal
+                .append_idempotency
+                .get(&format!("run-workflow:{run_id}:1"))
+                .expect("corrupt-payload append idempotency row")
+                .request_fingerprint
+                .contains("Some(\"ldr-031\")"),
+            "correlation metadata must remain part of the append fingerprint"
+        );
+    }
+
+    #[test]
+    fn corrupt_payload_guard_reports_exact_success_message_for_noop_replay() {
+        let mut journal = NoReplayJournal;
+
+        let error = verify_run_workflow_repository_corrupt_payload_fails_closed(
+            &mut journal,
+            "run-corrupt-noop",
+        )
+        .expect_err("a no-op replay must expose the exact corrupt-payload guard");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::Storage(
+                "corrupt run workflow repository payload loaded successfully".into()
+            )
+        );
     }
 
     #[test]
@@ -1833,6 +1884,105 @@ mod tests {
             correlation_id: Some("correlation-1".to_string()),
             events,
             effect_intents,
+        }
+    }
+
+    struct NoReplayJournal;
+
+    impl OperationalJournal for NoReplayJournal {
+        fn append(
+            &mut self,
+            request: JournalAppendRequest,
+        ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+            Ok(JournalAppendReceipt {
+                stream_id: request.stream_id,
+                first_global_cursor: None,
+                last_global_cursor: None,
+                stream_version: VidaStreamVersion(0),
+                event_count: request.events.len(),
+                effect_intent_count: request.effect_intents.len(),
+            })
+        }
+
+        fn load_stream(&self, _stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope> {
+            Vec::new()
+        }
+
+        fn read_global_after(
+            &self,
+            _cursor: Option<&VidaEventCursor>,
+            _limit: usize,
+        ) -> Vec<JournalEventRecord> {
+            Vec::new()
+        }
+
+        fn record_idempotency_started(
+            &mut self,
+            _key: VidaIdempotencyKey,
+            _command_id: VidaCommandRef,
+        ) -> Result<(), TaskflowStateError> {
+            Ok(())
+        }
+
+        fn record_idempotency_completed(
+            &mut self,
+            _key: &VidaIdempotencyKey,
+            _receipt_id: VidaReceiptId,
+        ) -> Result<(), TaskflowStateError> {
+            Ok(())
+        }
+
+        fn record_idempotency_conflicted(
+            &mut self,
+            _key: &VidaIdempotencyKey,
+            _reason: String,
+        ) -> Result<(), TaskflowStateError> {
+            Ok(())
+        }
+
+        fn idempotency_record(
+            &self,
+            _key: &VidaIdempotencyKey,
+        ) -> Option<&JournalIdempotencyRecord> {
+            None
+        }
+
+        fn claim_outbox_batch(
+            &mut self,
+            _consumer_id: &str,
+            _limit: usize,
+        ) -> Vec<super::JournalOutboxRecord> {
+            Vec::new()
+        }
+
+        fn mark_outbox_succeeded(
+            &mut self,
+            _outbox_id: &VidaEventRef,
+        ) -> Result<(), TaskflowStateError> {
+            Ok(())
+        }
+
+        fn mark_outbox_failed(
+            &mut self,
+            _outbox_id: &VidaEventRef,
+            _reason: String,
+        ) -> Result<(), TaskflowStateError> {
+            Ok(())
+        }
+
+        fn record_projection_checkpoint(&mut self, _checkpoint: VidaProjectionCheckpoint) {}
+
+        fn record_projection_failure(&mut self, _failure: JournalProjectionFailure) {}
+
+        fn index_artifact(&mut self, _artifact: JournalArtifactRecord) {}
+
+        fn record_aggregate_snapshot(&mut self, _snapshot: JournalAggregateSnapshotRecord) {}
+
+        fn aggregate_snapshot(
+            &self,
+            _aggregate_id: &VidaAggregateRef,
+        ) -> Option<JournalAggregateSnapshotRecord> {
+            None
         }
     }
 

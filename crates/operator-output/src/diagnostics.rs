@@ -108,8 +108,8 @@ mod tests {
 
     use super::OperatorContractDiagnostic;
     use crate::operator_contracts::{
-        finalize_release1_operator_surface_verdict_with_status,
-        shared_operator_output_contract_parity_error, OperatorSurfaceVerdict,
+        OperatorSurfaceVerdict, finalize_release1_operator_surface_verdict_with_status,
+        shared_operator_output_contract_parity_error,
     };
 
     #[test]
@@ -180,6 +180,10 @@ mod tests {
             diagnostic.primary_help(),
             "repair the payload so it matches the published schema"
         );
+        assert_eq!(
+            diagnostic.schema_ref,
+            json!({"schema_id": "vida.command_envelope", "version": 1})
+        );
     }
 
     #[test]
@@ -200,6 +204,22 @@ mod tests {
         assert_eq!(diagnostic.next_actions, vec!["run migration"]);
         assert_eq!(diagnostic.artifact_refs, json!({"source": "operator"}));
         assert_eq!(diagnostic.primary_help(), "run migration");
+    }
+
+    #[test]
+    fn diagnostic_trims_surface_label() {
+        let verdict = OperatorSurfaceVerdict {
+            status: "blocked".to_string(),
+            blocker_codes: vec!["migration_required".to_string()],
+            next_actions: vec!["run migration".to_string()],
+            artifact_refs: json!({}),
+            shared_fields: json!({}),
+            operator_contracts: json!({}),
+        };
+
+        let diagnostic = OperatorContractDiagnostic::from_verdict("  vida status  ", &verdict)
+            .expect("blocked verdict should produce a diagnostic");
+        assert_eq!(diagnostic.surface, "vida status");
     }
 
     #[test]

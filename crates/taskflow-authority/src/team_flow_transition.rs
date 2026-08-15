@@ -2313,6 +2313,234 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_boundary_matrix_preserves_identity_and_node_errors() {
+        let mut selected_flow = fixture();
+        selected_flow["selected_flow_set"] = serde_json::json!("other-flow");
+        assert_eq!(
+            compile(&selected_flow),
+            Err(TeamFlowSnapshotError::FlowIdentityMismatch {
+                expected: "flow-a".to_string(),
+                actual: "other-flow".to_string()
+            })
+        );
+
+        let mut empty_flow = fixture();
+        empty_flow["ordered_steps"] = serde_json::json!([]);
+        assert_eq!(compile(&empty_flow), Err(TeamFlowSnapshotError::EmptyFlow));
+
+        let mut string_step = fixture();
+        string_step["ordered_steps"][0] = serde_json::json!(" node-a ");
+        let mut string_role = fixture()["ordered_steps"][0].clone();
+        string_role["runtime_role"] = serde_json::json!("runtime-a");
+        string_role["task_classes"] = serde_json::json!(["class-a"]);
+        string_step["roles"]["node-a"] = string_role;
+        assert_eq!(
+            compile(&string_step),
+            Err(TeamFlowSnapshotError::MissingNodeField {
+                node: "node-a".to_string(),
+                field: "proof_gates/evidence_requirements"
+            })
+        );
+
+        let mut blank_step = fixture();
+        blank_step["ordered_steps"][0] = serde_json::json!("   ");
+        assert_eq!(
+            compile(&blank_step),
+            Err(TeamFlowSnapshotError::InvalidNode(0))
+        );
+
+        let mut missing_node = fixture();
+        let step = missing_node["ordered_steps"][0]
+            .as_object_mut()
+            .expect("fixture step");
+        step.remove("role_id");
+        step.remove("node_id");
+        step.remove("step_id");
+        assert_eq!(
+            compile(&missing_node),
+            Err(TeamFlowSnapshotError::MissingNodeField {
+                node: "0".to_string(),
+                field: "node_id"
+            })
+        );
+    }
+
+    #[test]
+    fn snapshot_entry_and_mapping_outputs_are_bound() {
+        let mut missing_entry = fixture();
+        missing_entry["entry_node_id"] = serde_json::json!("missing");
+        assert_eq!(
+            compile(&missing_entry),
+            Err(TeamFlowSnapshotError::InvalidEdge {
+                node: "entry_node_id".to_string(),
+                target: "missing".to_string()
+            })
+        );
+
+        let mut excluded_entry = fixture();
+        excluded_entry["ordered_steps"][0]["included"] = serde_json::json!(false);
+        assert_eq!(
+            compile(&excluded_entry),
+            Err(TeamFlowSnapshotError::InvalidEdge {
+                node: "entry_node_id".to_string(),
+                target: "node-a".to_string()
+            })
+        );
+
+        let mut mapped = fixture();
+        mapped["ordered_steps"][0]["command_ref"] = serde_json::json!("command-a");
+        mapped["ordered_steps"][0]["command_mapping"] =
+            serde_json::json!({"command_id": "command-a", "surface": "test.surface"});
+        mapped["command_catalog"] = serde_json::json!({"command-a": {"command_id": "command-a", "surface": "test.surface"}});
+        let snapshot = compile(&mapped).expect("mapped command should compile");
+        assert!(snapshot.nodes[0].command_mapping_hash.is_some());
+    }
+
+    #[test]
+    fn identity_matrix_rejects_each_empty_component() {
+        for field in [
+            "config_id",
+            "profile",
+            "flow_ref",
+            "config_hash",
+            "registry_hash",
+            "snapshot_ref",
+        ] {
+            let mut candidate = snapshot();
+            match field {
+                "config_id" => candidate.config_id.clear(),
+                "profile" => candidate.profile.clear(),
+                "flow_ref" => candidate.flow_ref.clear(),
+                "config_hash" => candidate.config_hash.clear(),
+                "registry_hash" => candidate.registry_hash.clear(),
+                "snapshot_ref" => candidate.snapshot_ref.clear(),
+                _ => unreachable!(),
+            }
+            if field != "snapshot_ref" {
+                candidate.snapshot_ref = hash_snapshot(&candidate);
+            }
+            assert!(!candidate.has_valid_identity(), "field={field}");
+        }
+    }
+
+    #[test]
+    fn admission_identity_matrix_rejects_each_empty_component() {
+        for field in [
+            "config_id",
+            "profile",
+            "flow_ref",
+            "config_hash",
+            "registry_hash",
+            "snapshot_ref",
+        ] {
+            let mut candidate = snapshot();
+            match field {
+                "config_id" => candidate.config_id.clear(),
+                "profile" => candidate.profile.clear(),
+                "flow_ref" => candidate.flow_ref.clear(),
+                "config_hash" => candidate.config_hash.clear(),
+                "registry_hash" => candidate.registry_hash.clear(),
+                "snapshot_ref" => candidate.snapshot_ref.clear(),
+                _ => unreachable!(),
+            }
+            let verdict = admit_transition(&candidate, "node-a", None, "node-c");
+            assert_eq!(
+                verdict.blocker.as_deref(),
+                Some(BLOCKER_MISSING_SNAPSHOT_CONFIG_MAPPING),
+                "field={field}"
+            );
+        }
+    }
+
+    #[test]
+    fn admission_blockers_preserve_expected_next_node() {
+        let snapshot = snapshot();
+
+        let excluded = admit_transition(&snapshot, "node-b", None, "node-c");
+        assert_eq!(
+            excluded.blocker.as_deref(),
+            Some(BLOCKER_CURRENT_NODE_NOT_INCLUDED)
+        );
+        assert_eq!(excluded.expected.as_deref(), Some("node-c"));
+
+        let missing_receipt = admit_transition(&snapshot, "node-a", None, "node-c");
+        assert_eq!(
+            missing_receipt.blocker.as_deref(),
+            Some(BLOCKER_RECEIPT_REQUIRED)
+        );
+        assert_eq!(missing_receipt.expected.as_deref(), Some("node-b"));
+
+        let mut config_mismatch = receipt(&snapshot, "node-a", "pass");
+        config_mismatch.config_hash = "changed".to_string();
+        let verdict = admit_transition(&snapshot, "node-a", Some(&config_mismatch), "node-c");
+        assert_eq!(
+            verdict.blocker.as_deref(),
+            Some(BLOCKER_CONFIG_HASH_MISMATCH)
+        );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+
+        let mut snapshot_mismatch = receipt(&snapshot, "node-a", "pass");
+        snapshot_mismatch.snapshot_ref = "changed".to_string();
+        let verdict = admit_transition(&snapshot, "node-a", Some(&snapshot_mismatch), "node-c");
+        assert_eq!(
+            verdict.blocker.as_deref(),
+            Some(BLOCKER_SNAPSHOT_HASH_MISMATCH)
+        );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+
+        let node_mismatch = receipt(&snapshot, "node-b", "pass");
+        let verdict = admit_transition(&snapshot, "node-a", Some(&node_mismatch), "node-c");
+        assert_eq!(
+            verdict.blocker.as_deref(),
+            Some(BLOCKER_RECEIPT_NODE_MISMATCH)
+        );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+
+        let unknown_status = receipt(&snapshot, "node-a", "unknown");
+        let verdict = admit_transition(&snapshot, "node-a", Some(&unknown_status), "node-c");
+        assert_eq!(
+            verdict.blocker.as_deref(),
+            Some(BLOCKER_RECEIPT_NOT_COMPLETED)
+        );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+
+        let missing_current = admit_transition(
+            &snapshot,
+            "",
+            Some(&receipt(&snapshot, "node-a", "pass")),
+            "node-c",
+        );
+        assert_eq!(
+            missing_current.blocker.as_deref(),
+            Some(BLOCKER_CURRENT_NODE_MISSING)
+        );
+
+        let empty_request = admit_transition(
+            &snapshot,
+            "node-a",
+            Some(&receipt(&snapshot, "node-a", "pass")),
+            "",
+        );
+        assert_eq!(
+            empty_request.blocker.as_deref(),
+            Some(BLOCKER_INVALID_REQUESTED_NODE)
+        );
+        assert_eq!(empty_request.expected.as_deref(), Some("node-c"));
+
+        let wrong_request = admit_transition(
+            &snapshot,
+            "node-a",
+            Some(&receipt(&snapshot, "node-a", "pass")),
+            "node-b",
+        );
+        assert_eq!(
+            wrong_request.blocker.as_deref(),
+            Some(BLOCKER_INVALID_REQUESTED_NODE)
+        );
+        assert_eq!(wrong_request.expected.as_deref(), Some("node-c"));
+    }
+
+    #[test]
     fn conditional_exclusion_skips_optional_node() {
         let snapshot = snapshot();
         let verdict = admit_transition(
@@ -2323,6 +2551,7 @@ mod tests {
         );
         assert!(verdict.allowed);
         assert_eq!(verdict.next_node.as_deref(), Some("node-c"));
+        assert!(!verdict.rework);
     }
 
     #[test]
@@ -2371,6 +2600,8 @@ mod tests {
             invented.blocker.as_deref(),
             Some(BLOCKER_TERMINAL_TRANSITION_NOT_CONFIGURED)
         );
+        assert_eq!(invented.expected, None);
+        assert!(!verdict.rework);
     }
 
     #[test]
@@ -2412,6 +2643,7 @@ mod tests {
             pass.blocker.as_deref(),
             Some(BLOCKER_USER_APPROVAL_REQUIRED)
         );
+        assert_eq!(pass.expected.as_deref(), Some("node-c"));
         let approve = admit_transition(
             &snapshot,
             "node-a",
@@ -2419,6 +2651,7 @@ mod tests {
             "node-c",
         );
         assert!(approve.allowed);
+        assert_eq!(approve.expected.as_deref(), Some("node-c"));
     }
 
     #[test]
@@ -2504,6 +2737,8 @@ mod tests {
             verdict.blocker.as_deref(),
             Some(BLOCKER_REQUIRED_EVIDENCE_MISSING)
         );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+        assert_eq!(verdict.evidence_requirements, vec!["proof-a"]);
 
         let mut path_only = missing;
         path_only.evidence = vec!["C:/tmp/proof-a.json".to_string()];
@@ -2512,6 +2747,8 @@ mod tests {
             verdict.blocker.as_deref(),
             Some(BLOCKER_REQUIRED_EVIDENCE_MISSING)
         );
+        assert_eq!(verdict.expected.as_deref(), Some("node-b"));
+        assert_eq!(verdict.evidence_requirements, vec!["proof-a"]);
     }
 
     #[test]
@@ -2536,6 +2773,7 @@ mod tests {
             blocked.blocker.as_deref(),
             Some(BLOCKER_REWORK_TARGET_NOT_CONFIGURED)
         );
+        assert_eq!(blocked.expected.as_deref(), Some("node-b"));
     }
 
     #[test]

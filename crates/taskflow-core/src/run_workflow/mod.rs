@@ -773,6 +773,120 @@ mod tests {
     }
 
     #[test]
+    fn status_mapping_exercises_suffix_and_status_fallback_branches() {
+        assert_eq!(
+            map_lifecycle_status("custom-timeout", "running"),
+            StatusMappingDecision::State(RunWorkflowState::RecoveryBlocked)
+        );
+        assert_eq!(
+            map_lifecycle_status("custom-complete", "pending"),
+            StatusMappingDecision::State(RunWorkflowState::Completed)
+        );
+        assert_eq!(
+            map_lifecycle_status("custom-rework-required", "running"),
+            StatusMappingDecision::State(RunWorkflowState::LaneBlocked)
+        );
+        assert_eq!(
+            map_lifecycle_status("custom-blocked", "running"),
+            StatusMappingDecision::State(RunWorkflowState::LaneBlocked)
+        );
+        assert!(matches!(
+            map_lifecycle_status("custom-stage", "ready"),
+            StatusMappingDecision::State(RunWorkflowState::Active { ref step })
+                if step.role_id == "custom_stage"
+        ));
+        assert_eq!(
+            map_lifecycle_status("custom-stage", "blocked"),
+            StatusMappingDecision::State(RunWorkflowState::LaneBlocked)
+        );
+    }
+
+    #[test]
+    fn transition_matrix_preserves_each_named_completion_and_failure_row() {
+        let matrix = transition_matrix();
+        let developer = matrix
+            .iter()
+            .find(|row| row.command == "complete_developer")
+            .expect("developer completion row");
+        assert!(developer.admitted);
+        assert_eq!(
+            developer.to,
+            RunWorkflowState::from_role_step(RoleStep::tester())
+        );
+
+        let tester = matrix
+            .iter()
+            .find(|row| row.command == "complete_tester")
+            .expect("tester completion row");
+        assert!(tester.admitted);
+        assert_eq!(
+            tester.to,
+            RunWorkflowState::from_role_step(RoleStep::closure())
+        );
+
+        let failed = matrix
+            .iter()
+            .find(|row| row.command == "fail")
+            .expect("failure row");
+        assert!(failed.admitted);
+        assert_eq!(failed.to, RunWorkflowState::Failed);
+        assert!(transition_matrix_mermaid().contains("fail"));
+    }
+
+    #[test]
+    fn snapshot_replay_hash_exposes_identity_and_version() {
+        let aggregate = RunWorkflowAggregate::from_snapshot(
+            "run-hash",
+            "task-hash",
+            RunWorkflowState::Completed,
+            7,
+        );
+        let hash = aggregate.snapshot_replay_hash();
+        assert!(!hash.is_empty());
+        assert!(hash.contains("run-hash"));
+        assert!(hash.contains("task-hash"));
+        assert!(hash.contains("completed"));
+        assert!(hash.contains('7'));
+    }
+
+    #[test]
+    fn status_mapping_accepts_each_completion_and_active_status_source() {
+        assert_eq!(
+            map_lifecycle_status("custom-stage", "completed"),
+            StatusMappingDecision::State(RunWorkflowState::Completed)
+        );
+        for status in ["ready", "running", "awaiting_approval"] {
+            assert!(matches!(
+                map_lifecycle_status("custom-stage", status),
+                StatusMappingDecision::State(RunWorkflowState::Active { ref step })
+                    if step.role_id == "custom_stage"
+            ));
+        }
+    }
+
+    #[test]
+    fn transition_matrix_failure_row_preserves_failure_code() {
+        let mut aggregate = RunWorkflowAggregate::from_snapshot(
+            "run-failure",
+            "task-failure",
+            RunWorkflowState::from_role_step(RoleStep::planning()),
+            0,
+        );
+        let event = aggregate.handle(RunWorkflowCommand::Fail {
+            code: "failed".to_string(),
+            retryable: false,
+        });
+        assert_eq!(
+            event.command,
+            RunWorkflowCommand::Fail {
+                code: "failed".to_string(),
+                retryable: false
+            }
+        );
+        assert_eq!(event.state_after, RunWorkflowState::Failed);
+    }
+
+    #[test]
     fn aggregate_actions_emit_effect_intents_without_io_payloads() {
         let mut aggregate = RunWorkflowAggregate::new("run-020", "ldr-020");
         let event = aggregate.handle(RunWorkflowCommand::Start {

@@ -839,7 +839,10 @@ mod tests {
             effective["adapter_operations"]["operations"]["dispose"],
             "configured.dispose"
         );
-        assert_eq!(effective["adapter_operations"]["dispose_policy"], "configured");
+        assert_eq!(
+            effective["adapter_operations"]["dispose_policy"],
+            "configured"
+        );
     }
 
     #[test]
@@ -872,26 +875,38 @@ mod tests {
     #[test]
     fn blocked_result_contract_retryability_requires_each_independent_signal() {
         let cases = [
-            (serde_json::json!({
-                "allowed_next_node": "alpha_rework",
-                "decision": "rework_required",
-                "verdict": "rework_required"
-            }), true),
-            (serde_json::json!({
-                "allowed_next_node": "alpha_rework",
-                "decision": "approved",
-                "verdict": "rework_required"
-            }), false),
-            (serde_json::json!({
-                "allowed_next_node": "alpha_rework",
-                "decision": "rework_required",
-                "verdict": "approved"
-            }), false),
-            (serde_json::json!({
-                "allowed_next_node": "next",
-                "decision": "rework_required",
-                "verdict": "rework_required"
-            }), false),
+            (
+                serde_json::json!({
+                    "allowed_next_node": "alpha_rework",
+                    "decision": "rework_required",
+                    "verdict": "rework_required"
+                }),
+                true,
+            ),
+            (
+                serde_json::json!({
+                    "allowed_next_node": "alpha_rework",
+                    "decision": "approved",
+                    "verdict": "rework_required"
+                }),
+                false,
+            ),
+            (
+                serde_json::json!({
+                    "allowed_next_node": "alpha_rework",
+                    "decision": "rework_required",
+                    "verdict": "approved"
+                }),
+                false,
+            ),
+            (
+                serde_json::json!({
+                    "allowed_next_node": "next",
+                    "decision": "rework_required",
+                    "verdict": "rework_required"
+                }),
+                false,
+            ),
         ];
 
         for (contract, expected) in cases {
@@ -1050,7 +1065,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn read_request_rejects_oversized_payload_with_exact_path() {
         let root = temp_root("oversized-payload");
@@ -1074,7 +1088,6 @@ mod tests {
             "unexpected oversized-payload error: {err:?}"
         );
     }
-
 
     #[test]
     fn read_request_accepts_exact_size_before_json_validation() {
@@ -1209,7 +1222,6 @@ mod tests {
         ));
     }
 
-
     #[test]
     fn legacy_ingress_requires_both_non_blank_adapter_tools() {
         let mut base = complete_current_request();
@@ -1235,14 +1247,18 @@ mod tests {
 
         let mut operation_present = base.clone();
         operation_present["adapter_operations"] = serde_json::json!({});
-        assert!(!legacy_internal_subagents_host_bridge_request(&operation_present));
+        assert!(!legacy_internal_subagents_host_bridge_request(
+            &operation_present
+        ));
 
         let mut missing_params = base.clone();
         missing_params
             .as_object_mut()
             .expect("request object")
             .remove("adapter_params");
-        assert!(!legacy_internal_subagents_host_bridge_request(&missing_params));
+        assert!(!legacy_internal_subagents_host_bridge_request(
+            &missing_params
+        ));
 
         for params in [
             serde_json::json!({"wait_tool": "legacy.wait"}),

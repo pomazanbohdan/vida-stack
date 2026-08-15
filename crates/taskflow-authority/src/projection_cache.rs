@@ -171,6 +171,29 @@ mod tests {
                 has_operator_contracts: false,
             }
         ));
+        assert!(!cached_status_projection_has_required_shape(
+            false,
+            &CachedProjectionShape {
+                has_current_session: false,
+                has_storage_metadata: true,
+                has_state_spine: false,
+                has_operator_contracts: true,
+            }
+        ));
+        let summary_projection = CachedStatusProjection {
+            shape: CachedProjectionShape::default(),
+            ..projection()
+        };
+        assert!(cached_status_projection_admissible(
+            true,
+            &summary_projection,
+            &current_session()
+        ));
+        assert!(!cached_status_projection_admissible(
+            false,
+            &summary_projection,
+            &current_session()
+        ));
     }
 
     #[test]

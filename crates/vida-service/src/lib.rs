@@ -300,8 +300,22 @@ mod tests {
             .expect("read replayable commands");
 
         assert_eq!(replayable.len(), 1);
+        assert_eq!(
+            replayable[0].request_id,
+            "vida-service-request-vida.service.status"
+        );
         assert_eq!(replayable[0].operation, operations::SERVICE_STATUS);
         assert_eq!(replayable[0].replay_state, "accepted_replayable");
+    }
+
+    #[test]
+    fn local_default_projects_service_journal_path() {
+        let config = ServiceDaemonConfig::local_default();
+
+        assert_eq!(
+            config.journal_path,
+            std::env::temp_dir().join("vida-service-accepted-commands.jsonl")
+        );
     }
 
     #[test]
@@ -444,6 +458,34 @@ mod tests {
             plan.planned_actions
                 .iter()
                 .any(|action| action.contains("install"))
+        );
+    }
+
+    #[test]
+    fn sample_status_request_projects_contract_fields_and_claims() {
+        let request = sample_status_request(operations::SERVICE_STATUS);
+
+        assert_eq!(
+            request.schema_version,
+            vida_contracts::VIDA_CONTRACTS_SCHEMA_VERSION
+        );
+        assert_eq!(
+            request.protocol_version,
+            vida_contracts::VIDA_COMMAND_PROTOCOL_VERSION
+        );
+        assert_eq!(request.operation.0, operations::SERVICE_STATUS);
+        assert_eq!(request.session_id.0, "vida-service-test-session");
+        assert_eq!(
+            request.request_id.0,
+            "vida-service-request-vida.service.status"
+        );
+        assert_eq!(
+            request.claim_kind,
+            Some(vida_contracts::VidaClaimKind::SharedRead)
+        );
+        assert_eq!(
+            request.idempotency_key.map(|key| key.0),
+            Some("vida-service-idem-vida.service.status".to_string())
         );
     }
 

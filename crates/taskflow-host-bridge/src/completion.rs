@@ -204,6 +204,59 @@ fn activation_only_routed_lane_is_orphaned_without_execution_evidence() {
         false,
         false,
     ));
+
+    for (dispatch_kind, dispatch_surface, dispatch_status, lane_status, has_result, has_receipt) in [
+        (
+            "worker",
+            Some("vida agent-init"),
+            "routed",
+            "lane_open",
+            false,
+            false,
+        ),
+        ("agent_lane", None, "routed", "lane_open", false, false),
+        (
+            "agent_lane",
+            Some("vida agent-init"),
+            "executing",
+            "lane_open",
+            false,
+            false,
+        ),
+        (
+            "agent_lane",
+            Some("vida agent-init"),
+            "routed",
+            "lane_running",
+            false,
+            false,
+        ),
+        (
+            "agent_lane",
+            Some("vida agent-init"),
+            "routed",
+            "lane_open",
+            true,
+            false,
+        ),
+        (
+            "agent_lane",
+            Some("vida agent-init"),
+            "routed",
+            "lane_open",
+            false,
+            true,
+        ),
+    ] {
+        assert!(!host_bridge_activation_only_orphaned_lane(
+            dispatch_kind,
+            dispatch_surface,
+            dispatch_status,
+            lane_status,
+            has_result,
+            has_receipt,
+        ));
+    }
 }
 
 #[must_use]
@@ -842,6 +895,35 @@ mod tests {
     }
 
     #[test]
+    fn completion_evidence_is_ready_when_provenance_and_receipt_are_accepted() {
+        let evidence = materialize_host_bridge_completion_evidence(&HostBridgeCompletionInput {
+            request: minimal_request(),
+            provenance: HostBridgeProvenanceDecision {
+                accepted: true,
+                blocker_codes: Vec::new(),
+                reason: "ok".to_string(),
+            },
+            receipt_binding: DispatchReceiptBindingDecision {
+                accepted: true,
+                blocker_codes: Vec::new(),
+                reason: "ok".to_string(),
+            },
+            artifact_refs: vec![PathBuf::from("artifacts/completion.json")],
+        });
+
+        assert_eq!(evidence.status, "pass");
+        assert_eq!(evidence.blocker_codes, Vec::<String>::new());
+        assert!(evidence.completion_ready);
+        assert_eq!(evidence.request_id, "req-1");
+        assert_eq!(evidence.run_id, "run-1");
+        assert_eq!(evidence.dispatch_target, "developer");
+        assert_eq!(
+            evidence.artifact_refs,
+            vec![PathBuf::from("artifacts/completion.json")]
+        );
+    }
+
+    #[test]
     fn retryable_completion_status_normalizes_only_status_blocker() {
         let provenance = HostBridgeProvenanceDecision {
             accepted: false,
@@ -1162,6 +1244,115 @@ mod tests {
         assert!(!host_bridge_result_declares_no_code_change(Some(
             &implicit_empty_patch
         )));
+        assert!(!host_bridge_result_declares_no_code_change(None));
+    }
+
+    #[test]
+    fn result_verdict_contract_is_strict_about_tuple_conjunctions_and_blocker_values() {
+        let required_fields = vec![
+            "status",
+            "execution_state",
+            "decision",
+            "verdict",
+            "blocker_codes",
+            "rework_target",
+            "allowed_next_node",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        for (status, execution_state, decision, verdict) in [
+            ("pass", "blocked", "rework_required", "rework_required"),
+            ("blocked", "executed", "rework_required", "rework_required"),
+            ("blocked", "blocked", "rework_required", "pass"),
+            ("blocked", "blocked", "approve", "rework_required"),
+        ] {
+            let result = serde_json::json!({
+                "status": status,
+                "execution_state": execution_state,
+                "decision": decision,
+                "verdict": verdict,
+                "blocker_codes": ["alpha_rework_required"],
+                "rework_target": "alpha_impl",
+                "allowed_next_node": "alpha_impl"
+            });
+            let blockers = host_bridge_result_verdict_contract_blockers(&result, &required_fields);
+            assert!(
+                blockers
+                    .iter()
+                    .any(|blocker| blocker == "host_bridge_result_decision_verdict_mismatch"),
+                "expected tuple mismatch for {status}/{execution_state}/{decision}/{verdict}, got {blockers:?}"
+            );
+        }
+
+        let partial = serde_json::json!({"status": "pass"});
+        let partial_blockers =
+            host_bridge_result_verdict_contract_blockers(&partial, &required_fields);
+        assert!(
+            partial_blockers
+                .iter()
+                .any(|blocker| blocker == "host_bridge_result_missing_verdict_field")
+        );
+        assert!(
+            !partial_blockers
+                .iter()
+                .any(|blocker| blocker == "host_bridge_result_decision_verdict_mismatch")
+        );
+
+        for partial in [
+            serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve"
+            }),
+            serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed"
+            }),
+        ] {
+            let blockers = host_bridge_result_verdict_contract_blockers(&partial, &required_fields);
+            assert!(
+                !blockers
+                    .iter()
+                    .any(|blocker| blocker == "host_bridge_result_decision_verdict_mismatch"),
+                "incomplete tuple must not report mismatch: {blockers:?}"
+            );
+        }
+
+        let invalid_blocker = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [null],
+            "rework_target": null,
+            "allowed_next_node": "closure"
+        });
+        let blockers =
+            host_bridge_result_verdict_contract_blockers(&invalid_blocker, &required_fields);
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker == "host_bridge_result_invalid_blocker_codes")
+        );
+
+        let custom_required = vec!["custom_gate_output".to_string()];
+        let custom_blockers = host_bridge_result_verdict_contract_blockers(
+            &serde_json::json!({
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": null,
+                "allowed_next_node": "closure"
+            }),
+            &custom_required,
+        );
+        assert!(
+            custom_blockers
+                .iter()
+                .any(|blocker| blocker == "host_bridge_result_missing_verdict_field")
+        );
     }
 
     #[test]
@@ -1264,6 +1455,15 @@ mod tests {
         assert_eq!(fields.decision, "rework_required");
         assert_eq!(fields.rework_target, Some("alpha_impl".to_string()));
         assert_eq!(fields.allowed_next_node, "alpha_impl_rework");
+
+        let fallback = host_bridge_result_verdict_fields_for_gate_and_contract(
+            "beta_gate",
+            &["beta_gate_rework_required".to_string()],
+            None,
+            None,
+        );
+        assert_eq!(fallback.rework_target, Some("beta_gate".to_string()));
+        assert_eq!(fallback.allowed_next_node, "beta_gate");
     }
 
     #[test]
@@ -1434,6 +1634,69 @@ mod tests {
             &request,
             &mismatched
         ));
+
+        for (field, value) in [
+            ("status", serde_json::json!("garbage")),
+            ("execution_state", serde_json::json!("queued")),
+            ("artifact_kind", serde_json::json!("other_result")),
+            ("completion_receipt_id", serde_json::json!("other-receipt")),
+            ("source_dispatch_packet_path", serde_json::json!("")),
+            ("allowed_next_node", serde_json::json!("next")),
+        ] {
+            let mut invalid = result.clone();
+            invalid[field] = value;
+            assert!(
+                !host_bridge_completed_result_has_preview_refresh_evidence(&request, &invalid),
+                "field {field} must invalidate preview refresh evidence"
+            );
+        }
+
+        let mut receipt_not_backed = result.clone();
+        receipt_not_backed["execution_evidence"]["receipt_backed"] = serde_json::json!(false);
+        assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
+            &request,
+            &receipt_not_backed
+        ));
+
+        let mut missing_receipt_id = result.clone();
+        missing_receipt_id["execution_evidence"]["receipt_id"] = serde_json::json!("");
+        assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
+            &request,
+            &missing_receipt_id
+        ));
+    }
+
+    #[test]
+    fn completion_provenance_normalization_preserves_acceptance_and_reason_semantics() {
+        let accepted = HostBridgeProvenanceDecision {
+            accepted: true,
+            blocker_codes: Vec::new(),
+            reason: "accepted".to_string(),
+        };
+        let normalized = normalize_host_bridge_provenance_for_completion(&accepted, false);
+        assert!(normalized.accepted);
+        assert_eq!(normalized.reason, "accepted");
+
+        let retryable_empty = HostBridgeProvenanceDecision {
+            accepted: false,
+            blocker_codes: Vec::new(),
+            reason: "retryable".to_string(),
+        };
+        let normalized = normalize_host_bridge_provenance_for_completion(&retryable_empty, true);
+        assert!(normalized.accepted);
+        assert_eq!(normalized.reason, "retryable");
+
+        let rejected = HostBridgeProvenanceDecision {
+            accepted: false,
+            blocker_codes: vec!["hard_block".to_string()],
+            reason: "ignored".to_string(),
+        };
+        let normalized = normalize_host_bridge_provenance_for_completion(&rejected, false);
+        assert!(!normalized.accepted);
+        assert_eq!(
+            normalized.reason,
+            "host bridge request provenance rejected fail-closed"
+        );
     }
 
     #[test]
@@ -1496,6 +1759,22 @@ mod tests {
             "developer",
             "runtime-consumption/other-packet.json"
         ));
+
+        for field in ["request_id", "run_id", "dispatch_target", "packet_path"] {
+            let mut missing = request.clone();
+            missing[field] = serde_json::json!("");
+            assert!(
+                !host_bridge_completion_identity_matches(
+                    &missing,
+                    &result,
+                    Some(&receipt),
+                    "run-1",
+                    "developer",
+                    "runtime-consumption/dispatch-packet.json"
+                ),
+                "missing request identity field {field} must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -1671,6 +1950,28 @@ mod tests {
         assert!(!host_bridge_completion_requires_implementation_artifacts(
             "beta_verify"
         ));
+
+        let task_class_request = serde_json::json!({"task_class": "implementation"});
+        assert!(
+            host_bridge_request_effectively_requires_implementation_artifacts(
+                &task_class_request,
+                "alpha_impl"
+            )
+        );
+
+        let target_request = serde_json::json!({});
+        assert!(
+            host_bridge_request_effectively_requires_implementation_artifacts(
+                &target_request,
+                "developer"
+            )
+        );
+        assert!(
+            !host_bridge_request_effectively_requires_implementation_artifacts(
+                &target_request,
+                "alpha_impl"
+            )
+        );
     }
 
     #[test]
@@ -1788,9 +2089,15 @@ mod tests {
         assert!(!evidence.completion_ready);
         assert_eq!(
             evidence.blocker_codes,
-            vec!["provenance_rejected".to_string(), "receipt_missing".to_string()]
+            vec![
+                "provenance_rejected".to_string(),
+                "receipt_missing".to_string()
+            ]
         );
-        assert_eq!(evidence.artifact_refs, vec![PathBuf::from("artifacts/proof.json")]);
+        assert_eq!(
+            evidence.artifact_refs,
+            vec![PathBuf::from("artifacts/proof.json")]
+        );
         assert_eq!(evidence.request_id, "req-1");
         assert_eq!(evidence.run_id, "run-1");
         assert_eq!(evidence.dispatch_target, "developer");
@@ -1895,21 +2202,23 @@ mod tests {
             "task_class": "quality_gate",
             "implementation_artifacts": []
         });
-        assert!(!host_bridge_request_effectively_requires_implementation_artifacts(
-            &request,
-            "reviewer"
-        ));
+        assert!(
+            !host_bridge_request_effectively_requires_implementation_artifacts(
+                &request, "reviewer"
+            )
+        );
 
         request["implementation_artifacts"] = serde_json::json!([{
             "artifact_path": "artifacts/patch.json"
         }]);
-        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
-            &request,
-            "reviewer"
-        ));
-        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
-            &request,
-            "developer"
-        ));
+        assert!(
+            host_bridge_request_effectively_requires_implementation_artifacts(&request, "reviewer")
+        );
+        assert!(
+            host_bridge_request_effectively_requires_implementation_artifacts(
+                &request,
+                "developer"
+            )
+        );
     }
 }

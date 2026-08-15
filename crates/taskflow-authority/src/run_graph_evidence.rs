@@ -141,6 +141,42 @@ mod tests {
     }
 
     #[test]
+    fn blocked_source_lane_requires_all_terminal_and_downstream_conditions() {
+        let base = RunGraphDownstreamPacketEvidence {
+            source_dispatch_target: "analysis".to_string(),
+            source_dispatch_status: "executed".to_string(),
+            source_blocker_code: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+        };
+        assert!(
+            blocked_source_lane_from_packet_evidence("developer", "blocked", base.clone())
+                .is_none()
+        );
+
+        let mut source_blocked = base.clone();
+        source_blocked.source_dispatch_status = "blocked".to_string();
+        assert!(
+            blocked_source_lane_from_packet_evidence("developer", "blocked", source_blocked)
+                .is_some()
+        );
+
+        let mut source_has_blocker = base.clone();
+        source_has_blocker.source_blocker_code = Some("review_required".to_string());
+        assert!(
+            blocked_source_lane_from_packet_evidence("developer", "blocked", source_has_blocker)
+                .is_some()
+        );
+
+        let mut downstream_not_ready = base;
+        downstream_not_ready.downstream_dispatch_ready = false;
+        assert!(
+            blocked_source_lane_from_packet_evidence("developer", "blocked", downstream_not_ready)
+                .is_some()
+        );
+    }
+
+    #[test]
     fn completion_evidence_carries_rework_and_downstream_facts() {
         let evidence = RunGraphCompletionEvidence {
             dispatch_target: "developer".to_string(),

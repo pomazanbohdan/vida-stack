@@ -247,6 +247,16 @@ mod tests {
             Some("run-1")
         ));
         assert!(!final_snapshot_dispatch_receipt_authority_is_persisted(
+            None,
+            Some("run-1"),
+            Some("run-1")
+        ));
+        assert!(!final_snapshot_dispatch_receipt_authority_is_persisted(
+            Some("run-1"),
+            None,
+            Some("run-1")
+        ));
+        assert!(!final_snapshot_dispatch_receipt_authority_is_persisted(
             Some("run-1"),
             Some("run-1"),
             None

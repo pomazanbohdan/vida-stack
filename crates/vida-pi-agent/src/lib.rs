@@ -1156,7 +1156,9 @@ mod tests {
             ("openai-codex", "gpt-5.5")
         );
         assert!(split_model_ref("gpt-5.5").is_err());
+        assert!(split_model_ref("/gpt-5.5").is_err());
         assert!(split_model_ref("provider/").is_err());
+        assert!(split_model_ref("provider/   ").is_err());
     }
 
     #[test]
@@ -1170,6 +1172,17 @@ mod tests {
             ]
         });
         assert_eq!(extract_agent_end_text(&event).unwrap(), "final answer");
+    }
+
+    #[test]
+    fn agent_end_rejects_missing_or_blank_final_text() {
+        assert!(extract_agent_end_text(&json!({"messages": []})).is_err());
+        assert!(
+            extract_agent_end_text(&json!({
+                "messages": [{"role": "assistant", "content": "   "}]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1262,6 +1275,98 @@ mod tests {
         };
         let error = guard.preflight_write_mode().unwrap_err();
         assert_eq!(error.report["status"], "missing_owned_paths");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scope_guard_off_skips_touched_path_validation() {
+        let root = temp_scope_root("off-mode");
+        let guard = ScopeGuardConfig {
+            mode: ScopeGuardMode::Off,
+            project_root: fs::canonicalize(&root).unwrap(),
+            owned_paths: Vec::new(),
+            sources: Vec::new(),
+        };
+
+        assert!(
+            guard
+                .validate_touched_paths(&["outside.txt".to_string()])
+                .unwrap()
+                .is_none()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn validation_only_reports_touched_paths_without_owned_scope() {
+        let root = temp_scope_root("validate-only-no-scope");
+        let guard = ScopeGuardConfig {
+            mode: ScopeGuardMode::ValidateOnly,
+            project_root: fs::canonicalize(&root).unwrap(),
+            owned_paths: Vec::new(),
+            sources: Vec::new(),
+        };
+
+        let report = guard
+            .validate_touched_paths(&["reported.txt".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(report["status"], "validation_unavailable_no_owned_paths");
+        assert_eq!(report["valid"], true);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scope_guard_reports_empty_touched_paths_with_and_without_owned_scope() {
+        let root = temp_scope_root("empty-touched");
+        let canonical_root = fs::canonicalize(&root).unwrap();
+        let unscoped = ScopeGuardConfig {
+            mode: ScopeGuardMode::ValidateOnly,
+            project_root: canonical_root.clone(),
+            owned_paths: Vec::new(),
+            sources: Vec::new(),
+        };
+        let scoped = ScopeGuardConfig {
+            mode: ScopeGuardMode::ValidateOnly,
+            project_root: canonical_root,
+            owned_paths: vec![OwnedScopePath {
+                raw: ".".to_string(),
+                canonical: fs::canonicalize(&root).unwrap(),
+            }],
+            sources: vec!["test".to_string()],
+        };
+
+        assert_eq!(
+            unscoped.validate_touched_paths(&[]).unwrap().unwrap()["status"],
+            "no_touched_paths_reported"
+        );
+        assert_eq!(
+            scoped.validate_touched_paths(&[]).unwrap().unwrap()["status"],
+            "no_touched_paths_reported_with_owned_scope"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scope_guard_report_projects_guarded_write_enforcement_and_paths() {
+        let root = temp_scope_root("report-fields");
+        let guard = ScopeGuardConfig {
+            mode: ScopeGuardMode::GuardedWrite,
+            project_root: fs::canonicalize(&root).unwrap(),
+            owned_paths: vec![OwnedScopePath {
+                raw: "src".to_string(),
+                canonical: fs::canonicalize(&root).unwrap().join("src"),
+            }],
+            sources: vec!["test".to_string()],
+        };
+
+        let report = guard.report("validated", true, &["src/lib.rs".to_string()], &[]);
+        assert_eq!(report["mode"], "guarded-write");
+        assert_eq!(report["pre_write_enforcement"], true);
+        assert_eq!(report["pre_write_guard"]["active"], true);
+        assert_eq!(report["pre_write_guard"]["blocks_bash"], true);
+        assert_eq!(report["owned_paths"][0], "src");
+        assert_eq!(report["touched_paths"][0], "src/lib.rs");
         let _ = fs::remove_dir_all(root);
     }
 

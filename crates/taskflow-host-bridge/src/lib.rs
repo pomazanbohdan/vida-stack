@@ -432,6 +432,77 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn dispatch_identity_missing_request_and_result_field_still_blocks() {
+        let mut request = serde_json::to_value(minimal_request()).expect("serialize request");
+        let mut artifact = request.clone();
+        augment_dispatch_identity(&mut request, &mut artifact);
+        request
+            .as_object_mut()
+            .expect("request object")
+            .remove("request_id");
+        artifact
+            .as_object_mut()
+            .expect("artifact object")
+            .remove("request_id");
+
+        let blockers = super::host_bridge_dispatch_identity_blockers(&request, &artifact);
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker.ends_with(":request_id")),
+            "missing request/result field must block identity"
+        );
+    }
+
+    #[test]
+    fn dispatch_identity_missing_packet_path_still_blocks() {
+        let mut request = serde_json::to_value(minimal_request()).expect("serialize request");
+        let mut artifact = request.clone();
+        augment_dispatch_identity(&mut request, &mut artifact);
+        request
+            .as_object_mut()
+            .expect("request object")
+            .remove("packet_path");
+        artifact
+            .as_object_mut()
+            .expect("artifact object")
+            .remove("source_dispatch_packet_path");
+
+        let blockers = super::host_bridge_dispatch_identity_blockers(&request, &artifact);
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker.ends_with(":packet_path")),
+            "missing packet path must block identity"
+        );
+    }
+
+    #[test]
+    fn dispatch_identity_accepts_equivalent_extended_packet_path_without_other_blockers() {
+        let mut request = serde_json::to_value(minimal_request()).expect("serialize request");
+        let mut artifact = request.clone();
+        augment_dispatch_identity(&mut request, &mut artifact);
+        let root = std::env::temp_dir().join(format!(
+            "taskflow-host-bridge-mutest-packet-{}",
+            std::process::id()
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet directory");
+        let path = packet_dir.join("current.json");
+        std::fs::write(&path, "{}").expect("write packet fixture");
+        let packet_path = path.display().to_string();
+        let extended_packet_path = format!(r"\\?\{}", packet_path);
+        request["packet_path"] = serde_json::json!(packet_path);
+        artifact["source_dispatch_packet_path"] = serde_json::json!(extended_packet_path);
+        let blockers = super::host_bridge_dispatch_identity_blockers(&request, &artifact);
+        assert!(
+            blockers.is_empty(),
+            "equivalent extended packet spelling must remain admissible: {blockers:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(windows)]
     #[test]
     fn packet_path_identity_accepts_extended_and_mixed_spellings_but_rejects_other_packet() {

@@ -241,6 +241,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_namespace_and_database() {
+        let mut namespace_empty = SurrealStoreTarget::new("/tmp/vida-state");
+        namespace_empty.namespace = "  ".to_string();
+        assert_eq!(
+            namespace_empty.validate(),
+            Err(SurrealStoreTargetError::EmptyNamespace)
+        );
+
+        let mut database_empty = SurrealStoreTarget::new("/tmp/vida-state");
+        database_empty.database = "\t".to_string();
+        assert_eq!(
+            database_empty.validate(),
+            Err(SurrealStoreTargetError::EmptyDatabase)
+        );
+    }
+
+    #[test]
     fn derives_deterministic_namespace_and_database_roots() {
         let target = SurrealStoreTarget::new("/tmp/vida-state");
 

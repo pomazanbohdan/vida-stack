@@ -944,6 +944,35 @@ mod tests {
     }
 
     #[test]
+    fn precursor_fingerprint_rejects_blank_request_and_wrong_schema() {
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("  ", &precursor_receipt())
+                .unwrap_err(),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+        let value = serde_json::json!({"schema_version":"other-schema","request_id":"request-1","receipt":precursor_receipt()});
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_value(Some(&value)).unwrap_err(),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+        let blank = serde_json::json!({"schema_version":HOST_BRIDGE_PRECURSOR_FINGERPRINT_SCHEMA_VERSION,"request_id":" ","receipt":precursor_receipt()});
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_value(Some(&blank)).unwrap_err(),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+    }
+
+    #[test]
+    fn receipt_identity_unknown_schema_is_rejected_before_field_checks() {
+        let mut identity = valid_receipt_identity();
+        identity.schema_version = "other-schema".to_string();
+        assert_eq!(
+            identity.validate().unwrap_err(),
+            "host_bridge_receipt_identity_unknown_schema"
+        );
+    }
+
+    #[test]
     fn receipt_binding_rejects_missing_receipt() {
         let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
             request: minimal_request(),
@@ -953,6 +982,10 @@ mod tests {
 
         assert!(!decision.accepted);
         assert_eq!(decision.blocker_codes, vec!["missing_dispatch_receipt"]);
+        assert_eq!(
+            decision.reason,
+            "dispatch receipt binding rejected fail-closed"
+        );
     }
 
     #[test]
@@ -980,6 +1013,169 @@ mod tests {
         });
 
         assert!(decision.accepted);
+    }
+
+    #[test]
+    fn receipt_binding_checks_receipt_backed_flag_independently() {
+        let request = minimal_request();
+        let mut receipt = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request: request.clone(),
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
+            decision: None,
+            verdict: None,
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: None,
+            summary: None,
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        receipt["receipt_backed"] = Value::Bool(false);
+        let rejected = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+            request: request.clone(),
+            receipt: Some(receipt.clone()),
+            allow_active_packet_target_override: false,
+        });
+        assert!(
+            rejected
+                .blocker_codes
+                .iter()
+                .any(|code| code == "receipt_not_receipt_backed")
+        );
+        receipt["receipt_backed"] = Value::Bool(true);
+        let accepted = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+            request,
+            receipt: Some(receipt),
+            allow_active_packet_target_override: false,
+        });
+        assert!(accepted.accepted);
+        assert_eq!(
+            accepted.reason,
+            "dispatch receipt is bound to the host bridge request"
+        );
+        assert!(
+            !accepted
+                .blocker_codes
+                .iter()
+                .any(|code| code == "receipt_not_receipt_backed")
+        );
+    }
+
+    #[test]
+    fn receipt_binding_delegates_nested_identity_mismatch_to_blocker_helper() {
+        let request = minimal_request();
+        let mut receipt = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request: request.clone(),
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
+            decision: None,
+            verdict: None,
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: None,
+            summary: None,
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        receipt["carrier_id"] = Value::String("other-carrier".to_string());
+
+        let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+            request,
+            receipt: Some(receipt),
+            allow_active_packet_target_override: false,
+        });
+
+        assert!(!decision.accepted);
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "host_bridge_result_identity_mismatch:carrier_id")
+        );
+    }
+
+    #[test]
+    fn receipt_binding_rejects_each_core_mismatch_independently() {
+        let request = minimal_request();
+        let receipt = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request: request.clone(),
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
+            decision: None,
+            verdict: None,
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: None,
+            summary: None,
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        for (field, value, blocker) in [
+            ("request_id", "other-request", "receipt_request_id_mismatch"),
+            ("run_id", "other-run", "receipt_run_id_mismatch"),
+            (
+                "dispatch_target",
+                "other-target",
+                "receipt_dispatch_target_mismatch",
+            ),
+        ] {
+            let mut changed = receipt.clone();
+            changed[field] = Value::String(value.to_string());
+            let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+                request: request.clone(),
+                receipt: Some(changed),
+                allow_active_packet_target_override: false,
+            });
+            assert!(!decision.accepted, "{field} mutation must reject");
+            assert!(decision.blocker_codes.iter().any(|code| code == blocker));
+        }
+    }
+
+    #[test]
+    fn receipt_binding_rejects_non_pass_status_unless_dispatch_is_active() {
+        let request = minimal_request();
+        let mut base = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request: request.clone(),
+            proof_outputs: Vec::new(),
+            artifact_refs: Vec::new(),
+            decision: None,
+            verdict: None,
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: None,
+            summary: None,
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        base["status"] = Value::String("blocked".to_string());
+        let rejected = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+            request: request.clone(),
+            receipt: Some(base.clone()),
+            allow_active_packet_target_override: false,
+        });
+        assert!(
+            rejected
+                .blocker_codes
+                .iter()
+                .any(|code| code == "receipt_status_not_pass")
+        );
+        for status in ["routed", "executing", "bridge_request_pending", "blocked"] {
+            let mut active = base.clone();
+            active["dispatch_status"] = Value::String(status.to_string());
+            let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+                request: request.clone(),
+                receipt: Some(active),
+                allow_active_packet_target_override: false,
+            });
+            assert!(
+                !decision
+                    .blocker_codes
+                    .iter()
+                    .any(|code| code == "receipt_status_not_pass"),
+                "active dispatch status `{status}` should bypass status blocker"
+            );
+        }
     }
 
     #[test]
@@ -1042,6 +1238,34 @@ mod tests {
         assert_eq!(result["execution_evidence"]["receipt_backed"], true);
         assert_eq!(result["execution_evidence"]["attempt_id"], "attempt-1");
         assert_eq!(result["execution_evidence"]["packet_id"], "packet-1");
+    }
+
+    #[test]
+    fn blocked_result_scaffold_defaults_and_preserves_explicit_fields() {
+        let mut request = minimal_request();
+        request.raw = serde_json::json!({"selected_backend": "configured-backend"});
+        let result = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request,
+            proof_outputs: vec!["proof".to_string()],
+            artifact_refs: vec!["artifacts/proof.json".to_string()],
+            decision: Some("hold".to_string()),
+            verdict: Some("blocked".to_string()),
+            blocker_codes: vec!["blocked_code".to_string()],
+            rework_target: Some("developer".to_string()),
+            allowed_next_node: Some("review".to_string()),
+            summary: Some("explicit summary".to_string()),
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["decision"], "hold");
+        assert_eq!(result["verdict"], "blocked");
+        assert_eq!(result["summary"], "explicit summary");
+        assert_eq!(result["rework_target"], "developer");
+        assert_eq!(result["allowed_next_node"], "review");
+        assert_eq!(result["selected_backend"], "configured-backend");
+        assert_eq!(result["blocker_codes"], serde_json::json!(["blocked_code"]));
     }
 
     fn valid_receipt_identity() -> HostBridgeReceiptIdentityV1 {
@@ -1127,5 +1351,70 @@ mod tests {
             .validate_against_registry(&request, &registry, "request")
             .expect_err("registry drift must block identity reuse");
         assert!(error.contains("registry_drift") || error.contains("registry_or_request_drift"));
+    }
+
+    #[test]
+    fn receipt_identity_rejects_precursor_core_and_packet_drift() {
+        let identity = valid_receipt_identity();
+        let mut changed = identity.clone();
+        changed.precursor_fingerprint.as_mut().unwrap().receipt["run_id"] =
+            Value::String("different-run".to_string());
+        assert!(
+            changed
+                .validate()
+                .unwrap_err()
+                .contains("core_mismatch:run_id")
+        );
+        let mut packet = identity.clone();
+        packet.precursor_fingerprint.as_mut().unwrap().receipt["dispatch_packet_path"] =
+            Value::String("runtime/other-packet.json".to_string());
+        assert!(
+            packet
+                .validate()
+                .unwrap_err()
+                .contains("core_mismatch:packet_path")
+        );
+    }
+
+    #[test]
+    fn receipt_identity_validates_against_unchanged_registry_and_detects_recording_drift() {
+        let request = minimal_request();
+        let identity = valid_receipt_identity();
+        identity
+            .validate_against_registry(&request, &request.adapter_contract_snapshot, "request")
+            .expect("unchanged registry should validate");
+        let mut recorded = identity.clone();
+        recorded.request_path = "runtime/other-request.json".to_string();
+        let error = recorded
+            .validate_against_registry(&request, &request.adapter_contract_snapshot, "request")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "host_bridge_receipt_identity_registry_or_request_drift"
+        );
+    }
+
+    #[test]
+    fn receipt_identity_rejects_precursor_request_and_backend_mismatch() {
+        let identity = valid_receipt_identity();
+        let mut request_id = identity.clone();
+        request_id
+            .precursor_fingerprint
+            .as_mut()
+            .unwrap()
+            .request_id = "other-request".to_string();
+        assert_eq!(
+            request_id.validate().unwrap_err(),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+        let mut backend = identity.clone();
+        backend.precursor_fingerprint.as_mut().unwrap().receipt["selected_backend"] =
+            Value::String("other-backend".to_string());
+        assert!(
+            backend
+                .validate()
+                .unwrap_err()
+                .contains("core_mismatch:backend_id")
+        );
     }
 }

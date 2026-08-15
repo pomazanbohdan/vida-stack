@@ -347,6 +347,25 @@ mod tests {
     }
 
     #[test]
+    fn exception_takeover_recorded_lane_with_clear_gate_is_admissible() {
+        let input = ExceptionTakeoverDecisionInput {
+            lane_status: "lane_exception_recorded",
+            exception_path_receipt_id: Some("receipt-1"),
+            supersedes_receipt_id: None,
+            local_exception_takeover_gate: Some(" delegated_cycle_clear "),
+        };
+
+        assert_eq!(
+            classify_exception_takeover_evidence(input),
+            ExceptionTakeoverEvidenceCase::RecordedWithClearGate
+        );
+        assert_eq!(
+            exception_takeover_state(input),
+            Some(ExceptionTakeoverStateLabel::AdmissibleNotActive)
+        );
+    }
+
+    #[test]
     fn takeover_ready_state_reports_operator_next_gate() {
         assert_eq!(takeover_ready_state(true, true, true), "active");
         assert_eq!(

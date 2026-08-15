@@ -158,6 +158,7 @@ mod tests {
         let rendered = render_overview(3, 2, &rows);
         assert!(rendered.contains("docflow overview"));
         assert!(rendered.contains("registry_rows: 3"));
+        assert!(rendered.contains("relation_edges: 2"));
         assert!(rendered.contains("readiness: warning"));
     }
 
@@ -234,16 +235,20 @@ mod tests {
         let rendered = render_layer_status(
             6,
             &[("Layer name", "Canonical Operator"), ("Status", "✅")],
-            &[vec![
-                ("position", "previous"),
-                ("Layer name", "Canonical Relations"),
-            ]],
+            &[
+                Vec::new(),
+                vec![
+                    ("position", "previous"),
+                    ("Layer name", "Canonical Relations"),
+                ],
+            ],
         );
         assert!(rendered.contains("layer-status"));
         assert!(rendered.contains("layer: 6"));
         assert!(rendered.contains("Layer name: Canonical Operator"));
         assert!(rendered.contains("Status: ✅"));
         assert!(rendered.contains("adjacent: position=previous, Layer name=Canonical Relations"));
+        assert!(!rendered.contains("\n  adjacent:\n"));
     }
 
     #[test]

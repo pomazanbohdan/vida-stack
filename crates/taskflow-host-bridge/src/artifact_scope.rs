@@ -641,17 +641,27 @@ mod tests {
             Some(&serde_json::json!({ "artifact_kind": "draft_patch" })),
             vec!["crates/vida/src/a.rs".to_string()],
             Path::new(".vida/data/state"),
-            0,
+            3,
         );
 
         assert_eq!(artifact.source_artifact_ref, "source.json");
+        assert_eq!(artifact.artifact["artifact_kind"], "patch_proposal");
+        assert_eq!(artifact.artifact["attempt_id"], "attempt-1");
+        assert_eq!(artifact.artifact["task_id"], "task-1");
+        assert_eq!(artifact.artifact["freshness"], "fresh-1");
+        assert_eq!(artifact.artifact["consolidation_receipt_id"], "receipt-1");
+        assert_eq!(
+            artifact.artifact["changed_files"],
+            serde_json::json!(["crates/vida/src/a.rs"])
+        );
+        assert_eq!(artifact.changed_files, vec!["crates/vida/src/a.rs"]);
         assert_eq!(
             artifact.artifact["source_artifact_kind"],
             serde_json::json!("draft_patch")
         );
         assert_eq!(
             artifact.artifact_ref.replace('\\', "/"),
-            ".vida/data/state/host-tool-bridge/implementation-artifacts/attempt-1-0-patch_proposal.json"
+            ".vida/data/state/host-tool-bridge/implementation-artifacts/attempt-1-3-patch_proposal.json"
         );
     }
 
@@ -667,6 +677,19 @@ mod tests {
             decision.blocker_codes,
             vec!["implementation_artifact_has_no_changed_files"]
         );
+    }
+
+    #[test]
+    fn artifact_scope_rejects_empty_owned_paths_and_reports_changed_files() {
+        let changed_files = vec![PathBuf::from("crates/taskflow-host-bridge/src/lib.rs")];
+        let decision = validate_implementation_artifact_scope(&changed_files, &[]);
+
+        assert!(!decision.accepted);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["implementation_artifact_has_no_owned_paths"]
+        );
+        assert_eq!(decision.out_of_scope_paths, changed_files);
     }
 
     #[test]

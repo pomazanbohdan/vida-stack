@@ -507,8 +507,7 @@ mod tests {
     fn file_journal_create_reopens_existing_journal_without_resetting_history() {
         let path = temp_snapshot_path();
         let stream = VidaStreamRef("semantic-stream".to_string());
-        let mut journal =
-            FileOperationalJournal::create(&path).expect("create filesystem journal");
+        let mut journal = FileOperationalJournal::create(&path).expect("create filesystem journal");
         journal
             .append(semantic_append_request())
             .expect("append initial event");
@@ -544,6 +543,9 @@ mod tests {
         );
         journal.arm(FaultPoint::PartialJournalAppend);
         assert!(journal.append(semantic_append_request()).is_err());
+        let journal = journal.into_inner();
+        let expected_payload =
+            serde_json::to_vec_pretty(&journal.journal).expect("journal payload should serialize");
         assert_eq!(journal.load_stream(&stream).len(), 1);
         drop(journal);
 
@@ -760,6 +762,16 @@ mod tests {
         let mut journal = FileOperationalJournal::create(&path).expect("journal should create");
         super::arm_partial_write_injection();
         operation(&mut journal);
+
+        let expected_payload =
+            serde_json::to_vec_pretty(&journal.journal).expect("journal payload should serialize");
+        let expected_partial_len = (expected_payload.len() / 2).max(1);
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("partial journal should remain on disk")
+                .len() as usize,
+            expected_partial_len
+        );
 
         assert!(
             journal

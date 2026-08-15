@@ -94,6 +94,20 @@ mod tests {
             downstream_dispatch_ready: true,
             downstream_dispatch_packet_path: Some("packet.json"),
         }));
+        assert!(!should_defer_agent_handoff(DeferredAgentHandoffInput {
+            surface_name: "vida taskflow consume continue",
+            dispatch_kind: "agent_lane",
+            dispatch_status: "executed",
+            downstream_dispatch_ready: true,
+            downstream_dispatch_packet_path: None,
+        }));
+        assert!(!should_defer_agent_handoff(DeferredAgentHandoffInput {
+            surface_name: "vida taskflow consume continue",
+            dispatch_kind: "agent_lane",
+            dispatch_status: "executed",
+            downstream_dispatch_ready: false,
+            downstream_dispatch_packet_path: Some("packet.json"),
+        }));
 
         assert!(!should_defer_agent_handoff(DeferredAgentHandoffInput {
             surface_name: "vida taskflow consume resume",

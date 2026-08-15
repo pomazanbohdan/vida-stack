@@ -658,9 +658,41 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_next_reports_terminal_and_unresolved_blockers_explicitly() {
+        let flow = flow("terminal_and_blocked");
+
+        let mut drifted = TaskRoleStepState::from_first_step(&flow).unwrap();
+        drifted.status = TaskRoleStepStatus::FlowVersionDrift;
+        let terminal = drifted.evaluate_next(&flow, "developer", &flow.schema_hash);
+        assert_eq!(terminal.state.status, TaskRoleStepStatus::FlowVersionDrift);
+        assert_eq!(
+            terminal.blocker,
+            Some(RoleStepTransitionBlocker::TerminalState {
+                status: TaskRoleStepStatus::FlowVersionDrift,
+            })
+        );
+
+        let mut completed = TaskRoleStepState::from_first_step(&flow).unwrap();
+        completed.complete().unwrap();
+        completed.blockers.push("proof_pending".to_string());
+        let blocked = completed.evaluate_next(&flow, "developer", &flow.schema_hash);
+        assert_eq!(blocked.state.role_id, "analyst");
+        assert_eq!(
+            blocked.blocker,
+            Some(RoleStepTransitionBlocker::UnresolvedBlockers {
+                role_id: "analyst".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn role_step_state_lifecycle_preserves_refs_outcome_and_blockers() {
         let definition = flow("lifecycle");
         let mut state = TaskRoleStepState::from_first_step(&definition).expect("first step");
+
+        assert_eq!(state.runtime_role, "implementation");
+        assert_eq!(state.task_class, "analysis");
+        assert_eq!(state.lifecycle_stage, "analysis");
 
         state.mark_ready().expect("ready");
         assert_eq!(state.status, TaskRoleStepStatus::Ready);
@@ -670,7 +702,9 @@ mod tests {
         state.mark_packet_ready().expect("packet ready");
         state.dispatch("attempt-1").expect("dispatch");
         assert_eq!(state.attempt_ref.as_deref(), Some("attempt-1"));
-        state.receive_result("receipt-1", "accepted").expect("result");
+        state
+            .receive_result("receipt-1", "accepted")
+            .expect("result");
         assert_eq!(state.receipt_ref.as_deref(), Some("receipt-1"));
         assert_eq!(state.outcome.as_deref(), Some("accepted"));
         state.validate().expect("validate");
