@@ -137,14 +137,21 @@ fn canonical_precursor_receipt(receipt: &Value) -> Result<Value, String> {
     let object = receipt
         .as_object()
         .filter(|object| {
-            object.len() == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len()
-                || (object.len() + 1 == HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.len()
-                    && !object.contains_key("policy_bundle_ref"))
+            object
+                .keys()
+                .all(|field| HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS.contains(&field.as_str()))
+                && HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS
+                    .iter()
+                    .all(|field| *field == "policy_bundle_ref" || object.contains_key(*field))
         })
         .ok_or_else(|| BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string())?;
     let mut canonical = serde_json::Map::new();
     for field in HOST_BRIDGE_PRECURSOR_RECEIPT_FIELDS {
-        let value = object.get(*field).cloned().unwrap_or(Value::Null);
+        let value = match object.get(*field) {
+            Some(value) => value.clone(),
+            None if *field == "policy_bundle_ref" => Value::Null,
+            None => return Err(BLOCKER_PRECURSOR_FINGERPRINT_MISSING.to_string()),
+        };
         let value = match *field {
             "dispatch_status" | "lane_status" => Value::String(normalize_precursor_status(&value)?),
             "dispatch_result_path" => normalize_precursor_result_path(&value)?,
@@ -939,6 +946,46 @@ mod tests {
                 "receipt": {"run_id": "run-1"}
             })))
             .expect_err("malformed must block"),
+            BLOCKER_PRECURSOR_FINGERPRINT_MISSING
+        );
+    }
+
+    #[test]
+    fn precursor_fingerprint_rejects_padded_missing_required_fields() {
+        for field in ["dispatch_command", "dispatch_packet_path", "recorded_at"] {
+            let mut receipt = precursor_receipt();
+            receipt
+                .as_object_mut()
+                .expect("receipt object")
+                .remove(field);
+            receipt["attacker_padding"] = Value::Null;
+
+            assert_eq!(
+                HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+                    .expect_err("padded missing field must block"),
+                BLOCKER_PRECURSOR_FINGERPRINT_MISSING,
+                "missing `{field}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn precursor_fingerprint_allows_only_legacy_missing_policy_bundle_ref() {
+        let mut receipt = precursor_receipt();
+        receipt
+            .as_object_mut()
+            .expect("receipt object")
+            .remove("policy_bundle_ref");
+
+        let precursor =
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+                .expect("legacy receipt without policy bundle ref");
+        assert_eq!(precursor.receipt["policy_bundle_ref"], Value::Null);
+
+        receipt["attacker_padding"] = Value::Null;
+        assert_eq!(
+            HostBridgePrecursorFingerprintV1::from_dispatch_receipt("request-1", &receipt)
+                .expect_err("legacy omission with unknown field must block"),
             BLOCKER_PRECURSOR_FINGERPRINT_MISSING
         );
     }
