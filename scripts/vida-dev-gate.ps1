@@ -2153,12 +2153,11 @@ function New-QualityGateReport {
     $rowArray = @($rows)
     $report = [pscustomobject]@{ schema_version = 1; mode = $reportMode; status = $overall; thresholds = $thresholds; counts = [pscustomobject]$counts; registry_path = $registry.path; registry_revision = $registry.data.registry_revision; rows = $rowArray }
     $artifactDir = Join-Path $RootDir '.vida\tmp'
-    New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
     $name = $reportMode
     $planPath = Join-Path $artifactDir "$name-plan.json"
     $reportPath = Join-Path $artifactDir "$name-report.json"
-    ([ordered]@{ schema_version = 1; mode = $report.mode; registry_revision = $report.registry_revision; rows = $rowArray } | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $planPath -Encoding UTF8
-    ($report | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    ([ordered]@{ schema_version = 1; mode = $report.mode; registry_revision = $report.registry_revision; rows = $rowArray } | ConvertTo-Json -Depth 12) | Write-SafeStateFile -Path $planPath
+    ($report | ConvertTo-Json -Depth 12) | Write-SafeStateFile -Path $reportPath
     $Records.Add([pscustomobject]@{ operation_id = $name; command_or_surface = "scripts/vida-dev-gate.ps1 -Mode $name"; cwd_or_context = $RootDir; started_at = (Get-Date).ToString('o'); duration_ms = 0; exit_status = $overall; classification = 'fast'; artifact_refs = @($planPath, $reportPath, $registry.path); quality_report = $report })
     if ($overall -ne 'pass') { throw "$name quality gate failed; see $reportPath" }
 }
