@@ -199,7 +199,7 @@ function Resolve-MutestCargoPath {
 }
 
 function Get-CargoTargetArguments {
-    param([string]$MutationFilterPath)
+    param([string]$Package, [string]$MutationFilterPath)
     if ([string]::IsNullOrWhiteSpace($MutationFilterPath)) { return @("--all-targets") }
     $normalized = Normalize-RepoPath $MutationFilterPath
     if ($normalized -match '^crates/[^/]+/src/bin/(.+)\.rs$') {
@@ -207,6 +207,15 @@ function Get-CargoTargetArguments {
         return @("--bin", $binName)
     }
     if ($normalized -match '^crates/([^/]+)/src/main\.rs$') {
+        $mainTarget = @($WorkspaceMetadata.packages |
+            Where-Object { $_.name -eq $Package } |
+            ForEach-Object { $_.targets } |
+            Where-Object {
+                $_.kind -contains "bin" -and
+                (Normalize-RepoPath ([System.IO.Path]::GetRelativePath($RepoRoot, $_.src_path))) -eq $normalized
+            } |
+            Select-Object -First 1)
+        if ($mainTarget.Count -eq 1) { return @("--bin", [string]$mainTarget[0].name) }
         return @("--bin", $Matches[1])
     }
     if ($normalized -match '^crates/[^/]+/src/lib\.rs$') { return @("--lib") }
@@ -282,11 +291,10 @@ function Assert-WorkingTreePolicy {
     }
 }
 
-function Get-WorkspacePackages {
+function Get-WorkspaceMetadata {
     $result = Invoke-Captured -FilePath (Resolve-CargoPath) -ArgumentList @("+$Nightly", "metadata", "--format-version", "1", "--no-deps", "--locked")
     if ($result.ExitCode -ne 0) { throw "cargo metadata failed: $($result.Stderr.Trim())" }
-    $metadata = $result.Stdout | ConvertFrom-Json
-    return @($metadata.packages | ForEach-Object { $_.name } | Sort-Object -Unique)
+    return ($result.Stdout | ConvertFrom-Json)
 }
 
 function Resolve-PackageSet {
@@ -1109,7 +1117,7 @@ function Invoke-TestUpdateHook {
 
 function Get-MutestCommand {
     param([string]$Package, [string]$WorkerTarget, [string]$WorkerMetadata, [int]$BatchSizeOverride = $BatchSize, [string]$MutationFilterPath = "")
-    $targetArguments = Get-CargoTargetArguments -MutationFilterPath $MutationFilterPath
+    $targetArguments = Get-CargoTargetArguments -Package $Package -MutationFilterPath $MutationFilterPath
     $arguments = @(
         "run", "--package", $Package
     ) + $targetArguments + @(
@@ -1442,7 +1450,8 @@ if ($RefreshIndex -and ($PlanOnly -or $Resume -or $FullRescan -or $AutoUpdateTes
     throw "-RefreshIndex cannot be combined with -PlanOnly, -Resume, -FullRescan, or -AutoUpdateTests."
 }
 Assert-WorkingTreePolicy
-$WorkspacePackages = Get-WorkspacePackages
+$WorkspaceMetadata = Get-WorkspaceMetadata
+$WorkspacePackages = @($WorkspaceMetadata.packages | ForEach-Object { $_.name } | Sort-Object -Unique)
 $SelectedPackages = Resolve-PackageSet -WorkspacePackages $WorkspacePackages
 $Provenance = Get-Provenance
 $ResourcePlan = Get-ResourcePlan

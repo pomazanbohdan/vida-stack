@@ -519,6 +519,15 @@ Add-Case "csv_selector_contract" {
     Assert-True ($binPlan.commands[0].args -contains "--bin") "binary root selector did not select --bin"
     $binIndex = [Array]::IndexOf([object[]]$binPlan.commands[0].args, "--bin")
     Assert-True ($binIndex -ge 0 -and [string]$binPlan.commands[0].args[$binIndex + 1] -eq "vida") "binary root selector chose the wrong binary"
+
+    foreach ($renamedBin in @(
+        @{ Package = "docflow-cli"; Path = "crates/docflow-cli/src/main.rs"; Bin = "docflow" },
+        @{ Package = "taskflow-cli"; Path = "crates/taskflow-cli/src/main.rs"; Bin = "taskflow" }
+    )) {
+        $renamedPlan = Invoke-Plan -Package $renamedBin.Package -FilesCsv $renamedBin.Path
+        $renamedBinIndex = [Array]::IndexOf([object[]]$renamedPlan.commands[0].args, "--bin")
+        Assert-True ($renamedBinIndex -ge 0 -and [string]$renamedPlan.commands[0].args[$renamedBinIndex + 1] -eq $renamedBin.Bin) "renamed binary root selector chose the wrong binary for $($renamedBin.Package)"
+    }
 }
 
 Add-Case "defect_protocol_and_test_update_contract" {
