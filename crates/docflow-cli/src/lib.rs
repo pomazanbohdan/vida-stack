@@ -5800,7 +5800,13 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        format!("/tmp/docflow-cli-{name}-{}-{nanos}.md", std::process::id())
+        std::env::temp_dir()
+            .join(format!(
+                "docflow-cli-{name}-{}-{nanos}.md",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn temp_dir(name: &str) -> PathBuf {

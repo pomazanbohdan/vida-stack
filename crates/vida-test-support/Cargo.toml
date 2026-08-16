@@ -19,7 +19,7 @@ taskflow-authority = { path = "../taskflow-authority" }
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-core = { path = "../taskflow-core" }
 taskflow-state = { path = "../taskflow-state" }
-trycmd = "1.2.0"
+trycmd = "1.2.1"
 vida-contracts = { path = "../vida-contracts" }
 
 [dev-dependencies]

@@ -15,7 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 globset.workspace = true
-ignore = "0.4.26"
+ignore = "0.4.33"
 time.workspace = true
 docflow-contracts = { path = "../docflow-contracts" }
 docflow-config = { path = "../docflow-config" }
@@ -30,5 +30,5 @@ docflow-validation = { path = "../docflow-validation" }
 
 [dev-dependencies]
 rstest = "0.26.1"
-trycmd = "1.2.0"
+trycmd = "1.2.1"
 vida-test-support = { path = "../vida-test-support" }

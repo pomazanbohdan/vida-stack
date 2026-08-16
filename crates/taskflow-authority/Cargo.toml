@@ -6,8 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-blake3 = "1.8.5"
-cedar-policy = "4.11.1"
+blake3 = "1.8.6"
+cedar-policy = "4.12.0"
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-core = { path = "../taskflow-core" }
 vida-contracts = { path = "../vida-contracts" }

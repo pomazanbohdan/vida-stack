@@ -17,21 +17,21 @@ name = "vida"
 path = "src/main.rs"
 
 [dependencies]
-blake3 = "1.8.5"
-clap = { version = "4.6.1", features = ["derive", "env"] }
+blake3 = "1.8.6"
+clap = { version = "4.6.6", features = ["derive", "env"] }
 docflow-cli = { path = "../docflow-cli" }
 docflow-contracts = { path = "../docflow-contracts" }
 fs2 = "0.4.3"
-futures = "0.3.32"
-interprocess = { version = "2.4.2", features = ["tokio"] }
-libc = "0.2.186"
+futures = "0.3.34"
+interprocess = { version = "2.4.3", features = ["tokio"] }
+libc = "0.2.189"
 operator-output = { path = "../operator-output" }
 ratatui = "0.30.2"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 serde_yaml = "0.9.34"
-surrealdb = { version = "3.2.1", features = ["kv-surrealkv"] }
-surrealdb-core = { version = "3.2.1", default-features = false, features = ["kv-surrealkv"] }
+surrealdb = { version = "3.2.4", features = ["kv-surrealkv"] }
+surrealdb-core = { version = "3.2.4", default-features = false, features = ["kv-surrealkv"] }
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-authority = { path = "../taskflow-authority" }
 taskflow-cli = { path = "../taskflow-cli" }
@@ -42,11 +42,11 @@ taskflow-state = { path = "../taskflow-state" }
 taskflow-state-fs = { path = "../taskflow-state-fs" }
 taskflow-state-redb = { path = "../taskflow-state-redb" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }
-tarpc = { version = "0.37.0", features = ["serde1", "serde-transport-json", "tokio1"] }
+tarpc = { version = "0.38.0", features = ["serde1", "serde-transport-json", "tokio1"] }
 time = { workspace = true }
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
-tokio-util = "0.7.18"
-toml_edit = "0.25.12"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tokio-util = "0.7.19"
+toml_edit = "0.25.13"
 tower = "0.5.3"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }

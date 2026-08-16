@@ -10,7 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 taskflow-core = { path = "../taskflow-core" }
 thiserror.workspace = true
-toml_edit = "0.25.12"
+toml_edit = "0.25.13"
 
 [dev-dependencies]
 serde_yaml = "0.9.34"

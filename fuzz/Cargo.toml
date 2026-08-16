@@ -12,7 +12,7 @@ cargo-fuzz = true
 [dependencies]
 common-format-jsonl = { path = "../crates/common-format-jsonl" }
 common-format-toon = { path = "../crates/common-format-toon" }
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 docflow-cli = { path = "../crates/docflow-cli" }
 docflow-config = { path = "../crates/docflow-config" }
 libfuzzer-sys = "0.4"
