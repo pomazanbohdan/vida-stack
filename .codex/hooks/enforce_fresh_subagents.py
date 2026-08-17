@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 
-TRUSTED_SPAWN_AGENT_TOOL = "spawn_agent"
+TRUSTED_SPAWN_AGENT_TOOLS = {"multi_agent_v1.spawn_agent", "spawn_agent"}
 ALLOWED_SPAWN_AGENT_INPUTS = {"task_name", "message", "fork_turns"}
 
 
@@ -43,7 +43,7 @@ def main() -> int:
         print(json.dumps(_deny("Malformed hook event: tool_name must be a string.")))
         return 0
 
-    if tool_name != TRUSTED_SPAWN_AGENT_TOOL:
+    if tool_name not in TRUSTED_SPAWN_AGENT_TOOLS:
         print("{}")
         return 0
 
